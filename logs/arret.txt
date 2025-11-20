@@ -1,0 +1,85 @@
+A) Module de **paiement marchand** (PayLink comme Stripe local)
+B) Module **Agent & Cash Point** (Gestion de dépôts physiques)
+C) Module **Comptes Épargne / Intérêt**
+
+
+-- Table: paylink.users
+
+-- DROP TABLE IF EXISTS paylink.users;
+
+CREATE TABLE IF NOT EXISTS paylink.users
+(
+    user_id uuid NOT NULL DEFAULT gen_random_uuid(),
+    status paylink.user_status NOT NULL DEFAULT 'pending'::paylink.user_status,
+    full_name text COLLATE pg_catalog."default" NOT NULL,
+    email citext COLLATE pg_catalog."default",
+    phone_e164 citext COLLATE pg_catalog."default",
+    country_code character(2) COLLATE pg_catalog."default" NOT NULL DEFAULT 'BI'::bpchar,
+    kyc_status paylink.kyc_status NOT NULL DEFAULT 'unverified'::paylink.kyc_status,
+    referred_by uuid,
+    created_at timestamp with time zone NOT NULL DEFAULT now(),
+    updated_at timestamp with time zone NOT NULL DEFAULT now(),
+    role paylink.user_role DEFAULT 'client'::paylink.user_role,
+    credit_limit numeric(12,2) DEFAULT 0.0,
+    credit_used numeric(12,2) DEFAULT 0.0,
+    last_seen timestamp with time zone,
+    legal_name text COLLATE pg_catalog."default",
+    birth_date date,
+    national_id_number text COLLATE pg_catalog."default",
+    kyc_document_type text COLLATE pg_catalog."default",
+    kyc_document_front_url text COLLATE pg_catalog."default",
+    kyc_document_back_url text COLLATE pg_catalog."default",
+    selfie_url text COLLATE pg_catalog."default",
+    kyc_reject_reason text COLLATE pg_catalog."default",
+    kyc_tier smallint DEFAULT 0,
+    daily_limit numeric DEFAULT 30000,
+    monthly_limit numeric DEFAULT 30000,
+    used_daily numeric DEFAULT 0,
+    used_monthly numeric DEFAULT 0,
+    last_reset date DEFAULT CURRENT_DATE,
+    risk_score integer NOT NULL DEFAULT 0,
+    CONSTRAINT users_pkey PRIMARY KEY (user_id),
+    CONSTRAINT users_email_key UNIQUE (email),
+    CONSTRAINT users_phone_e164_key UNIQUE (phone_e164),
+    CONSTRAINT users_country_code_fkey FOREIGN KEY (country_code)
+        REFERENCES paylink.countries (country_code) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION,
+    CONSTRAINT users_referred_by_fkey FOREIGN KEY (referred_by)
+        REFERENCES paylink.users (user_id) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE NO ACTION
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS paylink.users
+    OWNER to postgres;
+-- Index: idx_users_country
+
+-- DROP INDEX IF EXISTS paylink.idx_users_country;
+
+CREATE INDEX IF NOT EXISTS idx_users_country
+    ON paylink.users USING btree
+    (country_code COLLATE pg_catalog."default" ASC NULLS LAST)
+    WITH (fillfactor=100, deduplicate_items=True)
+    TABLESPACE pg_default;
+-- Index: idx_users_phone
+
+-- DROP INDEX IF EXISTS paylink.idx_users_phone;
+
+CREATE INDEX IF NOT EXISTS idx_users_phone
+    ON paylink.users USING btree
+    (phone_e164 COLLATE pg_catalog."default" ASC NULLS LAST)
+    WITH (fillfactor=100, deduplicate_items=True)
+    TABLESPACE pg_default;
+
+-- Trigger: trg_users_updated
+
+-- DROP TRIGGER IF EXISTS trg_users_updated ON paylink.users;
+
+CREATE OR REPLACE TRIGGER trg_users_updated
+    BEFORE UPDATE 
+    ON paylink.users
+    FOR EACH ROW
+    EXECUTE FUNCTION paylink.set_updated_at();
