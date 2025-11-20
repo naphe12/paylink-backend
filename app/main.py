@@ -19,6 +19,7 @@ from app.routers.merchant import router as merchant_router
 from app.routers.loans import router as loans_router
 from app.routers.wallet import transactions
 from app.services.tontine_rotation import process_tontine_rotations
+from fastapi.middleware.cors import CORSMiddleware
 import logging
 logging.getLogger("websockets.client").setLevel(logging.WARNING)
 logging.getLogger("websockets.server").setLevel(logging.WARNING)
@@ -34,12 +35,24 @@ async def rotation_worker():
 # ✅ Ajout du middleware
 app.add_middleware(LoggerMiddleware)
 # Autoriser le frontend React/Flutter
+# origins = [
+#     "http://localhost:5173",  # Vite/React
+#     "http://127.0.0.1:5173",
+#     "http://localhost:3000",  # Autres ports React
+#     "http://127.0.0.1:3000",
+#     "*"  # à restreindre en production
+# ]
+
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=origins,
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
+
 origins = [
-    "http://localhost:5173",  # Vite/React
-    "http://127.0.0.1:5173",
-    "http://localhost:3000",  # Autres ports React
-    "http://127.0.0.1:3000",
-    "*"  # à restreindre en production
+    "https://paylink-frontend-production.up.railway.app",
 ]
 
 app.add_middleware(
