@@ -17,32 +17,37 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("❌ DATABASE_URL manquant dans le fichier .env")
 
-# 🔹 Crée le moteur asynchrone
+# 🚀 IMPORTANT : asyncpg NE DOIT PAS recevoir sslmode= dans l’URL
+# Le SSL doit venir via connect_args
 engine = create_async_engine(
     DATABASE_URL,
-    echo=True,         # affiche les requêtes SQL (désactive en prod)
-    future=True
+    echo=True,         # désactiver en production
+    future=True,
+    connect_args={
+        "ssl": "require"   # ✔️ compatible asyncpg + Neon + Railway
+    }
 )
 
-# 🔹 Session asynchrone
+# Session async
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
     expire_on_commit=False,
     class_=AsyncSession
 )
 
-# 🔹 Base ORM
+# Base ORM
 Base = declarative_base()
 
-# 🔹 Dépendance FastAPI pour injection
+# Dependency FastAPI
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         yield session
 
-# 🔹 Initialisation de la DB (appelée au démarrage)
+# INIT
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.commit()
     print("✅ Base de données initialisée (asynchrone).")
+
 
