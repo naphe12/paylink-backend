@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+  <body style="font-family: 'Segoe UI', sans-serif; background:#f9fafb; padding:30px;">
+    <div style="background:white; border-radius:10px; max-width:600px; margin:auto; padding:25px; border:1px solid #eee;">
+      <h2 style="color:#0b3b64;">🧾 Facture PayLink</h2>
+      <p>Bonjour {{ user_name }},</p>
+      <p>Merci pour votre confiance. Voici le résumé de votre transaction :</p>
+      <ul>
+        <li><b>Montant :</b> {{ amount }} {{ currency }}</li>
+        <li><b>Date :</b> {{ date }}</li>
+        <li><b>Référence :</b> {{ invoice_ref }}</li>
+      </ul>
+      <a href="{{ invoice_url }}" style="display:inline-block; margin-top:15px; background:#0066ff; color:white; text-decoration:none; padding:10px 16px; border-radius:8px;">
+        📥 Télécharger la facture
+      </a>
+      <p style="margin-top:20px; font-size:12px; color:#888;">Émis automatiquement par PayLink - Facturation sécurisée.</p>
+    </div>
+  </body>
+</html>
