@@ -20,6 +20,7 @@ from app.schemas.external_transfers import (ExternalTransferCreate,    ExternalT
 from app.services.aml import update_risk_score
 from app.services.ledger import LedgerLine, LedgerService
 from app.services.mailer import send_email
+from app.services.transaction_notifications import send_transaction_emails
 from app.services.telegram import send_message as send_telegram_message
 from app.services.risk_engine import calculate_risk_score
 from app.services.wallet_history import log_wallet_movement
@@ -281,6 +282,26 @@ async def external_transfer(
             except Exception:
                 continue
 
+    # Email au client initiateur + destinataires configurés (template commun)
+    await send_transaction_emails(
+        db,
+        initiator=current_user,
+        subject=f"Nouvelle demande de transfert {transfer.reference_code}",
+        template="external_transfer_request.html",
+        client_name=current_user.full_name,
+        client_email=current_user.email,
+        client_phone=current_user.phone_e164 or "",
+        amount=amount,
+        currency="EUR",
+        credit_available=f"{credit_available_after}",
+        receiver_name=data.recipient_name,
+        receiver_phone=data.recipient_phone,
+        partner_name=data.partner_name,
+        country=data.country_destination,
+        transfer_id=transfer.reference_code,
+        dashboard_url=f"{settings.FRONTEND_URL}/dashboard/admin",
+        year=datetime.utcnow().year,
+    )
 
     return transfer
 
@@ -418,6 +439,23 @@ async def internal_transfer(
     )
 
     await db.commit()
+
+    # Email au client initiateur + destinataires configurés
+    await send_transaction_emails(
+        db,
+        initiator=current_user,
+        subject="Confirmation transfert interne",
+        template=None,
+        body=f"""
+        <p>Votre transfert interne a été effectué.</p>
+        <ul>
+          <li>Montant : {amount} {w_sender.currency_code}</li>
+          <li>Paytag destinataire : {paytag}</li>
+          <li>Statut : réussi</li>
+        </ul>
+        """,
+    )
+
     return {"message": "success", "tx_id": str(tx.tx_id)}
 
 
