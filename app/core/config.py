@@ -17,5 +17,10 @@ class Settings(BaseSettings):
     LEDGER_ACCOUNT_CASH_IN: str = os.getenv("LEDGER_ACCOUNT_CASH_IN", "LEDGER::CASH_IN")
     LEDGER_ACCOUNT_CASH_OUT: str = os.getenv("LEDGER_ACCOUNT_CASH_OUT", "LEDGER::CASH_OUT")
     LEDGER_ACCOUNT_CREDIT_LINE: str = os.getenv("LEDGER_ACCOUNT_CREDIT_LINE", "LEDGER::CREDIT_LINE")
+    MAILJET_API_KEY: str = os.getenv("MAILJET_API_KEY", "")
+    MAILJET_SECRET_KEY: str = os.getenv("MAILJET_SECRET_KEY", "")
+    MAIL_FROM: str = os.getenv("MAIL_FROM", "no-reply@paylink.app")
+    MAIL_FROM_NAME: str = os.getenv("MAIL_FROM_NAME", "PayLink")
+    
 
 settings = Settings()

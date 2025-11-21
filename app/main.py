@@ -148,6 +148,7 @@ app.include_router(test_email.router)
 
 
 
+
 @app.on_event("startup")
 async def startup_event():
     print("📜 Routes disponibles :")
