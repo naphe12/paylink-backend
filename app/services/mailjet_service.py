@@ -2,6 +2,9 @@ from mailjet_rest import Client
 
 from app.core.config import settings
 from app.services.mailer import render_template
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class MailjetEmailService:
@@ -35,6 +38,10 @@ class MailjetEmailService:
         if html_content is None and text is None:
             raise ValueError("send_email requires template_name, body_html or text")
 
+        # Ajoute un texte brut minimal si seul HTML est fourni (améliore la délivrabilité)
+        if html_content and text is None:
+            text = "Notification PayLink"
+
         data = {
             "Messages": [
                 {
@@ -54,4 +61,10 @@ class MailjetEmailService:
             data["Messages"][0]["HTMLPart"] = html_content
 
         result = self.client.send.create(data=data)
+
+        try:
+            logger.info("Mailjet send to %s status=%s", to_email, result.status_code)
+        except Exception:
+            pass
+
         return {"status": result.status_code, "response": result.json()}
