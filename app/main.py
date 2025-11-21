@@ -140,6 +140,8 @@ from app.routers.agent.agent_external_transfer import router as agent_router_ext
 app.include_router(agent_router_extern)
 
 
+from app.routers import debug
+app.include_router(debug.router)
 
 
 
