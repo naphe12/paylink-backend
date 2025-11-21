@@ -13,7 +13,7 @@ class TransactionEmailRecipient(Base):
     __table_args__ = (
         UniqueConstraint("user_id", name="uq_tx_email_recipient_user"),
         UniqueConstraint("email", name="uq_tx_email_recipient_email"),
-        {"schema": "paylink"},
+        {"schema": "telegram"},
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
