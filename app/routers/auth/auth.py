@@ -1,28 +1,35 @@
-# app/routes/auth.py
 import decimal
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Query
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    Query,
+    status,
+)
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from jose import JWTError, jwt
+from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import (create_access_token, hash_password,
-                               verify_password)
+from app.core.security import create_access_token, hash_password, verify_password
 from app.dependencies.auth import get_current_user
 from app.models.user_auth import UserAuth
 from app.models.users import Users
 from app.models.wallets import Wallets
 from app.schemas.users import UsersCreate, UsersRead
 from app.services.mailer import send_email
-from jose import JWTError, jwt
 
 router = APIRouter()
 
-# OAuth2 (utilisé pour extraire automatiquement le token JWT depuis l’en-tête Authorization)
+# OAuth2 helper to pull token from Authorization header
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+
 
 @router.post("/register", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def register_user(
@@ -41,7 +48,7 @@ async def register_user(
         country_code=user_in.country_code,
         status="active",
         kyc_status="unverified",
-        role="client"
+        role="client",
     )
     db.add(user)
     await db.flush()
@@ -58,7 +65,7 @@ async def register_user(
         type="consumer",
         currency_code="EUR",
         available=decimal.Decimal("0.00"),
-        pending=decimal.Decimal("0.00")
+        pending=decimal.Decimal("0.00"),
     )
     db.add(new_wallet)
 
@@ -88,7 +95,6 @@ async def register_user(
         body_html=verification_body,
     )
 
-    # ✅ Génère le token JWT comme au login
     access_token_expires = timedelta(hours=24)
     access_token = create_access_token(
         data={"sub": str(user.user_id)}, expires_delta=access_token_expires
@@ -128,32 +134,26 @@ async def verify_email(token: str = Query(...), db: AsyncSession = Depends(get_d
     return {"message": "Email vérifié avec succès"}
 
 
-
-
-# ============================================================
-# 🟡 CONNEXION UTILISATEUR
-# ============================================================
 @router.post("/login")
-async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
-    # Cherche l’utilisateur par email
+async def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: AsyncSession = Depends(get_db),
+):
     user = await db.scalar(select(Users).where(Users.email == form_data.username))
     if not user:
         raise HTTPException(status_code=401, detail="Utilisateur introuvable")
 
-    # Récupère les infos d’authentification
     auth_data = await db.scalar(select(UserAuth).where(UserAuth.user_id == user.user_id))
     if not auth_data or not verify_password(form_data.password, auth_data.password_hash):
         raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
 
-    # Met à jour la date de dernière connexion
     auth_data.last_login_at = datetime.utcnow()
     await db.commit()
 
-    # Créer un token JWT
     access_token_expires = timedelta(hours=24)
     access_token = create_access_token(
         data={"sub": str(user.user_id)},
-        expires_delta=access_token_expires
+        expires_delta=access_token_expires,
     )
 
     return {
@@ -170,84 +170,55 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSessi
     }
 
 
-# ============================================================
-# 🔵 RÉCUPÉRATION UTILISATEUR COURANT
-# ============================================================
-# async def get_current_user(
-#     token: str = Depends(oauth2_scheme),
-#     db: AsyncSession = Depends(get_db)
-# ) -> Users:
-#     payload = decode_access_token(token)
-#     if not payload or "sub" not in payload:
-#         raise HTTPException(status_code=401, detail="Token invalide ou expiré")
-
-#     user_id = payload["sub"]
-#     user = await db.scalar(select(Users).where(Users.user_id == user_id))
-#     if not user:
-#         raise HTTPException(status_code=404, detail="Utilisateur introuvable")
-
-#     return user
-
-
-# ============================================================
-# 👤 ROUTE PROTÉGÉE
-# ============================================================
 @router.get("/me", response_model=UsersRead)
 async def read_current_user(current_user: Users = Depends(get_current_user)):
     return current_user
 
-from datetime import timedelta
 
-from fastapi import BackgroundTasks
-from jose import JWTError, jwt
-from sqlalchemy import select
-
-from app.core.config import settings  # contient SECRET_KEY et ALGORITHM
-from app.core.security import hash_password
-from app.models.user_auth import UserAuth
-from app.services.mailer import send_email  # tu le crées plus bas
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
 
 
-# ============================================================
-# 🔹 1. Mot de passe oublié → génération du token et envoi du mail
-# ============================================================
 @router.post("/forgot-password")
-async def forgot_password(email: str, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
-    # Vérifier si l'utilisateur existe
-    user = await db.scalar(select(Users).where(Users.email == email))
+async def forgot_password(
+    body: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await db.scalar(select(Users).where(Users.email == body.email))
     if not user:
         raise HTTPException(status_code=404, detail="Utilisateur introuvable")
 
-    # Créer un token temporaire JWT
     expires = timedelta(hours=1)
     reset_token = create_access_token(
         data={"sub": str(user.user_id), "action": "reset_password"},
-        expires_delta=expires
+        expires_delta=expires,
     )
 
     reset_link = f"{settings.FRONTEND_URL}/auth/reset-password?token={reset_token}"
-    subject = "🔐 Réinitialisation de votre mot de passe PayLink"
-    body = f"""
+    subject = "Réinitialisation de votre mot de passe PayLink"
+    body_text = f"""
     Bonjour {user.full_name or ''},
 
     Pour réinitialiser votre mot de passe, cliquez sur le lien suivant :
-    👉 {reset_link}
+    {reset_link}
 
     Ce lien est valable pendant 1 heure.
     """
 
-    # Envoi du mail en tâche de fond
-    background_tasks.add_task(send_email, to=user.email, subject=subject, body=body)
+    background_tasks.add_task(send_email, to=user.email, subject=subject, body=body_text)
     return {"message": "Un email de réinitialisation a été envoyé."}
 
 
-# ============================================================
-# 🔹 2. Réinitialiser le mot de passe via token
-# ============================================================
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str
+
+
 @router.post("/reset-password")
-async def reset_password(data: dict, db: AsyncSession = Depends(get_db)):
-    token = data.get("token")
-    new_password = data.get("password")
+async def reset_password(data: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+    token = data.token
+    new_password = data.password
 
     if not token or not new_password:
         raise HTTPException(status_code=400, detail="Token et mot de passe requis")
@@ -264,7 +235,6 @@ async def reset_password(data: dict, db: AsyncSession = Depends(get_db)):
     except JWTError:
         raise HTTPException(status_code=401, detail="Token expiré ou invalide")
 
-    # Récupérer l'utilisateur et mettre à jour le mot de passe
     auth_entry = await db.scalar(select(UserAuth).where(UserAuth.user_id == user_id))
     if not auth_entry:
         raise HTTPException(status_code=404, detail="Utilisateur introuvable")
@@ -273,4 +243,3 @@ async def reset_password(data: dict, db: AsyncSession = Depends(get_db)):
     await db.commit()
 
     return {"message": "Mot de passe réinitialisé avec succès"}
-

@@ -561,6 +561,7 @@ async def get_wallet_transactions(
         select(Transactions)
         .where(
             or_(
+                Transactions.initiated_by == current_user.user_id,
                 Transactions.sender_wallet == wallet_id,
                 Transactions.receiver_wallet == wallet_id,
             )
