@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.transaction_email_recipients import TransactionEmailRecipient
 from app.models.users import Users
-from app.services.mailer import send_email
+from app.services.mailjet_service import MailjetEmailService
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +35,11 @@ async def send_transaction_emails(
     if not recipients:
         return
 
+    mailer = MailjetEmailService()
     for email in recipients:
         try:
             await run_in_threadpool(
-                send_email,
+                mailer.send_email,
                 email,
                 subject,
                 template,
