@@ -143,6 +143,8 @@ app.include_router(agent_router_extern)
 from app.routers import debug
 app.include_router(debug.router)
 
+from app.routers import test_email
+app.include_router(test_email.router)
 
 
 
