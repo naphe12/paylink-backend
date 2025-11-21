@@ -38,7 +38,7 @@ async def send_transaction_emails(
     mailer = MailjetEmailService()
     for email in recipients:
         try:
-            await run_in_threadpool(
+            resp = await run_in_threadpool(
                 mailer.send_email,
                 email,
                 subject,
@@ -46,6 +46,13 @@ async def send_transaction_emails(
                 body_html=body,
                 **template_kwargs,
             )
+            status = None
+            try:
+                status = resp.get("status")
+            except Exception:
+                status = None
+            if status not in (200, 201):
+                logger.warning("Mailjet responded with status=%s for %s", status, email)
         except Exception as exc:  # pragma: no cover
             # Ne pas bloquer la transaction en cas d'erreur SMTP / réseau.
             logger.exception("Impossible d'envoyer le mail de transaction à %s: %s", email, exc)
