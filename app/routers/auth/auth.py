@@ -8,6 +8,8 @@ from fastapi import (
     HTTPException,
     Query,
     status,
+    Body,
+    Form,
 )
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
@@ -221,9 +223,14 @@ class ResetPasswordRequest(BaseModel):
 
 
 @router.post("/reset-password")
-async def reset_password(data: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
-    token = data.token
-    new_password = data.password
+async def reset_password(
+    data: ResetPasswordRequest | None = Body(None),
+    token_form: str | None = Form(None),
+    password_form: str | None = Form(None),
+    db: AsyncSession = Depends(get_db),
+):
+    token = data.token if data else token_form
+    new_password = data.password if data else password_form
 
     if not token or not new_password:
         raise HTTPException(status_code=400, detail="Token et mot de passe requis")
