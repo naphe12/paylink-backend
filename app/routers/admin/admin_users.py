@@ -11,6 +11,7 @@ from app.services.push_notifications import send_push_notification
 
 router = APIRouter(prefix="/admin/users", tags=["Admin Users"])
 
+@router.get("")
 @router.get("/")
 async def list_users(
     q: str = "",
