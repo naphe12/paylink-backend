@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.dependencies.auth import get_current_user_db
 from app.dependencies.auth import get_current_admin
 from app.models.notifications import Notifications
 from app.models.loanrepayments import LoanRepayments
@@ -126,7 +126,7 @@ def _ensure_active_user(user: Users):
 async def apply_for_short_term_loan(
     payload: LoanApplicationPayload,
     db: AsyncSession = Depends(get_db),
-    current_user: Users = Depends(get_current_user),
+    current_user: Users = Depends(get_current_user_db),
 ):
     _ensure_active_user(current_user)
 
