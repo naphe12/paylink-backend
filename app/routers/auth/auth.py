@@ -225,12 +225,12 @@ class ResetPasswordRequest(BaseModel):
 
 @router.post("/reset-password")
 async def reset_password(
+    request: Request,
     data: ResetPasswordRequest | None = Body(None),
     token_form: str | None = Form(None),
     password_form: str | None = Form(None),
     token_query: str | None = Query(None),
     password_query: str | None = Query(None),
-    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     token = (data.token if data and data.token else None) or token_form or token_query
