@@ -4,6 +4,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
+from pydantic import BaseModel
 from sqlalchemy import cast, select, String
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -256,14 +257,26 @@ async def list_cash_requests(
 
 
 
+from pydantic import BaseModel
+
+
+class TransferRequest(BaseModel):
+    to_email: str | None = None
+    receiver_email: str | None = None
+    amount: decimal.Decimal
+
+
 @router.post("/transfer")
 async def transfer_money(
-    to_email: str,
-    amount: decimal.Decimal,
+    payload: TransferRequest,
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user)
 ):
     ledger = LedgerService(db)
+    to_email = payload.to_email or payload.receiver_email
+    amount = payload.amount
+    if not to_email:
+        raise HTTPException(status_code=400, detail="Destinataire manquant")
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Montant invalide")
 
