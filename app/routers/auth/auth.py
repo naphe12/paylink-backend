@@ -33,7 +33,6 @@ router = APIRouter()
 # OAuth2 helper to pull token from Authorization header
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
-
 @router.post("/register", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def register_user(
     user_in: UsersCreate,

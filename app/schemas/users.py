@@ -111,5 +111,4 @@ class UsersRead(BaseModel):
     created_at: datetime | None = None
     email_verified: bool | None = None
     email_verified_at: datetime | None = None
-
     model_config = {"from_attributes": True}
