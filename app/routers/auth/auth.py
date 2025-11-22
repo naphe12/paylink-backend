@@ -10,6 +10,7 @@ from fastapi import (
     status,
     Body,
     Form,
+    Request,
 )
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
@@ -229,10 +230,20 @@ async def reset_password(
     password_form: str | None = Form(None),
     token_query: str | None = Query(None),
     password_query: str | None = Query(None),
+    request: Request | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     token = (data.token if data and data.token else None) or token_form or token_query
     new_password = (data.password if data and data.password else None) or password_form or password_query
+
+    # Fallback: essayer de parser le JSON brut si toujours vide
+    if request and (not token or not new_password):
+        try:
+            body_json = await request.json()
+            token = token or body_json.get("token")
+            new_password = new_password or body_json.get("password")
+        except Exception:
+            pass
 
     if not token or not new_password:
         raise HTTPException(status_code=400, detail="Token et mot de passe requis")
