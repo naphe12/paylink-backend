@@ -1,36 +1,43 @@
 import decimal
 import uuid
 from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.config import settings
 from app.core.database import get_db
 from app.dependencies.auth import get_current_agent, get_current_user
 from app.models.bonus_history import BonusHistory
+from app.models.credit_line_history import CreditLineHistory
 from app.models.external_transfers import ExternalTransfers
+from app.models.telegram_user import TelegramUser
 from app.models.transactions import Transactions
 from app.models.users import Users
-from app.models.wallets import Wallets
 from app.models.wallet_transactions import WalletEntryDirectionEnum
-from app.models.credit_line_history import CreditLineHistory
-from app.models.telegram_user import TelegramUser
-from app.schemas.external_transfers import (ExternalTransferCreate,    ExternalTransferRead)
+from app.models.wallets import Wallets
+from app.schemas.external_transfers import ExternalTransferCreate, ExternalTransferRead
+from app.schemas.transactions import TransactionSend
 from app.services.aml import update_risk_score
 from app.services.ledger import LedgerLine, LedgerService
 from app.services.mailer import send_email
-from app.services.transaction_notifications import send_transaction_emails
-from app.services.telegram import send_message as send_telegram_message
 from app.services.risk_engine import calculate_risk_score
+from app.services.telegram import send_message as send_telegram_message
+from app.services.transaction_notifications import send_transaction_emails
 from app.services.wallet_history import log_wallet_movement
+
 router = APIRouter(prefix="/wallet/transfer", tags=["External Transfer"])
 AGENT_EMAIL = "adolphe.nahimana@yahoo.fr"
+
+
 @router.post("/external", response_model=ExternalTransferRead)
 async def external_transfer(
     data: ExternalTransferCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: Users = Depends(get_current_user)
+    current_user: Users = Depends(get_current_user),
 ):
     ledger = LedgerService(db)
     await calculate_risk_score(db, current_user.user_id)
@@ -38,18 +45,13 @@ async def external_transfer(
     if current_user.status == "frozen":
         raise HTTPException(423, "Votre compte est gelé pour raisons de sécurité.")
 
-    """
-    💸 Transfert externe : combine solde wallet + ligne de crédit
-    """
-    amount = decimal.Decimal(data.amount)    
+    amount = decimal.Decimal(data.amount)
 
-    # 🔹 Récupère le portefeuille
     result = await db.execute(select(Wallets).where(Wallets.user_id == current_user.user_id))
     wallet = result.scalar_one_or_none()
     if not wallet:
         raise HTTPException(status_code=404, detail="Portefeuille introuvable")
 
-    # 🔹 Calcule la capacité totale
     wallet_balance = decimal.Decimal(wallet.available or 0)
     credit_limit = decimal.Decimal(current_user.credit_limit or 0)
     credit_used_total = decimal.Decimal(current_user.credit_used or 0)
@@ -60,39 +62,29 @@ async def external_transfer(
     if amount > total_available:
         raise HTTPException(
             status_code=400,
-            detail=f"Montant trop élevé. Disponible total : {total_available} €"
+            detail=f"Montant trop élevé. Disponible total : {total_available} €",
         )
+
     used_daily = decimal.Decimal(current_user.used_daily or 0)
     used_monthly = decimal.Decimal(current_user.used_monthly or 0)
     daily_limit = decimal.Decimal(current_user.daily_limit or 0)
     monthly_limit = decimal.Decimal(current_user.monthly_limit or 0)
 
     if daily_limit > 0 and amount + used_daily > daily_limit:
-       raise HTTPException(400, "Limite journalière atteinte. Passez au niveau KYC supérieur.")
+        raise HTTPException(400, "Limite journalière atteinte. Passez au niveau KYC supérieur.")
 
     if monthly_limit > 0 and amount + used_monthly > monthly_limit:
-       raise HTTPException(400, "Limite mensuelle atteinte.")
-    
+        raise HTTPException(400, "Limite mensuelle atteinte.")
 
-
-# Après vérification du solde mais avant l'envoi:
-   # 1) Calcul du score AML
-    #risk = await calculate_risk_score(db, current_user.user_id)
-
-# 2) Met à jour dans la base
-    risk = await update_risk_score(db, current_user, amount,channel='external')
-
-
+    risk = await update_risk_score(db, current_user, amount, channel="external")
     if risk >= 80:
-        raise HTTPException(423, "⚠️ Transfert bloqué : votre compte nécessite une vérification d'identité.")
+        raise HTTPException(423, "Transfert bloqué : votre compte nécessite une vérification d'identité.")
     elif risk >= 60:
-    # On limite seulement les transferts externes         
-        raise HTTPException(423, "⚠️ Niveau de risque élevé. Merci de compléter votre KYC.")
+        raise HTTPException(423, "Niveau de risque élevé. Merci de compléter votre KYC.")
 
     if current_user.external_transfers_blocked:
-         raise HTTPException(423, "Transferts externes temporairement suspendus.")
+        raise HTTPException(423, "Transferts externes temporairement suspendus.")
 
-    # 🔹 Débit logique
     wallet_balance_before = wallet_balance
     credit_available_after = credit_available_before
     if wallet_balance >= amount:
@@ -100,7 +92,6 @@ async def external_transfer(
         wallet.available = wallet_balance
         credit_used = decimal.Decimal(0)
     else:
-        # le wallet n’a pas assez → utilise la ligne de crédit
         credit_used = amount - wallet_balance
         wallet.available = decimal.Decimal(0)
         current_user.credit_used = credit_used_total + credit_used
@@ -122,9 +113,7 @@ async def external_transfer(
             description=f"Transfert externe vers {data.recipient_name}",
         )
 
-
     bonus_earned = amount * decimal.Decimal("50")
-    # 🔹 Crée le transfert
     transfer = ExternalTransfers(
         user_id=current_user.user_id,
         partner_name=data.partner_name,
@@ -137,17 +126,15 @@ async def external_transfer(
         local_amount=amount * decimal.Decimal("7000.0"),
         credit_used=(credit_used > 0),
         status="pending" if requires_admin else "success",
-        processed_by = current_user.user_id,
-        processed_at = datetime.now(),
-        reference_code=f"EXT-{uuid.uuid4().hex[:8].upper()}"
+        processed_by=current_user.user_id,
+        processed_at=datetime.now(),
+        reference_code=f"EXT-{uuid.uuid4().hex[:8].upper()}",
     )
     db.add(transfer)
 
-    # Ajouter le bonus directement au wallet (solde bonus)
     wallet = await db.scalar(select(Wallets).where(Wallets.user_id == current_user.user_id))
     wallet.bonus_balance += bonus_earned
 
-    # 🔹 Log transaction
     txn_status = "pending" if requires_admin else "succeeded"
 
     txn = Transactions(
@@ -157,12 +144,12 @@ async def external_transfer(
         currency_code="EUR",
         related_entity_id=transfer.transfer_id,
         status=txn_status,
-        sender_wallet=wallet.wallet_id
+        sender_wallet=wallet.wallet_id,
     )
     db.add(txn)
     await db.flush()
 
-    wallet_account = await ledger.ensure_wallet_account(wallet)
+    sender_account = await ledger.ensure_wallet_account(wallet)
     cash_out_account = await ledger.get_account_by_code(settings.LEDGER_ACCOUNT_CASH_OUT)
     entries = []
     metadata = {
@@ -177,7 +164,7 @@ async def external_transfer(
     if debited > 0:
         entries.append(
             LedgerLine(
-                account=wallet_account,
+                account=sender_account,
                 direction="debit",
                 amount=debited,
                 currency_code=wallet.currency_code,
@@ -211,15 +198,14 @@ async def external_transfer(
         entries=entries,
     )
 
-    
-    
-
-    db.add(BonusHistory(
-    user_id=current_user.user_id,
-    amount_bif=bonus_earned,
-    source="earned",
-    reference_id=transfer.transfer_id
-))
+    db.add(
+        BonusHistory(
+            user_id=current_user.user_id,
+            amount_bif=bonus_earned,
+            source="earned",
+            reference_id=transfer.transfer_id,
+        )
+    )
 
     if credit_used > 0:
         history_entry = CreditLineHistory(
@@ -232,23 +218,11 @@ async def external_transfer(
         )
         db.add(history_entry)
 
-
     current_user.used_daily = decimal.Decimal(current_user.used_daily or 0) + amount
     current_user.used_monthly = decimal.Decimal(current_user.used_monthly or 0) + amount
     await db.commit()
     await db.refresh(transfer)
 
-    # 🔹 Email agent
-    # subject = f"Nouvelle demande de transfert #{transfer.reference_code}"
-    # message = f"""
-    # Client : {current_user.full_name} ({current_user.email})
-    # Montant : {amount} EUR
-    # Utilisation crédit : {credit_used} EUR
-    # Destinataire : {data.recipient_name} ({data.recipient_phone})
-    # Partenaire : {data.partner_name}
-    # Pays : {data.country_destination}
-
-    
     if requires_admin:
         await run_in_threadpool(
             send_email,
@@ -266,7 +240,6 @@ async def external_transfer(
             country="Burundi",
         )
 
-        # Notify all registered Telegram agents
         chat_ids = (await db.execute(select(TelegramUser.chat_id))).scalars().all()
         telegram_message = (
             f"Nouvelle demande de transfert externe\n"
@@ -282,7 +255,6 @@ async def external_transfer(
             except Exception:
                 continue
 
-    # Email au client initiateur + destinataires configurés (template commun)
     await send_transaction_emails(
         db,
         initiator=current_user,
@@ -305,9 +277,13 @@ async def external_transfer(
 
     return transfer
 
-@router.post("/transfer/external/{transfer_id}/approve")
-async def approve_external_transfer(transfer_id: str, db: AsyncSession = Depends(get_db), current_agent: Users = Depends(get_current_agent)):
 
+@router.post("/transfer/external/{transfer_id}/approve")
+async def approve_external_transfer(
+    transfer_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_agent: Users = Depends(get_current_agent),
+):
     transfer = await db.scalar(select(ExternalTransfers).where(ExternalTransfers.id == transfer_id))
 
     transfer.status = "approved"
@@ -315,39 +291,31 @@ async def approve_external_transfer(transfer_id: str, db: AsyncSession = Depends
     transfer.processed_at = datetime.utcnow()
 
     await db.commit()
-    return {"message": "✅ Transfert validé"}
+    return {"message": "Transfert validé"}
 
-import decimal
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.core.database import get_db
-from app.core.security import get_current_user
-from app.models.transactions import Transactions
-from app.models.users import Users
-from app.models.wallets import Wallets
+class InternalTransferRequest(BaseModel):
+    paytag: str
+    amount: decimal.Decimal
 
 
 @router.post("/transfer/internal")
 async def internal_transfer(
-    paytag: str,
-    amount: decimal.Decimal,
+    payload: InternalTransferRequest,
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user)
 ):
     ledger = LedgerService(db)
+    paytag = payload.paytag
+    amount = payload.amount
     if amount <= 0:
         raise HTTPException(400, "Montant invalide")
     
-    # 🔍 Recalcule risque AML
-    #risk = await calculate_risk_score(db, current_user.user_id)
-    risk = await update_risk_score(db, current_user,amount, channel='internal')
+    # Recalcule risque AML
+    risk = await update_risk_score(db, current_user, amount, channel='internal')
 
     if risk >= 80:
-       raise HTTPException(423, "⚠️ Compte gelé temporairement pour vérification.")
-
+       raise HTTPException(423, "Compte gelé temporairement pour vérification.")
 
     # Trouver destinataire
     result = await db.execute(select(Users).where(Users.paytag == paytag))
@@ -440,7 +408,6 @@ async def internal_transfer(
 
     await db.commit()
 
-    # Email au client initiateur + destinataires configurés
     await send_transaction_emails(
         db,
         initiator=current_user,
@@ -457,5 +424,3 @@ async def internal_transfer(
     )
 
     return {"message": "success", "tx_id": str(tx.tx_id)}
-
-
