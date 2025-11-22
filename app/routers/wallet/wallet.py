@@ -352,7 +352,7 @@ async def transfer_money(
 
     # 🧾 Enregistrement des transactions
     tx_sender = Transactions(
-        transaction_id=uuid.uuid4(),
+        tx_id=uuid.uuid4(),
         user_id=current_user.user_id,
         type="transfer",
         amount=-amount,
@@ -361,7 +361,7 @@ async def transfer_money(
         details={"to": receiver_user.email}
     )
     tx_receiver = Transactions(
-        transaction_id=uuid.uuid4(),
+        tx_id=uuid.uuid4(),
         user_id=receiver_user.user_id,
         type="transfer",
         amount=amount,
