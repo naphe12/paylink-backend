@@ -117,7 +117,8 @@ class LoanReminderResponse(BaseModel):
 def _ensure_active_user(user: Users):
     if user.status != "active":
         raise HTTPException(403, "Compte inactif : demande de crédit impossible.")
-    if getattr(user, "kyc_status", None) not in {"verified", "reviewing"}:
+    # Autorise temporairement unverified
+    if getattr(user, "kyc_status", None) not in {"verified", "reviewing", "unverified"}:
         raise HTTPException(403, "KYC requis avant de demander un crédit.")
 
 
