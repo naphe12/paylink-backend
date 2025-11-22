@@ -42,6 +42,8 @@ async def _serialize_request(
     )
 
 
+# Autorise /admin/cash-requests et /admin/cash-requests/
+@router.get("", response_model=list[WalletCashRequestAdminRead])
 @router.get("/", response_model=list[WalletCashRequestAdminRead])
 async def list_cash_requests(
     status: WalletCashRequestStatus | None = Query(None),
