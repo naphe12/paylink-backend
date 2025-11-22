@@ -352,22 +352,24 @@ async def transfer_money(
 
     # 🧾 Enregistrement des transactions
     tx_sender = Transactions(
-        tx_id=uuid.uuid4(),
-        user_id=current_user.user_id,
-        type="transfer",
-        amount=-amount,
-        currency="EUR",
-        status="completed",
-        details={"to": receiver_user.email}
+        initiated_by=current_user.user_id,
+        sender_wallet=sender_wallet.wallet_id,
+        receiver_wallet=receiver_wallet.wallet_id,
+        amount=amount,
+        currency_code=sender_wallet.currency_code,
+        channel="internal",
+        status="succeeded",
+        description=f"Transfert interne vers {receiver_user.email}",
     )
     tx_receiver = Transactions(
-        tx_id=uuid.uuid4(),
-        user_id=receiver_user.user_id,
-        type="transfer",
+        initiated_by=current_user.user_id,
+        sender_wallet=sender_wallet.wallet_id,
+        receiver_wallet=receiver_wallet.wallet_id,
         amount=amount,
-        currency="EUR",
-        status="completed",
-        details={"from": current_user.email}
+        currency_code=sender_wallet.currency_code,
+        channel="internal",
+        status="succeeded",
+        description=f"Transfert interne reçu de {current_user.email}",
     )
     db.add_all([tx_sender, tx_receiver])
 
@@ -830,7 +832,6 @@ async def get_limits(current_user: Users = Depends(get_current_user)):
 @router.get("/risk")
 async def get_risk_score(current_user: Users = Depends(get_current_user)):
     return {"risk_score": current_user.risk_score}
-
 
 
 
