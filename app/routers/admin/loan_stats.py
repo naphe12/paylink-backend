@@ -94,6 +94,7 @@ async def list_loans_admin(
     db: AsyncSession = Depends(get_db),
     _: object = Depends(get_current_admin),
 ):
+    print(f"[admin/loans] status={status} overdue_only={overdue_only} limit={limit}")
     stmt = (
         select(Loans)
         .options(selectinload(Loans.loan_repayments), selectinload(Loans.users))
