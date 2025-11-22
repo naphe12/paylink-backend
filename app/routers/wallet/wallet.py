@@ -573,32 +573,29 @@ async def get_wallet_transactions(
 
     wallet_id = wallet.wallet_id
 
-    # 2. Récupérer toutes transactions liées à ce wallet
+    # 2. Récupérer les mouvements du wallet (wallet_transactions) pour cet utilisateur
     tx_result = await db.execute(
-        select(Transactions)
-        .where(
-            or_(
-                Transactions.initiated_by == current_user.user_id,
-                Transactions.sender_wallet == wallet_id,
-                Transactions.receiver_wallet == wallet_id,
-            )
-        )
-        .order_by(Transactions.created_at.desc())
+        select(WalletTransactions)
+        .where(WalletTransactions.wallet_id == wallet_id)
+        .order_by(WalletTransactions.created_at.desc())
     )
     txs = tx_result.scalars().all()
 
     # 3. Normaliser direction + structure
     response = []
     for tx in txs:
-        direction = "in" if tx.receiver_wallet == wallet_id else "out"
+        direction_flag = str(tx.direction or "").lower()
+        amount_val = float(tx.amount)
+        if direction_flag.startswith("debit"):
+            amount_val = -amount_val
 
         response.append({
-            "tx_id": str(tx.tx_id),
-            "amount": float(tx.amount),
+            "tx_id": str(tx.transaction_id),
+            "amount": amount_val,
             "currency_code": tx.currency_code,
-            "direction": direction,
-            "description": tx.description or "",
-            "status": tx.status,
+            "direction": "in" if amount_val > 0 else "out",
+            "description": tx.description or tx.operation_type or "",
+            "status": getattr(tx, "status", "") or "",
             "created_at": tx.created_at,
         })
 
@@ -832,9 +829,6 @@ async def get_limits(current_user: Users = Depends(get_current_user)):
 @router.get("/risk")
 async def get_risk_score(current_user: Users = Depends(get_current_user)):
     return {"risk_score": current_user.risk_score}
-
-
-
 
 
 
