@@ -22,7 +22,7 @@ def test_mailjet():
             'Messages': [
                 {
                     "From": {
-                        "Email": "no-reply@paylink.app",
+                        "Email": "adolphe.nahimana@gmail.com",
                         "Name": "PayLink"
                     },
                     "To": [
