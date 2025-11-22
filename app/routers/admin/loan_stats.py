@@ -127,6 +127,17 @@ async def list_loans_admin(
     return response
 
 
+@router.get("/list", response_model=list[LoanAdminItem])
+async def list_loans_admin_alias(
+    status: str | None = None,
+    overdue_only: bool = False,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+    _: object = Depends(get_current_admin),
+):
+    return await list_loans_admin(status, overdue_only, limit, db, _)
+
+
 @router.post("/{loan_id}/approve")
 async def approve_loan(
     loan_id: str,
