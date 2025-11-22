@@ -22,8 +22,8 @@ def test_mailjet():
             'Messages': [
                 {
                     "From": {
-                        "Email": "adolphe.nahimana@gmail.com",
-                        "Name": "PayLink"
+                        "Email": "pilot@mailjet.com",
+						"Name": "Mailjet Pilot"
                     },
                     "To": [
                         {
