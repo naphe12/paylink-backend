@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import create_access_token, hash_password, verify_password
-from app.dependencies.auth import get_current_user
+from app.dependencies.auth import get_current_user, get_current_user_db
 from app.models.user_auth import UserAuth
 from app.models.users import Users
 from app.models.wallets import Wallets

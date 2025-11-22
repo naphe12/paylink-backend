@@ -9,6 +9,7 @@ from app.core.database import get_db
 from app.logger import get_logger
 from app.logger_middleware import LoggerMiddleware
 from app.routers.auth import auth
+from app.routers.auth.change_password import router as change_password_router
 from app.routers.ref import country
 from app.routers.ref import exchange
 from app.routers.wallet import   wallet
@@ -72,6 +73,7 @@ app.add_middleware(
 
 
 app.include_router(auth.router, prefix="/auth", tags=["Auth"])
+app.include_router(change_password_router)
 app.include_router(wallet.router, prefix="/wallet", tags=["Wallet"])
 app.include_router(country.router, prefix="/api/countries", tags=["Countries"])
 app.include_router(exchange.router)
