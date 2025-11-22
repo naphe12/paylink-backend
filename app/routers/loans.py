@@ -168,7 +168,7 @@ async def apply_for_short_term_loan(
 @router.get("/me", response_model=LoanPortfolio)
 async def get_my_loans(
     db: AsyncSession = Depends(get_db),
-    current_user: Users = Depends(get_current_user),
+    current_user: Users = Depends(get_current_user_db),
 ):
     loans = (
         await db.execute(
@@ -401,7 +401,7 @@ async def repay_loan(
     loan_id: uuid.UUID,
     payload: LoanRepaymentPayload,
     db: AsyncSession = Depends(get_db),
-    current_user: Users = Depends(get_current_user),
+    current_user: Users = Depends(get_current_user_db),
 ):
     loan = await db.get(Loans, loan_id)
     if not loan or loan.borrower_user != current_user.user_id:
