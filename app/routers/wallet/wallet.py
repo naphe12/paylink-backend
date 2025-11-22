@@ -5,7 +5,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
-from sqlalchemy import cast, select, String
+from sqlalchemy import cast, select, String, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -284,7 +284,9 @@ async def transfer_money(
     if not sender_wallet or sender_wallet.available < amount:
         raise HTTPException(status_code=400, detail="Solde insuffisant")
 
-    receiver_user = await db.scalar(select(Users).where(Users.email == to_email))
+    receiver_user = await db.scalar(
+        select(Users).where(or_(Users.email == to_email, Users.paytag == to_email))
+    )
     if not receiver_user:
         raise HTTPException(status_code=404, detail="Destinataire introuvable")
 
