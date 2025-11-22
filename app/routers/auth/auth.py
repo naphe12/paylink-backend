@@ -230,7 +230,7 @@ async def reset_password(
     password_form: str | None = Form(None),
     token_query: str | None = Query(None),
     password_query: str | None = Query(None),
-    request: Request | None = None,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     token = (data.token if data and data.token else None) or token_form or token_query
