@@ -76,6 +76,7 @@ async def create_agent(
     }
 
 
+@router.get("")
 @router.get("/")
 async def list_agents(
     db: AsyncSession = Depends(get_db),
