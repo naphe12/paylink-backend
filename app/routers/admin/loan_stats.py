@@ -86,6 +86,8 @@ async def loan_statistics(
     }
 
 
+# Liste des prêts (admin) - accepte /admin/loans et /admin/loans/
+@router.get("", response_model=list[LoanAdminItem])
 @router.get("/", response_model=list[LoanAdminItem])
 async def list_loans_admin(
     status: str | None = None,
