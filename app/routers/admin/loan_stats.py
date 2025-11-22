@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
 from app.models.loanrepayments import LoanRepayments
@@ -124,3 +125,21 @@ async def list_loans_admin(
             )
         )
     return response
+
+
+@router.post("/{loan_id}/approve")
+async def approve_loan(
+    loan_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: object = Depends(get_current_admin),
+):
+    loan = await db.get(Loans, loan_id)
+    if not loan:
+        raise HTTPException(404, "Crédit introuvable.")
+    if loan.status != "draft":
+        raise HTTPException(400, "Ce crédit n'est pas en attente (draft).")
+
+    loan.status = "active"
+    loan.updated_at = datetime.utcnow()
+    await db.commit()
+    return {"message": "Crédit validé", "loan_id": str(loan.loan_id), "status": loan.status}
