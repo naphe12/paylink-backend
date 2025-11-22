@@ -10,6 +10,8 @@ from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
 from app.models.loanrepayments import LoanRepayments
 from app.models.loans import Loans
+from app.routers.loans import LoanAdminItem
+from app.services.loan_workflow import has_overdue_installments, outstanding_balance
 
 router = APIRouter(prefix="/admin/loans", tags=["Admin Loans"])
 
@@ -81,3 +83,44 @@ async def loan_statistics(
         "repaid_last_30d": float(recent_repayments or 0),
         "repayment_rate": repayment_rate,
     }
+
+
+@router.get("/", response_model=list[LoanAdminItem])
+async def list_loans_admin(
+    status: str | None = None,
+    overdue_only: bool = False,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+    _: object = Depends(get_current_admin),
+):
+    stmt = (
+        select(Loans)
+        .options(selectinload(Loans.loan_repayments), selectinload(Loans.users))
+        .order_by(Loans.created_at.desc())
+        .limit(min(limit, 200))
+    )
+    if status:
+        stmt = stmt.where(Loans.status == status)
+
+    rows = (await db.execute(stmt)).scalars().all()
+    response: list[LoanAdminItem] = []
+    for loan in rows:
+        overdue = has_overdue_installments(loan.loan_repayments or [])
+        if overdue_only and not overdue:
+            continue
+        response.append(
+            LoanAdminItem(
+                loan_id=str(loan.loan_id),
+                borrower_id=str(loan.borrower_user),
+                borrower_name=getattr(loan.users, "full_name", None),
+                borrower_email=getattr(loan.users, "email", None),
+                status=loan.status,
+                principal=loan.principal,
+                currency_code=loan.currency_code,
+                risk_level=loan.risk_level,
+                created_at=loan.created_at,
+                outstanding_balance=outstanding_balance(loan.loan_repayments or []),
+                overdue=overdue,
+            )
+        )
+    return response
