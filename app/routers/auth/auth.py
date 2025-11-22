@@ -227,10 +227,12 @@ async def reset_password(
     data: ResetPasswordRequest | None = Body(None),
     token_form: str | None = Form(None),
     password_form: str | None = Form(None),
+    token_query: str | None = Query(None),
+    password_query: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
-    token = data.token if data else token_form
-    new_password = data.password if data else password_form
+    token = (data.token if data and data.token else None) or token_form or token_query
+    new_password = (data.password if data and data.password else None) or password_form or password_query
 
     if not token or not new_password:
         raise HTTPException(status_code=400, detail="Token et mot de passe requis")
