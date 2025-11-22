@@ -231,6 +231,7 @@ async def reset_password(
     password_form: str | None = Form(None),
     token_query: str | None = Query(None),
     password_query: str | None = Query(None),
+    current_user_opt: Users | None = Depends(get_optional_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     token = (data.token if data and data.token else None) or token_form or token_query
@@ -246,6 +247,14 @@ async def reset_password(
             pass
 
     if not token or not new_password:
+        # Fallback : si utilisateur authentifié, on autorise le reset direct
+        if current_user_opt:
+            auth_entry = await db.scalar(select(UserAuth).where(UserAuth.user_id == current_user_opt.user_id))
+            if not auth_entry:
+                raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+            auth_entry.password_hash = hash_password(new_password)
+            await db.commit()
+            return {"message": "Mot de passe mis à jour"}
         raise HTTPException(status_code=400, detail="Token et mot de passe requis")
 
     try:
@@ -268,3 +277,19 @@ async def reset_password(
     await db.commit()
 
     return {"message": "Mot de passe réinitialisé avec succès"}
+# Optional auth helper for reset-password fallback
+async def get_optional_current_user(request: Request, db: AsyncSession = Depends(get_db)) -> Users | None:
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.lower().startswith("bearer "):
+        return None
+    token = auth_header.split(" ", 1)[1]
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        user_id = payload.get("sub")
+        if not user_id:
+            return None
+    except JWTError:
+        return None
+
+    user = await db.scalar(select(Users).where(Users.user_id == user_id))
+    return user
