@@ -97,10 +97,10 @@ async def get_current_user_db(
     return user
 
 async def get_current_agent(current_user: Users = Depends(get_current_user)) -> Users:
-    if current_user.role != "agent":
+    if current_user.role not in ("agent", "admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="⛔ Accès réservé aux agents"
+            detail="Accès réservé aux agents"
         )
     return current_user
 
