@@ -12,7 +12,7 @@ from fastapi import (
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -41,6 +41,10 @@ async def register_user(
     if existing_user:
         raise HTTPException(status_code=400, detail="Email déjà enregistré")
 
+    paytag = None
+    if user_in.full_name:
+        paytag = "@" + user_in.full_name.strip().lower().replace(" ", "_")
+
     user = Users(
         full_name=user_in.full_name,
         email=user_in.email,
@@ -49,6 +53,7 @@ async def register_user(
         status="active",
         kyc_status="unverified",
         role="client",
+        paytag=paytag,
     )
     db.add(user)
     await db.flush()
