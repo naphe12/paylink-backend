@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import create_access_token, hash_password, verify_password
-from app.dependencies.auth import get_current_user, get_current_user_db
+from app.dependencies.auth import get_current_user, get_current_user_db,get_optional_current_user
 from app.models.user_auth import UserAuth
 from app.models.users import Users
 from app.models.wallets import Wallets
@@ -276,19 +276,4 @@ async def reset_password(
     await db.commit()
 
     return {"message": "Mot de passe réinitialisé avec succès"}
-# Optional auth helper for reset-password fallback
-async def get_optional_current_user(request: Request, db: AsyncSession = Depends(get_db)) -> Users | None:
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.lower().startswith("bearer "):
-        return None
-    token = auth_header.split(" ", 1)[1]
-    try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        user_id = payload.get("sub")
-        if not user_id:
-            return None
-    except JWTError:
-        return None
 
-    user = await db.scalar(select(Users).where(Users.user_id == user_id))
-    return user
