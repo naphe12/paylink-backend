@@ -15,7 +15,7 @@ from fastapi import (
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -146,13 +146,25 @@ async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db),
 ):
-    user = await db.scalar(select(Users).where(Users.email == form_data.username))
+    raw_username = form_data.username.strip()
+    normalized = raw_username.lower()
+    paytag = normalized if normalized.startswith("@") else f"@{normalized}"
+
+    user = await db.scalar(
+        select(Users).where(
+            or_(
+                func.lower(Users.email) == normalized,
+                func.lower(Users.paytag) == paytag,
+                Users.phone_e164 == raw_username,
+            )
+        )
+    )
     if not user:
-        raise HTTPException(status_code=401, detail="Utilisateur introuvable")
+        raise HTTPException(status_code=401, detail="Identifiant ou mot de passe incorrect")
 
     auth_data = await db.scalar(select(UserAuth).where(UserAuth.user_id == user.user_id))
     if not auth_data or not verify_password(form_data.password, auth_data.password_hash):
-        raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
+        raise HTTPException(status_code=401, detail="Identifiant ou mot de passe incorrect")
 
     auth_data.last_login_at = datetime.utcnow()
     await db.commit()
@@ -276,4 +288,3 @@ async def reset_password(
     await db.commit()
 
     return {"message": "Mot de passe réinitialisé avec succès"}
-
