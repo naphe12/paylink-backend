@@ -22,7 +22,7 @@ router = APIRouter(prefix="/admin/transactions-audit", tags=["Admin Transactions
 @router.get("")
 @router.get("/")
 async def audit_transactions(
-    wallet_id: UUID | None = Query(None, description="Filtrer par wallet_id"),
+    wallet_id: str | None = Query(None, description="Filtrer par wallet_id ou identifiant utilisateur"),
     agent_id: UUID | None = Query(None, description="Filtrer par agent_id"),
     search: str | None = Query(None, description="Référence, type, montant..."),
     user_identifier: str | None = Query(
@@ -34,11 +34,16 @@ async def audit_transactions(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
 ):
-    # Résolution d'un wallet à partir d'un identifiant utilisateur
-    if wallet_id is None and user_identifier:
-        wallet_id = await _resolve_wallet_id(db, user_identifier)
+    # Résolution d'un wallet à partir d'un identifiant utilisateur ou d'un wallet_id non UUID
+    wallet_uuid: UUID | None = None
+    if wallet_id:
+        wallet_uuid = _to_uuid(wallet_id)
+        if wallet_uuid is None:
+            wallet_uuid = await _resolve_wallet_id(db, wallet_id)
+    if wallet_uuid is None and user_identifier:
+        wallet_uuid = await _resolve_wallet_id(db, user_identifier)
 
-    if not wallet_id and not agent_id:
+    if not wallet_uuid and not agent_id:
         raise HTTPException(
             status_code=400,
             detail="Renseignez au moins wallet_id, agent_id ou un utilisateur (email/paytag/téléphone).",
@@ -48,10 +53,10 @@ async def audit_transactions(
     wallet_rows = []
     agent_rows = []
 
-    if wallet_id:
+    if wallet_uuid:
         ledger_rows = await _fetch_ledger_entries(
             db=db,
-            wallet_id=wallet_id,
+            wallet_id=wallet_uuid,
             search=search,
             date_from=date_from,
             date_to=date_to,
@@ -59,7 +64,7 @@ async def audit_transactions(
         )
         wallet_rows = await _fetch_wallet_transactions(
             db=db,
-            wallet_id=wallet_id,
+            wallet_id=wallet_uuid,
             search=search,
             date_from=date_from,
             date_to=date_to,
@@ -85,9 +90,9 @@ async def audit_transactions(
             wallet_rows=wallet_rows,
             agent_rows=agent_rows,
             unbalanced_journals=await _find_unbalanced_journals(
-                db=db, wallet_id=wallet_id
+                db=db, wallet_id=wallet_uuid
             )
-            if wallet_id
+            if wallet_uuid
             else [],
         ),
     }
@@ -399,3 +404,12 @@ async def _resolve_wallet_id(db: AsyncSession, identifier: str) -> UUID | None:
     if not wallet_id:
         raise HTTPException(status_code=404, detail="Aucun wallet associé à cet utilisateur.")
     return wallet_id
+
+
+def _to_uuid(value: str | None) -> UUID | None:
+    if value is None:
+        return None
+    try:
+        return UUID(str(value))
+    except Exception:
+        return None
