@@ -18,6 +18,7 @@ from app.models.wallets import Wallets
 router = APIRouter(prefix="/admin/transactions-audit", tags=["Admin Transactions"])
 
 
+@router.get("")
 @router.get("/")
 async def audit_transactions(
     wallet_id: UUID | None = Query(None, description="Filtrer par wallet_id"),
