@@ -2,7 +2,7 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import String, cast, func, select, case
+from sqlalchemy import String, cast, func, select, case, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -14,6 +14,7 @@ from app.models.ledgerentries import LedgerEntries
 from app.models.ledgerjournal import LedgerJournal
 from app.models.wallet_transactions import WalletTransactions
 from app.models.wallets import Wallets
+from app.models.users import Users
 
 router = APIRouter(prefix="/admin/transactions-audit", tags=["Admin Transactions"])
 
@@ -24,16 +25,23 @@ async def audit_transactions(
     wallet_id: UUID | None = Query(None, description="Filtrer par wallet_id"),
     agent_id: UUID | None = Query(None, description="Filtrer par agent_id"),
     search: str | None = Query(None, description="Référence, type, montant..."),
+    user_identifier: str | None = Query(
+        None, description="Email, paytag ou téléphone (pour récupérer le wallet)"
+    ),
     date_from: datetime | None = Query(None),
     date_to: datetime | None = Query(None),
     limit: int = Query(200, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
 ):
+    # Résolution d'un wallet à partir d'un identifiant utilisateur
+    if wallet_id is None and user_identifier:
+        wallet_id = await _resolve_wallet_id(db, user_identifier)
+
     if not wallet_id and not agent_id:
         raise HTTPException(
             status_code=400,
-            detail="Renseignez au moins wallet_id ou agent_id pour l'audit.",
+            detail="Renseignez au moins wallet_id, agent_id ou un utilisateur (email/paytag/téléphone).",
         )
 
     ledger_rows = []
@@ -366,3 +374,28 @@ def _build_alerts(
         )
 
     return alerts
+
+
+async def _resolve_wallet_id(db: AsyncSession, identifier: str) -> UUID | None:
+    ident = identifier.strip()
+    normalized = ident.lower()
+    paytag = normalized if normalized.startswith("@") else f"@{normalized}"
+
+    user = await db.scalar(
+        select(Users).where(
+            or_(
+                func.lower(Users.email) == normalized,
+                func.lower(Users.paytag) == paytag,
+                Users.phone_e164 == ident,
+            )
+        )
+    )
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable pour cet identifiant.")
+
+    wallet_id = await db.scalar(
+        select(Wallets.wallet_id).where(Wallets.user_id == user.user_id).limit(1)
+    )
+    if not wallet_id:
+        raise HTTPException(status_code=404, detail="Aucun wallet associé à cet utilisateur.")
+    return wallet_id
