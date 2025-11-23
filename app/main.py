@@ -121,6 +121,7 @@ from app.routers.admin.loan_stats import router as admin_loan_stats_router
 from app.routers.admin.aml_events import router as admin_aml_router
 from app.routers.admin.credit_history import router as admin_credit_history_router
 from app.routers.admin.cash_requests import router as admin_cash_requests_router
+from app.routers.admin.transactions_audit import router as admin_transactions_audit_router
 app.include_router(admin_users_router)
 app.include_router(admin_wallets_router)
 app.include_router(admin_transfers_router)
@@ -134,6 +135,7 @@ app.include_router(admin_loan_stats_router)
 app.include_router(admin_aml_router)
 app.include_router(admin_credit_history_router)
 app.include_router(admin_cash_requests_router)
+app.include_router(admin_transactions_audit_router)
 
 from app.routers.agent.agent import router as agent_router
 app.include_router(agent_router, prefix="/agent", tags=["Agent Operations"])
