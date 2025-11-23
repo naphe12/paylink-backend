@@ -72,6 +72,16 @@ async def audit_transactions(
         "ledger": ledger_rows,
         "wallet_transactions": wallet_rows,
         "agent_transactions": agent_rows,
+        "alerts": _build_alerts(
+            ledger_rows=ledger_rows,
+            wallet_rows=wallet_rows,
+            agent_rows=agent_rows,
+            unbalanced_journals=await _find_unbalanced_journals(
+                db=db, wallet_id=wallet_id
+            )
+            if wallet_id
+            else [],
+        ),
     }
 
 
@@ -245,3 +255,114 @@ async def _fetch_agent_transactions(
         }
         for r in rows
     ]
+
+
+async def _find_unbalanced_journals(db: AsyncSession, wallet_id: UUID):
+    account_ids_stmt = select(LedgerAccounts.account_id).where(
+        LedgerAccounts.metadata_["wallet_id"].astext == str(wallet_id)
+    )
+    sums_stmt = (
+        select(
+            LedgerEntries.journal_id,
+            func.sum(
+                func.case(
+                    (LedgerEntries.direction == "debit", LedgerEntries.amount), else_=0
+                )
+            ).label("debit"),
+            func.sum(
+                func.case(
+                    (LedgerEntries.direction == "credit", LedgerEntries.amount), else_=0
+                )
+            ).label("credit"),
+        )
+        .where(LedgerEntries.account_id.in_(account_ids_stmt))
+        .group_by(LedgerEntries.journal_id)
+        .having(func.sum(LedgerEntries.amount) > 0)
+    )
+    rows = (await db.execute(sums_stmt)).all()
+    alerts = []
+    for r in rows:
+        debit = r.debit or 0
+        credit = r.credit or 0
+        if debit != credit:
+            alerts.append(
+                {
+                    "journal_id": str(r.journal_id),
+                    "debit": float(debit),
+                    "credit": float(credit),
+                    "gap": float(debit - credit),
+                    "type": "ledger_unbalanced",
+                    "message": "Journal non équilibré pour ce wallet.",
+                }
+            )
+    return alerts
+
+
+def _build_alerts(
+    *,
+    ledger_rows: list[dict],
+    wallet_rows: list[dict],
+    agent_rows: list[dict],
+    unbalanced_journals: list[dict],
+):
+    alerts: list[dict] = []
+
+    if unbalanced_journals:
+        alerts.extend(unbalanced_journals)
+
+    # Dérive des drifts nets entre ledger et wallet history
+    def net(rows, key="direction", amount="amount"):
+        total = 0
+        for r in rows:
+            direction = (r.get(key) or "").lower()
+            amt = float(r.get(amount) or 0)
+            if direction in ("credit", "in"):
+                total += amt
+            elif direction in ("debit", "out"):
+                total -= amt
+        return total
+
+    net_ledger = net(ledger_rows, key="direction", amount="amount")
+    net_wallet = net(wallet_rows, key="direction", amount="amount")
+    drift = net_wallet - net_ledger
+    if abs(drift) > 1:  # tolérance 1 unité monétaire
+        alerts.append(
+            {
+                "type": "ledger_wallet_drift",
+                "message": "Écart entre ledger et wallet_history.",
+                "details": {"net_ledger": net_ledger, "net_wallet": net_wallet, "drift": drift},
+            }
+        )
+
+    # Duplicatas de référence côté wallet
+    ref_counts: dict[str, list[dict]] = {}
+    for row in wallet_rows:
+        ref = row.get("reference") or ""
+        if not ref:
+            continue
+        ref_counts.setdefault(ref, []).append(row)
+    for ref, rows in ref_counts.items():
+        if len(rows) > 1:
+            alerts.append(
+                {
+                    "type": "wallet_duplicate_reference",
+                    "message": f"Référence dupliquée dans wallet_transactions: {ref}",
+                    "details": {"count": len(rows)},
+                }
+            )
+
+    # Montants élevés côté agent
+    high_agent = [r for r in agent_rows if abs(float(r.get("amount") or 0)) >= 1_000_000]
+    for row in high_agent:
+        alerts.append(
+            {
+                "type": "agent_high_amount",
+                "message": "Montant agent élevé détecté.",
+                "details": {
+                    "amount": float(row.get("amount") or 0),
+                    "related_tx": row.get("related_tx"),
+                },
+            }
+        )
+
+    return alerts
