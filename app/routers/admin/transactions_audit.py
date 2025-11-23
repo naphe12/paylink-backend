@@ -306,6 +306,12 @@ async def _find_unbalanced_journals(db: AsyncSession, wallet_id: UUID):
                     "gap": float(debit - credit),
                     "type": "ledger_unbalanced",
                     "message": "Journal non équilibré pour ce wallet.",
+                    "details": {
+                        "journal_id": str(r.journal_id),
+                        "debit": float(debit),
+                        "credit": float(credit),
+                        "gap": float(debit - credit),
+                    },
                 }
             )
     return alerts
@@ -343,7 +349,11 @@ def _build_alerts(
             {
                 "type": "ledger_wallet_drift",
                 "message": "Écart entre ledger et wallet_history.",
-                "details": {"net_ledger": net_ledger, "net_wallet": net_wallet, "drift": drift},
+                "details": {
+                    "net_ledger": net_ledger,
+                    "net_wallet": net_wallet,
+                    "drift": drift,
+                },
             }
         )
 
@@ -360,7 +370,7 @@ def _build_alerts(
                 {
                     "type": "wallet_duplicate_reference",
                     "message": f"Référence dupliquée dans wallet_transactions: {ref}",
-                    "details": {"count": len(rows)},
+                    "details": {"count": len(rows), "reference": ref},
                 }
             )
 
@@ -374,6 +384,8 @@ def _build_alerts(
                 "details": {
                     "amount": float(row.get("amount") or 0),
                     "related_tx": row.get("related_tx"),
+                    "status": row.get("status"),
+                    "type": row.get("type") or row.get("operation_type"),
                 },
             }
         )
