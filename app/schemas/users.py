@@ -111,4 +111,12 @@ class UsersRead(BaseModel):
     created_at: datetime | None = None
     email_verified: bool | None = None
     email_verified_at: datetime | None = None
+    credit_limit: float | None = None
+    credit_used: float | None = None
+    daily_limit: float | None = None
+    monthly_limit: float | None = None
+    used_daily: float | None = None
+    used_monthly: float | None = None
+    risk_score: float | None = None
+    paytag: str | None = None
     model_config = {"from_attributes": True}
