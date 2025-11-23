@@ -37,6 +37,7 @@ class Agents(Base):
         foreign_keys=lambda: [AgentTransactions.agent_user_id],
         viewonly=True
     )
+    agent_accounts: Mapped[list['AgentAccounts']] = relationship('AgentAccounts', back_populates='agent')
 
 
 
@@ -44,3 +45,4 @@ from app.models.agentlocations import AgentLocations
 from app.models.countries import Countries
 from app.models.users import Users
 from app.models.agent_transactions import AgentTransactions
+from app.models.agent_accounts import AgentAccounts
