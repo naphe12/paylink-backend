@@ -89,9 +89,7 @@ async def audit_transactions(
             ledger_rows=ledger_rows,
             wallet_rows=wallet_rows,
             agent_rows=agent_rows,
-            unbalanced_journals=await _find_unbalanced_journals(
-                db=db, wallet_id=wallet_uuid
-            )
+            unbalanced_journals=await _find_wallet_ledger_gap(db=db, wallet_id=wallet_uuid)
             if wallet_uuid
             else [],
         ),
@@ -270,51 +268,38 @@ async def _fetch_agent_transactions(
     ]
 
 
-async def _find_unbalanced_journals(db: AsyncSession, wallet_id: UUID):
+async def _find_wallet_ledger_gap(db: AsyncSession, wallet_id: UUID):
     account_ids_stmt = select(LedgerAccounts.account_id).where(
         LedgerAccounts.metadata_["wallet_id"].astext == str(wallet_id)
     )
-    sums_stmt = (
-        select(
-            LedgerEntries.journal_id,
-            func.sum(
-                case(
-                    (LedgerEntries.direction == "debit", LedgerEntries.amount), else_=0
-                )
-            ).label("debit"),
-            func.sum(
-                case(
-                    (LedgerEntries.direction == "credit", LedgerEntries.amount), else_=0
-                )
-            ).label("credit"),
-        )
-        .where(LedgerEntries.account_id.in_(account_ids_stmt))
-        .group_by(LedgerEntries.journal_id)
-        .having(func.sum(LedgerEntries.amount) > 0)
-    )
-    rows = (await db.execute(sums_stmt)).all()
-    alerts = []
-    for r in rows:
-        debit = r.debit or 0
-        credit = r.credit or 0
-        if debit != credit:
-            alerts.append(
-                {
-                    "journal_id": str(r.journal_id),
-                    "debit": float(debit),
-                    "credit": float(credit),
-                    "gap": float(debit - credit),
-                    "type": "ledger_unbalanced",
-                    "message": "Journal non équilibré pour ce wallet.",
-                    "details": {
-                        "journal_id": str(r.journal_id),
-                        "debit": float(debit),
-                        "credit": float(credit),
-                        "gap": float(debit - credit),
-                    },
-                }
-            )
-    return alerts
+    sums_stmt = select(
+        func.sum(
+            case((LedgerEntries.direction == "debit", LedgerEntries.amount), else_=0)
+        ).label("debit"),
+        func.sum(
+            case((LedgerEntries.direction == "credit", LedgerEntries.amount), else_=0)
+        ).label("credit"),
+    ).where(LedgerEntries.account_id.in_(account_ids_stmt))
+
+    row = (await db.execute(sums_stmt)).first()
+    if not row:
+        return []
+    debit = row.debit or 0
+    credit = row.credit or 0
+    if debit == credit:
+        return []
+    return [
+        {
+            "type": "wallet_ledger_unbalanced",
+            "message": "Ledger entries non équilibrées pour ce wallet.",
+            "details": {
+                "debit": float(debit),
+                "credit": float(credit),
+                "gap": float(debit - credit),
+                "wallet_id": str(wallet_id),
+            },
+        }
+    ]
 
 
 def _build_alerts(
