@@ -2,7 +2,7 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import String, cast, func, select
+from sqlalchemy import String, cast, func, select, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -265,12 +265,12 @@ async def _find_unbalanced_journals(db: AsyncSession, wallet_id: UUID):
         select(
             LedgerEntries.journal_id,
             func.sum(
-                func.case(
+                case(
                     (LedgerEntries.direction == "debit", LedgerEntries.amount), else_=0
                 )
             ).label("debit"),
             func.sum(
-                func.case(
+                case(
                     (LedgerEntries.direction == "credit", LedgerEntries.amount), else_=0
                 )
             ).label("credit"),
