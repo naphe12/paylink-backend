@@ -190,7 +190,8 @@ async def login(
 
 
 @router.get("/me", response_model=UsersRead)
-async def read_current_user(current_user: Users = Depends(get_current_user)):
+async def read_current_user(current_user: Users = Depends(get_current_user_db)):
+    # Retourne l'objet complet pour exposer les champs (paytag, limites, risque, etc.)
     return current_user
 
 
