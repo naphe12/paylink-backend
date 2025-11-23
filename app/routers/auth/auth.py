@@ -72,7 +72,7 @@ async def register_user(
         type="consumer",
         currency_code="EUR",
         available=decimal.Decimal("0.00"),
-        pending=decimal.Decimal("0.00"),
+        pending=decimal.Decimal("0.000"),
     )
     db.add(new_wallet)
 
