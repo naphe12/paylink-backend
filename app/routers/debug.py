@@ -9,6 +9,7 @@ router = APIRouter(tags=["Debug"])
 @router.get("/send-email")
 async def send_email():
     api_key = (settings.BREVO_API_KEY or "").strip()
+    print(api_key)
     if not api_key:
         raise HTTPException(status_code=500, detail="BREVO_API_KEY is not configured")
 
