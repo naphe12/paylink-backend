@@ -8,7 +8,7 @@ BREVO_API_KEY = settings.BREVO_API_KEY
 @app.get("/send-email")
 async def send_email():
     payload = {
-        "sender": {"email": "adolphe.nahimana@gmail.com", "name": "PayLink"},
+        "sender": {"email": "adolphe.nahimana@gmail.com", "name": "PayLink App"},
         "to": [{"email": "naphe12@yahoo.fr"}],
         "subject": "Test Brevo",
         "htmlContent": "<h1>Email envoyé via Brevo 🎉</h1>"
