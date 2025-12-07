@@ -1,24 +1,24 @@
-from mailjet_rest import Client
+import logging
+
+import httpx
 
 from app.core.config import settings
 from app.services.mailer import render_template
-import logging
 
 logger = logging.getLogger(__name__)
 
 
 class MailjetEmailService:
     """
-    Service d'envoi via Mailjet.
+    Envoi d'emails via Brevo (remplace l'ancien client Mailjet).
     Accepte soit un template Jinja (template_name + kwargs),
     soit un contenu HTML direct (body_html), soit un texte brut (text).
     """
 
     def __init__(self):
-        self.client = Client(
-            auth=(settings.MAILJET_API_KEY, settings.MAILJET_SECRET_KEY),
-            version="v3.1",
-        )
+        self.api_key = (settings.BREVO_API_KEY or "").strip()
+        if not self.api_key:
+            raise ValueError("BREVO_API_KEY must be configured")
 
     def send_email(
         self,
@@ -30,7 +30,7 @@ class MailjetEmailService:
         text: str | None = None,
         **kwargs,
     ):
-        # Résolution du contenu HTML via template si fourni
+        # Resolution du contenu HTML via template si fourni
         html_content = body_html
         if template_name:
             html_content = render_template(template_name, **kwargs)
@@ -38,33 +38,43 @@ class MailjetEmailService:
         if html_content is None and text is None:
             raise ValueError("send_email requires template_name, body_html or text")
 
-        # Ajoute un texte brut minimal si seul HTML est fourni (améliore la délivrabilité)
+        # Ajoute un texte brut minimal si seul HTML est fourni (ameliorer la deliverabilite)
         if html_content and text is None:
             text = "Notification PayLink"
 
-        data = {
-            "Messages": [
-                {
-                    "From": {
-                        "Email": settings.MAIL_FROM,
-                        "Name": settings.MAIL_FROM_NAME,
-                    },
-                    "To": [{"Email": to_email}],
-                    "Subject": subject,
-                }
-            ]
+        payload = {
+            "sender": {"email": settings.MAIL_FROM, "name": settings.MAIL_FROM_NAME},
+            "to": [{"email": to_email}],
+            "subject": subject,
+        }
+        if html_content:
+            payload["htmlContent"] = html_content
+        if text:
+            payload["textContent"] = text
+
+        headers = {
+            "api-key": self.api_key,
+            "Content-Type": "application/json",
+            "accept": "application/json",
         }
 
-        if text:
-            data["Messages"][0]["TextPart"] = text
-        if html_content:
-            data["Messages"][0]["HTMLPart"] = html_content
-
-        result = self.client.send.create(data=data)
+        response = httpx.post(
+            "https://api.brevo.com/v3/smtp/email",
+            json=payload,
+            headers=headers,
+            timeout=15.0,
+        )
 
         try:
-            logger.info("Mailjet send to %s status=%s", to_email, result.status_code)
+            logger.info("Brevo send to %s status=%s", to_email, response.status_code)
         except Exception:
             pass
 
-        return {"status": result.status_code, "response": result.json()}
+        if response.is_error:
+            try:
+                detail = response.json()
+            except Exception:
+                detail = response.text
+            raise RuntimeError(f"Brevo send failed: {detail}")
+
+        return {"status": response.status_code, "response": response.json()}
