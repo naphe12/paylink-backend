@@ -12,25 +12,30 @@ from app.services.mailjet_service import MailjetEmailService
 logger = logging.getLogger(__name__)
 
 
-async def get_transaction_emails(db: AsyncSession, initiator: Users | None) -> list[str]:
+async def get_transaction_emails(
+    db: AsyncSession, initiator: Users | None, receiver: Users | None = None
+) -> list[str]:
     rows: Sequence[str] = await db.scalars(
         select(TransactionEmailRecipient.email).where(TransactionEmailRecipient.active.is_(True))
     )
     emails = {email for email in rows if email}
     if initiator and initiator.email:
         emails.add(initiator.email)
+    if receiver and receiver.email:
+        emails.add(receiver.email)
     return list(emails)
 
 
 async def send_transaction_emails(
     db: AsyncSession,
     initiator: Users | None,
+    receiver: Users | None = None,
     subject: str,
     template: str | None = None,
     body: str | None = None,
     **template_kwargs,
 ) -> None:
-    recipients = await get_transaction_emails(db, initiator)
+    recipients = await get_transaction_emails(db, initiator, receiver)
     if not recipients:
         return
 
