@@ -29,8 +29,8 @@ async def get_transaction_emails(
 async def send_transaction_emails(
     db: AsyncSession,
     initiator: Users | None,
-    receiver: Users | None = None,
     subject: str,
+    receiver: Users | None = None,
     template: str | None = None,
     body: str | None = None,
     **template_kwargs,
