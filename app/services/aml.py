@@ -4,7 +4,7 @@ import os
 from decimal import Decimal
 
 from fastapi import HTTPException
-from sqlalchemy import insert, select, update
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.amlevents import AmlEvents
@@ -41,12 +41,15 @@ async def update_risk_score(db: AsyncSession, user: Users, tx_amount: Decimal = 
             score += 18
 
     # 3. Plusieurs destinataires différents
-    distinct_receivers = await db.scalar(
+    distinct_receivers_subq = (
         select(Transactions.receiver_wallet)
         .where(Transactions.initiated_by == user.user_id)
         .distinct()
-    )
-    if distinct_receivers and distinct_receivers > 8:
+    ).subquery()
+    distinct_receivers = await db.scalar(
+        select(func.count()).select_from(distinct_receivers_subq)
+    ) or 0
+    if distinct_receivers > 8:
         score += 12
 
     # 4. Impact immédiat si tx fourni
