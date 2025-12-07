@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     MAILJET_SECRET_KEY: str = os.getenv("MAILJET_SECRET_KEY", "")
     MAIL_FROM: str = os.getenv("MAIL_FROM", "no-reply@paylink.app")
     MAIL_FROM_NAME: str = os.getenv("MAIL_FROM_NAME", "PayLink")
+    BREVO_API_KEY:str= os.getenv("BREVO_API_KEY", "")
+    STRIPE_WEBHOOK_SECRET:str= os.getenv("STRIPE_WEBHOOK_SECRET", "")
     
 
 settings = Settings()
