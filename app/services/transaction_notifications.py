@@ -1,5 +1,4 @@
 import logging
-from collections.abc import Iterable
 from typing import Sequence
 
 from fastapi.concurrency import run_in_threadpool
@@ -37,6 +36,7 @@ async def send_transaction_emails(
 
     mailer = MailjetEmailService()
     for email in recipients:
+        print(f"[brevo] sending transaction email to={email}")
         try:
             resp = await run_in_threadpool(
                 mailer.send_email,
@@ -53,6 +53,8 @@ async def send_transaction_emails(
                 status = None
             if status not in (200, 201):
                 logger.warning("Mailjet responded with status=%s for %s", status, email)
+            else:
+                print(f"[brevo] transaction email sent status={status} to={email}")
         except Exception as exc:  # pragma: no cover
-            # Ne pas bloquer la transaction en cas d'erreur SMTP / réseau.
-            logger.exception("Impossible d'envoyer le mail de transaction à %s: %s", email, exc)
+            # Ne pas bloquer la transaction en cas d'erreur SMTP / reseau.
+            logger.exception("Impossible d'envoyer le mail de transaction a %s: %s", email, exc)
