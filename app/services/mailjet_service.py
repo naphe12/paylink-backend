@@ -78,4 +78,5 @@ class MailjetEmailService:
             raise RuntimeError(f"Brevo send failed: {detail}")
 
         print(f"[brevo] email sent? status={response.status_code} to={to_email}")
+        print(response.json())
         return {"status": response.status_code, "response": response.json()}
