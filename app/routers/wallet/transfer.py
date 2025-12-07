@@ -43,7 +43,7 @@ async def external_transfer(
     await calculate_risk_score(db, current_user.user_id)
 
     if current_user.status == "frozen":
-        raise HTTPException(423, "Votre compte est gelé pour raisons de sécurité.")
+        raise HTTPException(423, "Votre compte est gele pour raisons de securite.")
 
     amount = decimal.Decimal(data.amount)
 
@@ -62,7 +62,7 @@ async def external_transfer(
     if amount > total_available:
         raise HTTPException(
             status_code=400,
-            detail=f"Montant trop élevé. Disponible total : {total_available} €",
+            detail=f"Montant trop eleve. Disponible total : {total_available} FBU",
         )
 
     used_daily = decimal.Decimal(current_user.used_daily or 0)
@@ -71,16 +71,16 @@ async def external_transfer(
     monthly_limit = decimal.Decimal(current_user.monthly_limit or 0)
 
     if daily_limit > 0 and amount + used_daily > daily_limit:
-        raise HTTPException(400, "Limite journalière atteinte. Passez au niveau KYC supérieur.")
+        raise HTTPException(400, "Limite journaliere atteinte. Passez au niveau KYC superieur.")
 
     if monthly_limit > 0 and amount + used_monthly > monthly_limit:
         raise HTTPException(400, "Limite mensuelle atteinte.")
 
     risk = await update_risk_score(db, current_user, amount, channel="external")
     if risk >= 80:
-        raise HTTPException(423, "Transfert bloqué : votre compte nécessite une vérification d'identité.")
+        raise HTTPException(423, "Transfert bloque : votre compte necessite une verification d'identite.")
     elif risk >= 60:
-        raise HTTPException(423, "Niveau de risque élevé. Merci de compléter votre KYC.")
+        raise HTTPException(423, "Niveau de risque eleve. Merci de completer votre KYC.")
 
     if current_user.external_transfers_blocked:
         raise HTTPException(423, "Transferts externes temporairement suspendus.")
@@ -242,12 +242,12 @@ async def external_transfer(
 
         chat_ids = (await db.execute(select(TelegramUser.chat_id))).scalars().all()
         telegram_message = (
-            f"Nouvelle demande de transfert externe\n"
+            "Nouvelle demande de transfert externe\n"
             f"Client: {current_user.full_name} ({current_user.email})\n"
             f"Montant: {amount} EUR\n"
             f"Destinataire: {data.recipient_name} ({data.recipient_phone})\n"
             f"Partenaire: {data.partner_name}\n"
-            f"Référence: {transfer.reference_code}"
+            f"Reference: {transfer.reference_code}"
         )
         for chat_id in chat_ids:
             try:
@@ -291,7 +291,7 @@ async def approve_external_transfer(
     transfer.processed_at = datetime.utcnow()
 
     await db.commit()
-    return {"message": "Transfert validé"}
+    return {"message": "Transfert valide"}
 
 
 class InternalTransferRequest(BaseModel):
@@ -303,37 +303,32 @@ class InternalTransferRequest(BaseModel):
 async def internal_transfer(
     payload: InternalTransferRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: Users = Depends(get_current_user)
+    current_user: Users = Depends(get_current_user),
 ):
     ledger = LedgerService(db)
     paytag = payload.paytag
     amount = payload.amount
     if amount <= 0:
         raise HTTPException(400, "Montant invalide")
-    
-    # Recalcule risque AML
-    risk = await update_risk_score(db, current_user, amount, channel='internal')
 
+    risk = await update_risk_score(db, current_user, amount, channel="internal")
     if risk >= 80:
-       raise HTTPException(423, "Compte gelé temporairement pour vérification.")
+        raise HTTPException(423, "Compte gele temporairement pour verification.")
 
-    # Trouver destinataire
     result = await db.execute(select(Users).where(Users.paytag == paytag))
     receiver = result.scalar_one_or_none()
     if not receiver:
         raise HTTPException(404, "Utilisateur introuvable")
 
     if receiver.user_id == current_user.user_id:
-        raise HTTPException(400, "Vous ne pouvez pas vous envoyer à vous-même")
+        raise HTTPException(400, "Vous ne pouvez pas vous envoyer a vous-meme")
 
-    # Portefeuilles source & destination
     w_sender = (await db.execute(select(Wallets).where(Wallets.user_id == current_user.user_id))).scalar_one()
     w_receiver = (await db.execute(select(Wallets).where(Wallets.user_id == receiver.user_id))).scalar_one()
 
     if w_sender.available < amount:
         raise HTTPException(400, "Solde insuffisant")
 
-    # Débit + crédit
     w_sender.available -= amount
     w_receiver.available += amount
 
@@ -355,10 +350,9 @@ async def internal_transfer(
         direction=WalletEntryDirectionEnum.CREDIT,
         operation_type="internal_transfer_receive",
         reference=current_user.paytag or current_user.email,
-        description=f"Transfert interne reçu de {current_user.full_name}",
+        description=f"Transfert interne recu de {current_user.full_name}",
     )
 
-    # Journal transaction
     tx = Transactions(
         initiated_by=current_user.user_id,
         sender_wallet=w_sender.wallet_id,
@@ -367,7 +361,7 @@ async def internal_transfer(
         currency_code=w_sender.currency_code,
         channel="internal",
         status="succeeded",
-        description=f"Transfert interne vers {paytag}"
+        description=f"Transfert interne vers {paytag}",
     )
     db.add(tx)
     await db.flush()
@@ -411,14 +405,15 @@ async def internal_transfer(
     await send_transaction_emails(
         db,
         initiator=current_user,
+        receiver=receiver,
         subject="Confirmation transfert interne",
         template=None,
         body=f"""
-        <p>Votre transfert interne a été effectué.</p>
+        <p>Votre transfert interne a ete effectue.</p>
         <ul>
           <li>Montant : {amount} {w_sender.currency_code}</li>
           <li>Paytag destinataire : {paytag}</li>
-          <li>Statut : réussi</li>
+          <li>Statut : reussi</li>
         </ul>
         """,
     )
