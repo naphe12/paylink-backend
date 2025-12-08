@@ -15,6 +15,8 @@ from app.core.security import get_current_user
 from app.models.bonus_history import BonusHistory
 from app.models.transactions import Transactions
 from app.models.users import Users
+from app.models.agents import Agents
+from app.models.agent_accounts import AgentAccounts
 from app.models.countries import Countries
 from app.models.wallet_cash_requests import (
     WalletCashRequestStatus,
@@ -195,6 +197,35 @@ async def request_cash_deposit(
     await db.commit()
     await db.refresh(request)
     return request
+
+
+@router.get("/cash/agent-accounts")
+async def list_agent_accounts(
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user),
+):
+    stmt = (
+        select(
+            AgentAccounts.id,
+            AgentAccounts.service,
+            AgentAccounts.account_service,
+            Agents.display_name,
+            Agents.agent_id,
+        )
+        .join(Agents, AgentAccounts.agent_id == Agents.agent_id)
+        .where(Agents.active.is_(True))
+    )
+    rows = (await db.execute(stmt)).all()
+    return [
+        {
+            "id": str(account_id),
+            "agent_id": str(agent_id),
+            "agent_name": display_name,
+            "service": service,
+            "account_service": account_service,
+        }
+        for account_id, service, account_service, display_name, agent_id in rows
+    ]
 
 
 @router.post("/cash/withdraw", response_model=WalletCashRequestRead)
@@ -829,9 +860,6 @@ async def get_limits(current_user: Users = Depends(get_current_user)):
 @router.get("/risk")
 async def get_risk_score(current_user: Users = Depends(get_current_user)):
     return {"risk_score": current_user.risk_score}
-
-
-
 
 
 
