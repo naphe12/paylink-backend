@@ -115,22 +115,21 @@
 
         <!-- CONTENT -->
         <div class="content">
-            <p>Bonjour cher partenaire,</p>
+            <p>Bonjour cher Client,</p>
             <p>
                 Une nouvelle demande de transfert externe vient d’être soumise par un utilisateur PayLink.  
                 Merci de traiter cette demande dans les meilleurs délais.
             </p>
 
             <!-- CARD SUMMARY -->
-            <div class="card">
-                <p><span class="strong">Client :</span> {{ client_name }} ({{ client_email }})</p>
-                <p><span class="strong">Téléphone :</span> {{ client_phone }}</p>
-                <p><span class="strong">Montant envoyé :</span> {{ amount }} {{ currency }}</p>
-                <p><span class="strong">Crédit disponible :</span> {{ credit_available }} {{ currency }}</p>
-                <p><span class="strong">Destinataire :</span> {{ receiver_name }} ({{ receiver_phone }})</p>
+            <div class="card">        
+                <p><span class="strong">Destinataire :</span> {{ receiver_name }} ({{ receiver_phone }})</p>			
+                <p><span class="strong">Montant envoyé :</span> {{ amount }} {{ currency }}</p>            
                 <p><span class="strong">Partenaire :</span> {{ partner_name }}</p>
                 <p><span class="strong">Pays :</span> {{ country }}</p>
                 <p><span class="strong">Référence :</span> {{ transfer_id }}</p>
+				<p><span class="strong">Client :</span> {{ client_name }} ({{ client_email }})</p>
+                <p><span class="strong">Téléphone :</span> {{ client_phone }}</p>
             </div>
 
             <p>
