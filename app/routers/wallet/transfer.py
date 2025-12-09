@@ -87,6 +87,8 @@ async def external_transfer(
 
     wallet_balance_before = wallet_balance
     credit_available_after = credit_available_before
+    rate = decimal.Decimal("7000.0")
+    local_amount = amount * rate
     if wallet_balance >= amount:
         wallet_balance -= amount
         wallet.available = wallet_balance
@@ -122,8 +124,8 @@ async def external_transfer(
         recipient_phone=data.recipient_phone,
         amount=amount,
         currency="EUR",
-        rate=decimal.Decimal("7000.0"),
-        local_amount=amount * decimal.Decimal("7000.0"),
+        rate=rate,
+        local_amount=local_amount,
         credit_used=(credit_used > 0),
         status="pending" if requires_admin else "success",
         processed_by=current_user.user_id,
@@ -233,6 +235,7 @@ async def external_transfer(
             client_email=current_user.email,
             amount=amount,
             currency="EUR",
+            payout_amount=f"{local_amount} BIF",
             used_credit=f"{credit_used}EUR",
             recipient_name=data.recipient_name,
             recipient_phone=data.recipient_phone,
@@ -265,6 +268,7 @@ async def external_transfer(
         client_phone=current_user.phone_e164 or "",
         amount=amount,
         currency="EUR",
+        payout_amount=f"{local_amount} BIF",
         credit_available=f"{credit_available_after}",
         receiver_name=data.recipient_name,
         receiver_phone=data.recipient_phone,

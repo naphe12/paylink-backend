@@ -2,154 +2,112 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8" />
-    <title>PayLink Notification</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-
+    <title>PayLink • Notification transfert externe</title>
     <style>
         body {
             margin: 0;
             padding: 0;
             background: #f2f6fa;
             font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-            color: #333;
+            color: #1f2937;
         }
-
         .container {
-            max-width: 600px;
-            margin: auto;
-            background: white;
+            max-width: 640px;
+            margin: 24px auto;
+            background: #ffffff;
             border-radius: 14px;
             overflow: hidden;
             box-shadow: 0 6px 20px rgba(0,0,0,0.08);
         }
-
-        /* ---- HEADER ---- */
         .header {
             background: linear-gradient(135deg, #0b3b64, #115e9b);
-            color: white;
-            padding: 30px 20px;
+            color: #ffffff;
+            padding: 28px 24px;
             text-align: center;
         }
         .header h1 {
-            font-size: 28px;
-            margin: 0;
+            margin: 6px 0 0 0;
+            font-size: 24px;
+            letter-spacing: 0.3px;
         }
-        .header .logo {
-            font-size: 48px;
-            margin-bottom: 10px;
-        }
-
-        /* ---- CONTENT ---- */
         .content {
-            padding: 30px 25px;
-            line-height: 1.6;
+            padding: 30px 26px;
+            line-height: 1.65;
             font-size: 15px;
         }
-
         .card {
             background: #f9fbff;
-            padding: 20px;
+            padding: 18px 16px;
             border-radius: 12px;
             border-left: 5px solid #0b3b64;
             margin: 20px 0;
         }
-
-        .card p {
-            margin: 6px 0;
-        }
-
-        .strong {
-            font-weight: 600;
-            color: #0b3b64;
-        }
-
-        /* ---- BUTTON ---- */
+        .row { margin: 6px 0; }
+        .label { font-weight: 700; color: #0b3b64; }
         .cta-btn {
             display: block;
             width: fit-content;
-            background: #facc15;
-            margin: 25px auto;
+            margin: 26px auto 10px auto;
             padding: 12px 22px;
+            background: #facc15;
             color: #0b3b64;
             font-weight: 700;
-            border-radius: 8px;
             text-decoration: none;
-            font-size: 15px;
-            box-shadow: 0px 3px 8px rgba(0,0,0,0.08);
+            border-radius: 10px;
+            box-shadow: 0 3px 8px rgba(0,0,0,0.08);
         }
-
-        /* ---- FOOTER ---- */
         .footer {
             background: #0b3b64;
-            color: white;
+            color: #e5e7eb;
             text-align: center;
-            padding: 18px;
+            padding: 16px 12px;
             font-size: 13px;
-            margin-top: 20px;
         }
-
-        /* ---- RESPONSIVE ---- */
         @media (max-width: 480px) {
-            .content {
-                padding: 20px 15px;
-            }
-            .header h1 {
-                font-size: 22px;
-            }
-            .cta-btn {
-                width: 90%;
-                text-align: center;
-            }
+            .content { padding: 22px 18px; }
+            .cta-btn { width: 90%; text-align: center; }
         }
     </style>
 </head>
-
 <body>
     <div class="container">
-
-        <!-- HEADER -->
         <div class="header">
-            <div class="logo">♾️</div>
-            <h1>PayLink — Nouvelle Demande</h1>
+            <div style="font-size: 42px;">&#128179;</div>
+            <h1>Nouvelle demande de transfert externe</h1>
         </div>
 
-        <!-- CONTENT -->
         <div class="content">
-            <p>Bonjour cher Client,</p>
-            <p>
-                Une nouvelle demande de transfert externe vient d’être soumise par un utilisateur PayLink.  
-                Merci de traiter cette demande dans les meilleurs délais.
+            <p style="margin: 0 0 10px 0;">Bonjour,</p>
+            <p style="margin: 0;">
+                Une demande de transfert externe PayLink est en attente de traitement. Merci de la prendre en charge dans les meilleurs délais.
             </p>
 
-            <!-- CARD SUMMARY -->
-            <div class="card">        
-                <p><span class="strong">Destinataire :</span> {{ receiver_name }} ({{ receiver_phone }})</p>			
-                <p><span class="strong">Montant envoyé :</span> {{ amount }} {{ currency }}</p>            
-                <p><span class="strong">Partenaire :</span> {{ partner_name }}</p>
-                <p><span class="strong">Pays :</span> {{ country }}</p>
-                <p><span class="strong">Référence :</span> {{ transfer_id }}</p>
-				<p><span class="strong">Client :</span> {{ client_name }} ({{ client_email }})</p>
-                <p><span class="strong">Téléphone :</span> {{ client_phone }}</p>
+            <div class="card">
+                <p class="row"><span class="label">Montant envoy&eacute; :</span> {{ amount }} {{ currency }}</p>
+                <p class="row"><span class="label">Montant &agrave; remettre :</span> {{ payout_amount }}</p>
+                <p class="row"><span class="label">Destinataire :</span> {{ receiver_name }} &bull; {{ receiver_phone }}</p>
+                <p class="row"><span class="label">Partenaire :</span> {{ partner_name }}</p>
+                <p class="row"><span class="label">Pays :</span> {{ country }}</p>
+                <p class="row"><span class="label">R&eacute;f&eacute;rence :</span> {{ transfer_id }}</p>
+                <p class="row"><span class="label">Client :</span> {{ client_name }} ({{ client_email }})</p>
+                <p class="row"><span class="label">T&eacute;l&eacute;phone client :</span> {{ client_phone }}</p>
             </div>
 
-            <p>
-                Une fois l’opération effectuée, veuillez accéder à votre espace agent pour marquer  
-                cette demande comme <strong>traitée</strong>.
+            <p style="margin-top: 0;">
+                Une fois l'op&eacute;ration effectu&eacute;e, veuillez la marquer comme <strong>trait&eacute;e</strong> depuis votre espace agent.
             </p>
 
-            <!-- CTA BUTTON -->
-            <a href="{{ dashboard_url }}" class="cta-btn">Accéder au tableau de bord</a>
+            <a href="{{ dashboard_url }}" class="cta-btn">Acc&eacute;der au tableau de bord</a>
 
-            <p style="font-size:13px; color:#555;">
-                Merci pour votre collaboration et votre engagement à offrir un service rapide et fiable.
+            <p style="font-size: 13px; color: #4b5563; text-align: center; margin-top: 12px;">
+                Merci pour votre r&eacute;activit&eacute; et votre souci du service client.
             </p>
         </div>
 
-        <!-- FOOTER -->
         <div class="footer">
-            PayLink © {{ year }} — Plateforme sécurisée de paiement et transfert  
+            PayLink &bull; {{ year }} &bull; Plateforme de paiement s&eacute;curis&eacute;e
         </div>
-
     </div>
 </body>
 </html>
