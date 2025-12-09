@@ -33,6 +33,7 @@ async def send_transaction_emails(
     receiver: Users | None = None,
     template: str | None = None,
     body: str | None = None,
+    attachments: list[dict] | None = None,
     **template_kwargs,
 ) -> None:
     recipients = await get_transaction_emails(db, initiator, receiver)
@@ -49,6 +50,7 @@ async def send_transaction_emails(
                 subject,
                 template,
                 body_html=body,
+                attachments=attachments,
                 **template_kwargs,
             )
             status = None

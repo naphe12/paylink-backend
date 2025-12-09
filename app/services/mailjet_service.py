@@ -1,6 +1,7 @@
 import logging
 
 import httpx
+import base64
 
 from app.core.config import settings
 from app.services.mailer import render_template
@@ -28,6 +29,7 @@ class MailjetEmailService:
         *,
         body_html: str | None = None,
         text: str | None = None,
+        attachments: list[dict] | None = None,
         **kwargs,
     ):
         # Resolution du contenu HTML via template si fourni
@@ -51,6 +53,15 @@ class MailjetEmailService:
             payload["htmlContent"] = html_content
         if text:
             payload["textContent"] = text
+        if attachments:
+            payload["attachment"] = [
+                {
+                    "content": base64.b64encode(att["content"]).decode("utf-8"),
+                    "name": att.get("name", "document.pdf"),
+                }
+                for att in attachments
+                if att.get("content")
+            ]
 
         headers = {
             "api-key": self.api_key,
