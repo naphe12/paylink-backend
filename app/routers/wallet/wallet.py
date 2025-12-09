@@ -593,7 +593,7 @@ async def get_wallet_transactions(
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user),
 ):
-    # 1. Récupérer le wallet du user
+    # 1. R?cup?rer le wallet du user
     wallet_result = await db.execute(
         select(Wallets).where(Wallets.user_id == current_user.user_id)
     )
@@ -604,7 +604,7 @@ async def get_wallet_transactions(
 
     wallet_id = wallet.wallet_id
 
-    # 2. Récupérer les mouvements du wallet (wallet_transactions) pour cet utilisateur
+    # 2. R?cup?rer les mouvements du wallet (wallet_transactions) pour cet utilisateur
     tx_result = await db.execute(
         select(WalletTransactions)
         .where(WalletTransactions.wallet_id == wallet_id)
@@ -612,7 +612,50 @@ async def get_wallet_transactions(
     )
     txs = tx_result.scalars().all()
 
-    # 3. Normaliser direction + structure
+    # 2bis. Pr?parer le statut depuis la table Transactions
+    status_rows = (
+        await db.execute(
+            select(
+                Transactions.amount,
+                Transactions.status,
+                Transactions.created_at,
+                Transactions.sender_wallet,
+                Transactions.receiver_wallet,
+            ).where(
+                (Transactions.sender_wallet == wallet_id)
+                | (Transactions.receiver_wallet == wallet_id)
+            )
+        )
+    ).all()
+
+    def derive_status(entry: WalletTransactions):
+        direction_flag = str(entry.direction or "").lower()
+        is_debit = direction_flag.startswith("debit")
+        target_amount = float(entry.amount)
+        best_status = None
+        best_delta = None
+
+        for amount_db, status_db, created_db, sender_db, receiver_db in status_rows:
+            if is_debit:
+                if sender_db != wallet_id:
+                    continue
+            else:
+                if receiver_db != wallet_id:
+                    continue
+
+            if float(amount_db) != target_amount:
+                continue
+
+            if entry.created_at and created_db:
+                delta = abs((entry.created_at - created_db).total_seconds())
+                if best_delta is not None and delta >= best_delta:
+                    continue
+                best_delta = delta
+
+            best_status = status_db
+
+        return best_status
+
     response = []
     for tx in txs:
         direction_flag = str(tx.direction or "").lower()
@@ -620,13 +663,15 @@ async def get_wallet_transactions(
         if direction_flag.startswith("debit"):
             amount_val = -amount_val
 
+        status = derive_status(tx) or ""
+
         response.append({
             "tx_id": str(tx.transaction_id),
             "amount": amount_val,
             "currency_code": tx.currency_code,
             "direction": "in" if amount_val > 0 else "out",
             "description": tx.description or tx.operation_type or "",
-            "status": getattr(tx, "status", "") or "",
+            "status": status,
             "created_at": tx.created_at,
         })
 
