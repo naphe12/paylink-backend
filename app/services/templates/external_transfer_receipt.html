@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reçu de transfert externe</title>
+  <style>
+    body { font-family: "Segoe UI", Tahoma, sans-serif; background: #f5f7fb; color: #1f2937; margin: 0; padding: 0; }
+    .container { max-width: 620px; margin: 22px auto; background: #ffffff; border-radius: 14px; overflow: hidden; box-shadow: 0 6px 20px rgba(0,0,0,0.08); }
+    .header { background: linear-gradient(135deg, #0b3b64, #115e9b); color: #fff; padding: 26px 22px; text-align: center; }
+    .header h1 { margin: 6px 0 0 0; font-size: 22px; }
+    .content { padding: 26px 22px; line-height: 1.65; font-size: 15px; }
+    .card { background: #f9fbff; padding: 16px 14px; border-radius: 12px; border-left: 5px solid #0b3b64; margin: 16px 0; }
+    .row { margin: 6px 0; }
+    .label { font-weight: 700; color: #0b3b64; }
+    .footer { background: #0b3b64; color: #e5e7eb; text-align: center; padding: 14px 12px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div style="font-size: 40px;">&#128179;</div>
+      <h1>Reçu de votre transfert externe</h1>
+    </div>
+
+    <div class="content">
+      <p style="margin: 0 0 10px 0;">Bonjour {{ client_name }},</p>
+      <p style="margin: 0;">
+        Nous avons bien enregistré votre demande de transfert externe. Vous trouverez en pièce jointe un reçu PDF avec les détails de l'opération.
+      </p>
+
+      <div class="card">
+        <p class="row"><span class="label">Référence :</span> {{ reference }}</p>
+        <p class="row"><span class="label">Montant envoyé :</span> {{ amount }} {{ currency }}</p>
+        <p class="row"><span class="label">Montant à remettre :</span> {{ payout_amount }}</p>
+        <p class="row"><span class="label">Destinataire :</span> {{ receiver_name }} • {{ receiver_phone }}</p>
+        <p class="row"><span class="label">Partenaire / Pays :</span> {{ partner_name }} / {{ country }}</p>
+        <p class="row"><span class="label">Statut :</span> {{ status }}</p>
+      </div>
+
+      <p style="margin-top: 0;">
+        Si vous n'êtes pas à l'origine de cette demande, contactez immédiatement notre support.
+      </p>
+    </div>
+
+    <div class="footer">
+      PayLink • {{ year }} • Plateforme de paiement sécurisée
+    </div>
+  </div>
+</body>
+</html>
