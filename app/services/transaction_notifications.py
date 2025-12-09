@@ -34,14 +34,15 @@ async def send_transaction_emails(
     template: str | None = None,
     body: str | None = None,
     attachments: list[dict] | None = None,
+    recipients: list[str] | None = None,
     **template_kwargs,
 ) -> None:
-    recipients = await get_transaction_emails(db, initiator, receiver)
-    if not recipients:
+    target_emails = recipients or await get_transaction_emails(db, initiator, receiver)
+    if not target_emails:
         return
 
     mailer = MailjetEmailService()
-    for email in recipients:
+    for email in target_emails:
         print(f"[brevo] sending transaction email to={email}")
         try:
             resp = await run_in_threadpool(
