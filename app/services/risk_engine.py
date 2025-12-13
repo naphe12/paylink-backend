@@ -1,4 +1,5 @@
 # app/services/risk_engine.py
+import decimal
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, func
 from app.models.users import Users
@@ -38,12 +39,13 @@ async def calculate_risk_score(db, user_id: str):
 
     q_month_sum = select(func.sum(WalletTransactions.amount)).where(
         WalletTransactions.user_id == user_id,
-        WalletTransactions.created_at >= one_month_ago
+        WalletTransactions.created_at >= one_month_ago,
     )
-    month_volume = (await db.execute(q_month_sum)).scalar() or 0
+    month_volume = decimal.Decimal((await db.execute(q_month_sum)).scalar() or 0)
 
     # Estimation simple du volume moyen historique
-    avg_month_volume = month_volume / max(days / 30, 1)
+    months_factor = max(decimal.Decimal(days) / decimal.Decimal(30), decimal.Decimal(1))
+    avg_month_volume = month_volume / months_factor
 
     if month_volume > avg_month_volume * 3 and month_volume > 100000:
         score += 30

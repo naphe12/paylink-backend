@@ -25,9 +25,11 @@ from app.services.aml import update_risk_score
 from app.services.ledger import LedgerLine, LedgerService
 from app.services.mailer import send_email
 from app.services.risk_engine import calculate_risk_score
+from app.services.mailjet_service import MailjetEmailService
 from app.services.telegram import send_message as send_telegram_message
 from app.services.transaction_notifications import send_transaction_emails
 from app.services.wallet_history import log_wallet_movement
+from app.services.pdf_utils import build_external_transfer_receipt
 
 router = APIRouter(prefix="/wallet/transfer", tags=["External Transfer"])
 AGENT_EMAIL = "adolphe.nahimana@yahoo.fr"
@@ -278,6 +280,48 @@ async def external_transfer(
         dashboard_url=f"{settings.FRONTEND_URL}/dashboard/admin",
         year=datetime.utcnow().year,
     )
+
+    # Envoyer un reçu PDF au client (émetteur)
+    if current_user.email:
+        receipt_payload = {
+            "reference_code": transfer.reference_code,
+            "sender_name": current_user.full_name or "",
+            "sender_email": current_user.email or "",
+            "sender_phone": current_user.phone_e164 or "",
+            "recipient_name": data.recipient_name,
+            "recipient_phone": data.recipient_phone,
+            "amount": amount,
+            "currency": "EUR",
+            "local_amount": local_amount,
+            "local_currency": "BIF",
+            "rate": rate,
+            "created_at": transfer.created_at,
+            "status": transfer.status,
+            "partner": data.partner_name,
+            "country": data.country_destination,
+        }
+        receipt_bytes = build_external_transfer_receipt(receipt_payload)
+        await send_transaction_emails(
+            db,
+            initiator=current_user,
+            subject=f"Reçu PayLink {transfer.reference_code}",
+            template="external_transfer_receipt.html",
+            recipients=[current_user.email],
+            client_name=current_user.full_name or "",
+            reference=transfer.reference_code,
+            amount=str(amount),
+            currency="EUR",
+            payout_amount=f"{local_amount} BIF",
+            receiver_name=data.recipient_name,
+            receiver_phone=data.recipient_phone,
+            partner_name=data.partner_name,
+            country=data.country_destination,
+            status=transfer.status,
+            year=datetime.utcnow().year,
+            attachments=[
+                {"name": f"recu-{transfer.reference_code}.pdf", "content": receipt_bytes}
+            ],
+        )
 
     return transfer
 
