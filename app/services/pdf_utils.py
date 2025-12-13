@@ -76,5 +76,10 @@ def build_external_transfer_receipt(payload: Mapping[str, Any]) -> bytes:
         "Merci de conserver ce document pour vos archives.",
     )
 
-    # Retourne les bytes
-    return pdf.output(dest="S").encode("latin-1")
+    # Retourne les bytes de maniÇùre robuste (fpdf2 peut renvoyer bytearray ou str)
+    pdf_output = pdf.output(dest="S")
+    if isinstance(pdf_output, bytearray):
+        return bytes(pdf_output)
+    if isinstance(pdf_output, str):
+        return pdf_output.encode("latin-1")
+    return pdf_output
