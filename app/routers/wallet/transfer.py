@@ -129,9 +129,9 @@ async def external_transfer(
         rate=rate,
         local_amount=local_amount,
         credit_used=(credit_used > 0),
-        status="pending" if requires_admin else "success",
-        processed_by=current_user.user_id,
-        processed_at=datetime.now(),
+        status="pending" if requires_admin else "approved",
+        processed_by=None,
+        processed_at=None,
         reference_code=f"EXT-{uuid.uuid4().hex[:8].upper()}",
     )
     db.add(transfer)
@@ -139,7 +139,7 @@ async def external_transfer(
     wallet = await db.scalar(select(Wallets).where(Wallets.user_id == current_user.user_id))
     wallet.bonus_balance += bonus_earned
 
-    txn_status = "pending" if requires_admin else "succeeded"
+    txn_status = "pending"
 
     txn = Transactions(
         initiated_by=current_user.user_id,
@@ -332,11 +332,22 @@ async def approve_external_transfer(
     db: AsyncSession = Depends(get_db),
     current_agent: Users = Depends(get_current_agent),
 ):
-    transfer = await db.scalar(select(ExternalTransfers).where(ExternalTransfers.id == transfer_id))
+    transfer = await db.scalar(
+        select(ExternalTransfers).where(ExternalTransfers.transfer_id == transfer_id)
+    )
+    if not transfer:
+        raise HTTPException(status_code=404, detail="Transfert introuvable")
 
     transfer.status = "approved"
     transfer.processed_by = current_agent.user_id
     transfer.processed_at = datetime.utcnow()
+
+    txn = await db.scalar(
+        select(Transactions).where(Transactions.related_entity_id == transfer.transfer_id)
+    )
+    if txn:
+        txn.status = "pending"
+        txn.updated_at = datetime.utcnow()
 
     await db.commit()
     return {"message": "Transfert valide"}
