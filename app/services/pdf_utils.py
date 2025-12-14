@@ -11,14 +11,14 @@ def _fmt_amount(value: Decimal | float | int, currency: str) -> str:
 
 def build_external_transfer_receipt(payload: Mapping[str, Any]) -> bytes:
     """
-    Genere un PDF de recu pour un transfert externe.
+    Genere un bon  PDF de recu pour un transfert externe.
     payload attend:
       reference_code, sender_name, sender_email, sender_phone,
       recipient_name, recipient_phone, amount, currency, local_amount, local_currency,
       rate, created_at, status, partner, country.
     """
     pdf = FPDF(format="A4")
-    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_auto_page_break(auto=True, margin=16)
     pdf.add_page()
 
     # Bandeau d'en-tete
