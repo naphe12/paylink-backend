@@ -66,6 +66,7 @@ async def agent_cashin(body: AgentCashPayload,
         agent_user_id=agent.user_id,
         client_user_id=client.user_id,
         direction="cashin",
+        tx_type="cashin",
         amount=amount,
         commission=commission,
         status="completed"
@@ -90,6 +91,7 @@ async def agent_cashout(body: AgentCashPayload,
         agent_user_id=agent.user_id,
         client_user_id=client.user_id,
         direction="cashout",
+        tx_type="cashout",
         amount=amount,
         commission=commission,
         status="completed"
@@ -268,6 +270,7 @@ async def agent_qr_confirm(
             agent_user_id=current_agent.user_id,
             client_user_id=tx.initiated_by,
             direction="mobile_money",
+            tx_type="mobile_money",
             amount=tx.amount,
             commission=commission_value,
             status="completed",
@@ -344,4 +347,3 @@ async def _fetch_pending_qr_transaction(
         raise HTTPException(400, "Transaction non éligible au mode agent")
 
     return tx, client_name, client_phone
-

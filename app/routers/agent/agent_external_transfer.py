@@ -185,6 +185,7 @@ async def close_external_transfer(
         agent_user_id=current_agent.user_id,
         client_user_id=transfer.user_id,
         direction="external_transfer",
+        tx_type="external_transfer",
         amount=amount_to_debit,
         commission=Decimal("0"),
         status="completed",
@@ -197,4 +198,3 @@ async def close_external_transfer(
         "message": "Transfert clôturé",
         "balance": float(wallet.available),
     }
-
