@@ -20,11 +20,11 @@ router = APIRouter(prefix="/admin/aml", tags=["Admin AML"])
 @router.get("/events")
 async def list_aml_events(
     limit: int = Query(50, ge=1, le=200),
-    user_id: UUID | None = Query(None, description="Filtre un utilisateur pr��cis"),
+    user_id: UUID | None = Query(None, description="Filtre un utilisateur précis"),
     risk_level: str | None = Query(None, description="Filtre : low/medium/high/critical"),
-    search: str | None = Query(None, description="Nom, email ou code r��gle"),
-    from_date: datetime | None = Query(None, description="A partir de cette date"),
-    to_date: datetime | None = Query(None, description="Jusqu'�� cette date"),
+    search: str | None = Query(None, description="Nom, email ou code règle"),
+    from_date: datetime | None = Query(None, description="À partir de cette date"),
+    to_date: datetime | None = Query(None, description="Jusqu’à cette date"),
     db: AsyncSession = Depends(get_db),
     admin: Users = Depends(get_current_admin),
 ) -> list[dict[str, Any]]:
