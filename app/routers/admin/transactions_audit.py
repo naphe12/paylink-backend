@@ -235,7 +235,7 @@ async def _fetch_agent_transactions(
 
     stmt = (
         select(AgentTransactions)
-        .where(AgentTransactions.agent_user_id == agent.user_id)
+        .where(AgentTransactions.agent_id == agent.agent_id)
         .order_by(AgentTransactions.created_at.desc())
         .limit(limit)
     )
