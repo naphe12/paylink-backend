@@ -22,6 +22,7 @@ from decimal import Decimal
 from app.models.agent_commissions import AgentCommissions
 from app.models.wallets import Wallets
 from app.models.transactions import Transactions
+from app.models.agents import Agents
 
 
 
@@ -30,10 +31,11 @@ router = APIRouter(tags=["agent"])
 QR_ALLOWED_STATUSES = {"initiated", "pending"}
 QR_ALLOWED_CHANNELS = {"mobile_money", "cash", "internal"}
 
-def _require_agent_id(user: Users) -> UUID:
-    if not user.agents:
-        raise HTTPException(404, "Profil agent introuvable")
-    return user.agents.agent_id
+async def _require_agent(db: AsyncSession, user: Users) -> Agents:
+    agent = await db.scalar(select(Agents).where(Agents.user_id == user.user_id))
+    if not agent:
+        raise HTTPException(404, "Profil agent introuvable pour cet utilisateur")
+    return agent
 
 class AgentCashPayload(BaseModel):
     client_user_id: str
@@ -54,7 +56,8 @@ class AgentQrConfirmRequest(BaseModel):
 async def agent_cashin(body: AgentCashPayload,
                        db: AsyncSession = Depends(get_db),
                        agent: Users = Depends(get_current_user)):
-    agent_id = _require_agent_id(agent)
+    agent_row = await _require_agent(db, agent)
+    agent_id = agent_row.agent_id
     client = await db.scalar(select(Users).where(Users.user_id==body.client_user_id))
     if not client: raise HTTPException(404, "Client introuvable")
     if str(agent.user_id) == str(client.user_id):
@@ -84,7 +87,8 @@ async def agent_cashin(body: AgentCashPayload,
 async def agent_cashout(body: AgentCashPayload,
                         db: AsyncSession = Depends(get_db),
                         agent: Users = Depends(get_current_user)):
-    agent_id = _require_agent_id(agent)
+    agent_row = await _require_agent(db, agent)
+    agent_id = agent_row.agent_id
     client = await db.scalar(select(Users).where(Users.user_id==body.client_user_id))
     if not client: raise HTTPException(404, "Client introuvable")
 
@@ -111,7 +115,8 @@ async def agent_dashboard(
     db: AsyncSession = Depends(get_db),
     current_agent: Users = Depends(get_current_agent)
 ):
-    agent_id = _require_agent_id(current_agent)
+    agent_row = await _require_agent(db, current_agent)
+    agent_id = agent_row.agent_id
     # Wallet Agent
     wallet = await db.scalar(
         select(Wallets).where(
@@ -185,7 +190,8 @@ async def agent_history(
     max_amount: float | None = Query(None),
     limit: int = Query(100, ge=1, le=500),
 ):
-    agent_id = _require_agent_id(current_agent)
+    agent_row = await _require_agent(db, current_agent)
+    agent_id = agent_row.agent_id
     filters = [AgentTransactions.agent_id == agent_id]
 
     if date_from:
@@ -243,6 +249,7 @@ async def agent_qr_scan(
     db: AsyncSession = Depends(get_db),
     current_agent: Users = Depends(get_current_agent),
 ):
+    _ = await _require_agent(db, current_agent)
     tx_id = _extract_tx_id(payload)
     tx, client_name, client_phone = await _fetch_pending_qr_transaction(db, tx_id)
 
@@ -267,7 +274,8 @@ async def agent_qr_confirm(
     db: AsyncSession = Depends(get_db),
     current_agent: Users = Depends(get_current_agent),
 ):
-    agent_id = _require_agent_id(current_agent)
+    agent_row = await _require_agent(db, current_agent)
+    agent_id = agent_row.agent_id
     tx, client_name, client_phone = await _fetch_pending_qr_transaction(db, payload.tx_id)
 
     commission_value = compute_agent_commission(

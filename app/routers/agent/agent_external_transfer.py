@@ -18,13 +18,15 @@ from app.models.users import Users
 from app.models.wallet_transactions import WalletTransactions
 from app.models.wallets import Wallets
 from app.services.mailer import send_email
+from app.models.agents import Agents
 
 router = APIRouter(prefix="/agent/external", tags=["Agent External Transfers"])
 
-def _require_agent_id(user: Users):
-    if not user.agents:
+async def _require_agent(db: AsyncSession, user: Users) -> Agents:
+    agent = await db.scalar(select(Agents).where(Agents.user_id == user.user_id))
+    if not agent:
         raise HTTPException(status_code=404, detail="Profil agent introuvable.")
-    return user.agents.agent_id
+    return agent
 
 
 @router.patch("/{transfer_id}/status")
@@ -136,7 +138,8 @@ async def close_external_transfer(
     db: AsyncSession = Depends(get_db),
     current_agent: Users = Depends(get_current_agent),
 ):
-    agent_id = _require_agent_id(current_agent)
+    agent_row = await _require_agent(db, current_agent)
+    agent_id = agent_row.agent_id
     transfer = await db.scalar(
         select(ExternalTransfers).where(ExternalTransfers.transfer_id == transfer_id)
     )
