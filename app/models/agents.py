@@ -33,8 +33,8 @@ class Agents(Base):
     agent_locations: Mapped[list['AgentLocations']] = relationship('AgentLocations', back_populates='agent')
     agent_transactions = relationship(
         "AgentTransactions",
-        primaryjoin=lambda: Agents.user_id == AgentTransactions.agent_user_id,
-        foreign_keys=lambda: [AgentTransactions.agent_user_id],
+        primaryjoin=lambda: Agents.agent_id == AgentTransactions.agent_id,
+        foreign_keys=lambda: [AgentTransactions.agent_id],
         viewonly=True
     )
     agent_accounts: Mapped[list['AgentAccounts']] = relationship('AgentAccounts', back_populates='agent')

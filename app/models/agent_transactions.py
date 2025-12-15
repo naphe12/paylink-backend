@@ -15,8 +15,8 @@ class AgentTransactions(Base):
     )
     related_tx= Column(
         "related_tx", UUID(as_uuid=True),  nullable=False)
-    agent_user_id = Column(
-        UUID(as_uuid=True), ForeignKey("paylink.users.user_id"), nullable=False
+    agent_id = Column(
+        "agent_user_id", UUID(as_uuid=True), ForeignKey("paylink.agents.agent_id"), nullable=False
     )
     client_user_id = Column(
         "user_id", UUID(as_uuid=True), ForeignKey("paylink.users.user_id"), nullable=False
@@ -30,5 +30,5 @@ class AgentTransactions(Base):
         "processed_at", TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
 
-    agent = relationship("Users", foreign_keys=[agent_user_id])
+    agent = relationship("Agents", foreign_keys=[agent_id])
     client = relationship("Users", foreign_keys=[client_user_id])

@@ -21,6 +21,11 @@ from app.services.mailer import send_email
 
 router = APIRouter(prefix="/agent/external", tags=["Agent External Transfers"])
 
+def _require_agent_id(user: Users):
+    if not user.agents:
+        raise HTTPException(status_code=404, detail="Profil agent introuvable.")
+    return user.agents.agent_id
+
 
 @router.patch("/{transfer_id}/status")
 async def update_external_transfer_status(
@@ -131,6 +136,7 @@ async def close_external_transfer(
     db: AsyncSession = Depends(get_db),
     current_agent: Users = Depends(get_current_agent),
 ):
+    agent_id = _require_agent_id(current_agent)
     transfer = await db.scalar(
         select(ExternalTransfers).where(ExternalTransfers.transfer_id == transfer_id)
     )
@@ -182,7 +188,7 @@ async def close_external_transfer(
     db.add(wallet_tx)
 
     agent_tx = AgentTransactions(
-        agent_user_id=current_agent.user_id,
+        agent_id=agent_id,
         client_user_id=transfer.user_id,
         direction="external_transfer",
         tx_type="external_transfer",

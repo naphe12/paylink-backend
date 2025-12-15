@@ -97,7 +97,7 @@ async def list_agents(
             func.coalesce(Wallets.available, 0).label("balance"),
             func.coalesce(
                 select(func.sum(AgentTransactions.commission))
-                .where(AgentTransactions.agent_user_id == Users.user_id)
+                .where(AgentTransactions.agent_id == Agents.agent_id)
                 .correlate(Agents)
                 .scalar_subquery(),
                 0,
@@ -191,7 +191,7 @@ async def agent_history(
             Users.phone_e164.label("client_phone"),
         )
         .join(Users, Users.user_id == AgentTransactions.client_user_id, isouter=True)
-        .where(AgentTransactions.agent_user_id == agent.user_id)
+        .where(AgentTransactions.agent_id == agent.agent_id)
         .order_by(AgentTransactions.created_at.desc())
         .limit(limit)
     )

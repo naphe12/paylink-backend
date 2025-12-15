@@ -30,6 +30,11 @@ router = APIRouter(tags=["agent"])
 QR_ALLOWED_STATUSES = {"initiated", "pending"}
 QR_ALLOWED_CHANNELS = {"mobile_money", "cash", "internal"}
 
+def _require_agent_id(user: Users) -> UUID:
+    if not user.agents:
+        raise HTTPException(404, "Profil agent introuvable")
+    return user.agents.agent_id
+
 class AgentCashPayload(BaseModel):
     client_user_id: str
     amount: Decimal = Field(gt=0)
@@ -49,6 +54,7 @@ class AgentQrConfirmRequest(BaseModel):
 async def agent_cashin(body: AgentCashPayload,
                        db: AsyncSession = Depends(get_db),
                        agent: Users = Depends(get_current_user)):
+    agent_id = _require_agent_id(agent)
     client = await db.scalar(select(Users).where(Users.user_id==body.client_user_id))
     if not client: raise HTTPException(404, "Client introuvable")
     if str(agent.user_id) == str(client.user_id):
@@ -63,7 +69,7 @@ async def agent_cashin(body: AgentCashPayload,
 
     # Enregistrer l’opération (tu peux ensuite créditer le wallet du client et débiter le float agent)
     await db.execute(insert(AgentTransactions).values(
-        agent_user_id=agent.user_id,
+        agent_id=agent_id,
         client_user_id=client.user_id,
         direction="cashin",
         tx_type="cashin",
@@ -78,6 +84,7 @@ async def agent_cashin(body: AgentCashPayload,
 async def agent_cashout(body: AgentCashPayload,
                         db: AsyncSession = Depends(get_db),
                         agent: Users = Depends(get_current_user)):
+    agent_id = _require_agent_id(agent)
     client = await db.scalar(select(Users).where(Users.user_id==body.client_user_id))
     if not client: raise HTTPException(404, "Client introuvable")
 
@@ -88,7 +95,7 @@ async def agent_cashout(body: AgentCashPayload,
     score = await update_risk_score(db, client, amount, channel="agent")
 
     await db.execute(insert(AgentTransactions).values(
-        agent_user_id=agent.user_id,
+        agent_id=agent_id,
         client_user_id=client.user_id,
         direction="cashout",
         tx_type="cashout",
@@ -104,6 +111,7 @@ async def agent_dashboard(
     db: AsyncSession = Depends(get_db),
     current_agent: Users = Depends(get_current_agent)
 ):
+    agent_id = _require_agent_id(current_agent)
     # Wallet Agent
     wallet = await db.scalar(
         select(Wallets).where(
@@ -118,7 +126,7 @@ async def agent_dashboard(
 
     def tx_sum(direction: str, start_date: datetime | None = None):
         stmt = select(func.coalesce(func.sum(AgentTransactions.amount), 0)).where(
-            AgentTransactions.agent_user_id == current_agent.user_id,
+            AgentTransactions.agent_id == agent_id,
             AgentTransactions.direction == direction,
         )
         if start_date:
@@ -138,7 +146,7 @@ async def agent_dashboard(
 
     recent = await db.execute(
         select(AgentTransactions)
-        .where(AgentTransactions.agent_user_id == current_agent.user_id)
+        .where(AgentTransactions.agent_id == agent_id)
         .order_by(AgentTransactions.created_at.desc())
         .limit(10)
     )
@@ -177,7 +185,8 @@ async def agent_history(
     max_amount: float | None = Query(None),
     limit: int = Query(100, ge=1, le=500),
 ):
-    filters = [AgentTransactions.agent_user_id == current_agent.user_id]
+    agent_id = _require_agent_id(current_agent)
+    filters = [AgentTransactions.agent_id == agent_id]
 
     if date_from:
         filters.append(AgentTransactions.created_at >= date_from)
@@ -258,6 +267,7 @@ async def agent_qr_confirm(
     db: AsyncSession = Depends(get_db),
     current_agent: Users = Depends(get_current_agent),
 ):
+    agent_id = _require_agent_id(current_agent)
     tx, client_name, client_phone = await _fetch_pending_qr_transaction(db, payload.tx_id)
 
     commission_value = compute_agent_commission(
@@ -267,7 +277,7 @@ async def agent_qr_confirm(
 
     await db.execute(
         insert(AgentTransactions).values(
-            agent_user_id=current_agent.user_id,
+            agent_id=agent_id,
             client_user_id=tx.initiated_by,
             direction="mobile_money",
             tx_type="mobile_money",
