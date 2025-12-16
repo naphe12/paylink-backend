@@ -9,8 +9,7 @@ class GeneralSettings(Base):
     __tablename__ = "general_settings"
     __table_args__ = {"schema": "paylink"}
     id = Column(Integer, primary_key=True)
-   
-    amount = Column(Numeric(12,2), nullable=False)    
+
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())	
     currency = Column(String(3), nullable=False, default="EUR")    
     charge = Column(Numeric(12,2), nullable=False)
