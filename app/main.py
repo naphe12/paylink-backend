@@ -111,6 +111,7 @@ app.include_router(ws_security_router)
 from app.routers.admin.admin_users import router as admin_users_router
 from app.routers.admin.wallets_alerts import router as admin_wallets_router
 from app.routers.admin.transfers_monitor import router as admin_transfers_router
+from app.routers.admin.settings import router as admin_settings_router
 from app.routers.admin.kyc_reviews import router as admin_kyc_router
 from app.routers.admin.analytics import router as admin_analytics_router
 from app.routers.admin.agents import router as admin_agents_router
@@ -125,6 +126,7 @@ from app.routers.admin.transactions_audit import router as admin_transactions_au
 app.include_router(admin_users_router)
 app.include_router(admin_wallets_router)
 app.include_router(admin_transfers_router)
+app.include_router(admin_settings_router)
 app.include_router(admin_kyc_router)
 app.include_router(admin_analytics_router)
 app.include_router(admin_agents_router)

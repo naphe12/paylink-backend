@@ -30,9 +30,53 @@ from app.services.telegram import send_message as send_telegram_message
 from app.services.transaction_notifications import send_transaction_emails
 from app.services.wallet_history import log_wallet_movement
 from app.services.pdf_utils import build_external_transfer_receipt
+from app.models.general_settings import GeneralSettings
+from app.models.fx_custom_rates import FxCustomRates
+from app.models.fxconversions import FxConversions
 
 router = APIRouter(prefix="/wallet/transfer", tags=["External Transfer"])
 AGENT_EMAIL = "adolphe.nahimana@yahoo.fr"
+
+
+async def _resolve_fx_rate(
+    db: AsyncSession,
+    origin: str,
+    destination: str,
+) -> decimal.Decimal:
+    """
+    Choisit un taux :
+    - si paire contient le BIF, on prend FxCustomRates (actif, le plus récent)
+    - sinon on prend le dernier FxConversions
+    - fallback sur 1.0
+    """
+    if origin == destination:
+        return decimal.Decimal("1")
+
+    if origin == "BIF" or destination == "BIF":
+        custom = await db.scalar(
+            select(FxCustomRates)
+            .where(
+                FxCustomRates.origin_currency == origin,
+                FxCustomRates.destination_currency == destination,
+                FxCustomRates.is_active.is_(True),
+            )
+            .order_by(FxCustomRates.updated_at.desc())
+        )
+        if custom and custom.rate:
+            return decimal.Decimal(custom.rate)
+
+    fx_row = await db.scalar(
+        select(FxConversions.rate_used)
+        .where(
+            FxConversions.from_currency == origin,
+            FxConversions.to_currency == destination,
+        )
+        .order_by(FxConversions.created_at.desc())
+        .limit(1)
+    )
+    if fx_row:
+        return decimal.Decimal(fx_row)
+    return decimal.Decimal("1")
 
 
 @router.post("/external", response_model=ExternalTransferRead)
@@ -59,9 +103,20 @@ async def external_transfer(
     credit_used_total = decimal.Decimal(current_user.credit_used or 0)
     credit_available = max(credit_limit - credit_used_total, decimal.Decimal(0))
     credit_available_before = credit_available
+    settings_row = await db.scalar(
+        select(GeneralSettings).order_by(GeneralSettings.created_at.desc())
+    )
+    fee_rate = decimal.Decimal(getattr(settings_row, "charge", 0) or 0)
+    fee_amount = (amount * fee_rate / decimal.Decimal(100)).quantize(decimal.Decimal("0.01"))
+
+    origin_currency = wallet.currency_code or "EUR"
+    destination_currency = "BIF" if origin_currency != "BIF" else "EUR"
+    fx_rate = await _resolve_fx_rate(db, origin_currency, destination_currency)
+
+    total_required = amount + fee_amount
     total_available = wallet_balance + credit_available
 
-    if amount > total_available:
+    if total_required > total_available:
         raise HTTPException(
             status_code=400,
             detail=f"Montant trop eleve. Disponible total : {total_available} FBU",
@@ -89,21 +144,20 @@ async def external_transfer(
 
     wallet_balance_before = wallet_balance
     credit_available_after = credit_available_before
-    rate = decimal.Decimal("7000.0")
-    local_amount = amount * rate
-    if wallet_balance >= amount:
-        wallet_balance -= amount
+    local_amount = (amount * fx_rate).quantize(decimal.Decimal("0.01"))
+    if wallet_balance >= total_required:
+        wallet_balance -= total_required
         wallet.available = wallet_balance
         credit_used = decimal.Decimal(0)
     else:
-        credit_used = amount - wallet_balance
+        credit_used = total_required - wallet_balance
         wallet.available = decimal.Decimal(0)
         current_user.credit_used = credit_used_total + credit_used
         credit_available_after = credit_available_before - credit_used
 
     requires_admin = credit_used > decimal.Decimal(0)
 
-    debited = min(wallet_balance_before, amount)
+    debited = min(wallet_balance_before, total_required)
     movement = None
     if debited > 0:
         movement = await log_wallet_movement(
@@ -125,8 +179,8 @@ async def external_transfer(
         recipient_name=data.recipient_name,
         recipient_phone=data.recipient_phone,
         amount=amount,
-        currency="EUR",
-        rate=rate,
+        currency=origin_currency,
+        rate=fx_rate,
         local_amount=local_amount,
         credit_used=(credit_used > 0),
         status="pending" if requires_admin else "approved",
@@ -145,7 +199,7 @@ async def external_transfer(
         initiated_by=current_user.user_id,
         channel="external_transfer",
         amount=amount,
-        currency_code="EUR",
+        currency_code=origin_currency,
         related_entity_id=transfer.transfer_id,
         status=txn_status,
         sender_wallet=wallet.wallet_id,
@@ -164,6 +218,10 @@ async def external_transfer(
         "credit_used_amount": str(credit_used),
         "debited_amount": str(debited),
         "transaction_id": str(txn.tx_id),
+        "fee_rate": str(fee_rate),
+        "fee_amount": str(fee_amount),
+        "fx_rate": str(fx_rate),
+        "destination_currency": destination_currency,
     }
     if debited > 0:
         entries.append(
@@ -188,7 +246,7 @@ async def external_transfer(
         LedgerLine(
             account=cash_out_account,
             direction="credit",
-            amount=amount,
+            amount=total_required,
             currency_code=wallet.currency_code,
         )
     )
@@ -291,10 +349,10 @@ async def external_transfer(
             "recipient_name": data.recipient_name,
             "recipient_phone": data.recipient_phone,
             "amount": amount,
-            "currency": "EUR",
+            "currency": origin_currency,
             "local_amount": local_amount,
-            "local_currency": "BIF",
-            "rate": rate,
+            "local_currency": destination_currency,
+            "rate": fx_rate,
             "created_at": transfer.created_at,
             "status": transfer.status,
             "partner": data.partner_name,
