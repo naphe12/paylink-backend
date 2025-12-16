@@ -32,7 +32,7 @@ async def get_general_settings(
             "charge": float(item.charge),
             "fix_charge": float(item.fix_charge),
             "coefficient": float(item.coefficient),
-            "smsTransfert_fees": float(item.smsTransfert_fees),
+            "smsTransfert_fees": float(item.smstransfert_fees),
             "currency": item.currency,
             "fixvalue": item.fixValue,
             "sms_notification": item.sms_notification,
