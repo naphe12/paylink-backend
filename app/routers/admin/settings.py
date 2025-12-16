@@ -86,15 +86,6 @@ async def update_general_settings(
                 coefficient=coefficient or 1,
                 smsTransfert_fees=smsTransfert_fees or 0,
                 currency=currency or "EUR",
-                amount=0,
-                bonus=0,
-                sms_notification=1,
-                email_notification=1,
-                decimal_after_point=2,
-                fixValue=0,
-                smsPhone="",
-                account="",
-                account_name="",
             )
         )
     await db.commit()
