@@ -49,7 +49,7 @@ async def update_general_settings(
     charge: Optional[float] = None,
     fix_charge: Optional[float] = None,
     coefficient: Optional[float] = None,
-    smsTransfert_fees: Optional[float] = None,
+    smstransfert_fees: Optional[float] = None,
     currency: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
@@ -79,8 +79,8 @@ async def update_general_settings(
                         else {}
                     ),
                     **(
-                        {"smsTransfert_fees": smsTransfert_fees}
-                        if smsTransfert_fees is not None
+                        {"smstransfert_fees": smstransfert_fees}
+                        if smstransfert_fees is not None
                         else {}
                     ),
                     **({"currency": currency} if currency else {}),
@@ -95,7 +95,7 @@ async def update_general_settings(
                 charge=charge or 0,
                 fix_charge=fix_charge or 0,
                 coefficient=coefficient or 1,
-                smsTransfert_fees=smsTransfert_fees or 0,
+                smstransfert_fees=smstransfert_fees or 0,
                 currency=currency or "EUR",
             )
         )
