@@ -139,10 +139,11 @@ async def transfers_gains(
     success_statuses = {"succeeded", "success", "terminated"}
     target_channels = {"external_transfer", "cash"}
 
+    bucket = func.date_trunc(period, Transactions.created_at).label("bucket")
     stmt = (
         select(
             Transactions.channel,
-            func.date_trunc("day", Transactions.created_at).label("day"),
+            bucket,
             func.sum(Transactions.amount).label("amount_total"),
             func.count(Transactions.tx_id).label("count_total"),
         )
@@ -151,8 +152,8 @@ async def transfers_gains(
             Transactions.channel.in_(target_channels),
             Transactions.created_at >= date_from,
         )
-        .group_by("day", Transactions.channel)
-        .order_by(func.date_trunc("day", Transactions.created_at).desc())
+        .group_by(bucket, Transactions.channel)
+        .order_by(bucket.desc())
     )
 
     rows = (await db.execute(stmt)).all()
@@ -167,7 +168,7 @@ async def transfers_gains(
         gain = amount * rate / 100
         serialized.append(
             {
-                "day": r.day.isoformat() if r.day else None,
+                "day": r.bucket.isoformat() if r.bucket else None,
                 "channel": r.channel,
                 "amount": round(amount, 2),
                 "gain": round(gain, 2),
