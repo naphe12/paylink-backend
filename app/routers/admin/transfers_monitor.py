@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Optional
 
@@ -10,6 +10,7 @@ from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
 from app.models.transactions import Transactions
 from app.models.users import Users
+from app.models.general_settings import AgentCommissions
 
 EXTERNAL_CHANNELS = {
     "bank_transfer",
@@ -106,4 +107,84 @@ async def transfers_summary(
         "failed": summary.get("failed", 0) + summary.get("cancelled", 0),
         "succeeded": summary.get("succeeded", 0),
         "total": sum(summary.values()),
+    }
+
+
+@router.get("/gains")
+async def transfers_gains(
+    period: str = Query(
+        "day",
+        description="Filtre de temps: day, week, month, year",
+        regex="^(day|week|month|year)$",
+    ),
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    charge_row = await db.execute(
+        select(AgentCommissions.charge).order_by(AgentCommissions.created_at.desc()).limit(1)
+    )
+    charge_value = charge_row.scalar_one_or_none() or 0
+    rate = float(charge_value)
+
+    now = datetime.utcnow()
+    if period == "week":
+        date_from = now - timedelta(days=7)
+    elif period == "month":
+        date_from = now - timedelta(days=30)
+    elif period == "year":
+        date_from = now - timedelta(days=365)
+    else:
+        date_from = now - timedelta(days=1)
+
+    success_statuses = {"succeeded", "success", "terminated"}
+    target_channels = {"external_transfer", "cash"}
+
+    stmt = (
+        select(
+            Transactions.channel,
+            func.date_trunc("day", Transactions.created_at).label("day"),
+            func.sum(Transactions.amount).label("amount_total"),
+            func.count(Transactions.tx_id).label("count_total"),
+        )
+        .where(
+            Transactions.status.in_(success_statuses),
+            Transactions.channel.in_(target_channels),
+            Transactions.created_at >= date_from,
+        )
+        .group_by("day", Transactions.channel)
+        .order_by(func.date_trunc("day", Transactions.created_at).desc())
+    )
+
+    rows = (await db.execute(stmt)).all()
+
+    serialized = []
+    total_amount = 0.0
+    total_gain = 0.0
+    total_count = 0
+
+    for r in rows:
+        amount = float(r.amount_total or 0)
+        gain = amount * rate / 100
+        serialized.append(
+            {
+                "day": r.day.isoformat() if r.day else None,
+                "channel": r.channel,
+                "amount": round(amount, 2),
+                "gain": round(gain, 2),
+                "count": int(r.count_total or 0),
+            }
+        )
+        total_amount += amount
+        total_gain += gain
+        total_count += int(r.count_total or 0)
+
+    return {
+        "period": period,
+        "charge_rate": rate,
+        "totals": {
+            "amount": round(total_amount, 2),
+            "gain": round(total_gain, 2),
+            "count": total_count,
+        },
+        "rows": serialized,
     }
