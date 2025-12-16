@@ -22,6 +22,6 @@ class GeneralSettings(Base):
     fixValue = Column("fixvalue", Integer, nullable=False, default=120)
     smstransfert_fees = Column("smstransfert_fees", Numeric(12, 2), nullable=False, default=1.5000)
     bonus = Column(Integer, nullable=False, default=0)
-    smsPhone = Column(String(50), nullable=False, default="")
+    smsPhone = Column("smsphone", String(50), nullable=False, default="")
     account = Column(String(50), nullable=False, default="")
     account_name = Column(String(50), nullable=False, default="")
