@@ -166,7 +166,7 @@ async def close_external_transfer(
         )
 
     wallet.available -= amount_to_debit
-    transfer.status = "success"
+    transfer.status = "completed"
     transfer.processed_at = datetime.utcnow()
     transfer.processed_by = current_agent.user_id
 
@@ -174,7 +174,7 @@ async def close_external_transfer(
         select(Transactions).where(Transactions.related_entity_id == transfer.transfer_id)
     )
     if txn:
-        txn.status = "succeeded"
+        txn.status = "completed"
         txn.updated_at = datetime.utcnow()
 
     wallet_tx = WalletTransactions(
