@@ -19,7 +19,7 @@ class GeneralSettings(Base):
     updated_at =Column(TIMESTAMP(timezone=True))
     fix_charge =Column(Numeric(12,2), nullable=False, default= 0.09)
     coefficient= Column(Numeric(12,2), nullable=False, default= 1.0250)
-    fixValue =Column(Integer, nullable=False, default= 120)
+    fixValue = Column("fixvalue", Integer, nullable=False, default=120)
     smsTransfert_fees  = Column(Numeric(12, 2), nullable=False, default= 1.5000)
     bonus =Column(Integer, nullable=False)
     smsPhone= Column(String(50), nullable=False)
