@@ -18,19 +18,30 @@ async def get_general_settings(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
 ):
-    row = await db.scalar(
-        select(GeneralSettings).order_by(GeneralSettings.created_at.desc())
-    )
-    if not row:
+    rows = (
+        await db.execute(
+            select(GeneralSettings).order_by(GeneralSettings.created_at.desc())
+        )
+    ).scalars().all()
+    if not rows:
         raise HTTPException(status_code=404, detail="General settings not found")
-    return {
-        "charge": float(row.charge),
-        "fix_charge": float(row.fix_charge),
-        "coefficient": float(row.coefficient),
-        "smsTransfert_fees": float(row.smsTransfert_fees),
-        "currency": row.currency,
-        "updated_at": row.updated_at,
-    }
+    latest = rows[0]
+    def serialize(item: GeneralSettings):
+        return {
+            "id": item.id,
+            "charge": float(item.charge),
+            "fix_charge": float(item.fix_charge),
+            "coefficient": float(item.coefficient),
+            "smsTransfert_fees": float(item.smsTransfert_fees),
+            "currency": item.currency,
+            "fixvalue": item.fixValue,
+            "sms_notification": item.sms_notification,
+            "email_notification": item.email_notification,
+            "updated_at": item.updated_at,
+            "created_at": item.created_at,
+        }
+
+    return {**serialize(latest), "items": [serialize(r) for r in rows]}
 
 
 @router.put("/general")
