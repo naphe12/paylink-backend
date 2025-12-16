@@ -5,7 +5,7 @@ from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
-class AgentCommissions(Base):
+class GeneralSettings(Base):
     __tablename__ = "general_settings"
     __table_args__ = {"schema": "paylink"}
     id = Column(Integer, primary_key=True)

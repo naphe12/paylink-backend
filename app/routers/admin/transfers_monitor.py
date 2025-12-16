@@ -10,7 +10,7 @@ from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
 from app.models.transactions import Transactions
 from app.models.users import Users
-from app.models.general_settings import AgentCommissions
+from app.models.general_settings import GeneralSettings
 
 EXTERNAL_CHANNELS = {
     "bank_transfer",
@@ -121,7 +121,7 @@ async def transfers_gains(
     admin=Depends(get_current_admin),
 ):
     charge_row = await db.execute(
-        select(AgentCommissions.charge).order_by(AgentCommissions.created_at.desc()).limit(1)
+        select(GeneralSettings.charge).order_by(GeneralSettings.created_at.desc()).limit(1)
     )
     charge_value = charge_row.scalar_one_or_none() or 0
     rate = float(charge_value)
