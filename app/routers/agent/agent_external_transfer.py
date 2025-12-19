@@ -39,14 +39,15 @@ async def update_external_transfer_status(
     """
     ✅ Route Agent :
     Met à jour le statut d'un transfert externe :
-    - status = 'success' ou 'failed'
+    - status = 'succeeded' ou 'failed' (accepte aussi 'success' comme alias et normalise vers 'succeeded')
     - envoie email client
     - met à jour la transaction liée
     """
 
-    new_status = payload.get("status")
-    if new_status not in ["success", "failed"]:
-        raise HTTPException(status_code=400, detail="Statut invalide (success/failed uniquement)")
+    raw_status = (payload.get("status") or "").lower()
+    if raw_status not in ["succeeded", "success", "failed"]:
+        raise HTTPException(status_code=400, detail="Statut invalide (succeeded/failed uniquement)")
+    new_status = "succeeded" if raw_status in ["succeeded", "success"] else "failed"
 
     # 🔹 Récupère le transfert
     result = await db.execute(select(ExternalTransfers).where(ExternalTransfers.transfer_id == transfer_id))
@@ -70,7 +71,7 @@ async def update_external_transfer_status(
     # 🔹 Prépare l’email
     subject = f"Transfert {new_status.upper()} - Référence {transfer.reference_code}"
 
-    if new_status == "success":
+    if new_status == "succeeded":
         msg = f"""
         Bonjour {transfer.user.full_name},
 
