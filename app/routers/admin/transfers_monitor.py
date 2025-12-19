@@ -136,7 +136,7 @@ async def transfers_gains(
     else:
         date_from = now - timedelta(days=1)
 
-    success_statuses = {"succeeded", "success", "completed"}
+    success_statuses = {"succeeded", "completed"}
     target_channels = {"external_transfer", "cash"}
 
     bucket = func.date_trunc(period, Transactions.created_at).label("bucket")
