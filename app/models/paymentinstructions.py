@@ -26,7 +26,7 @@ class PaymentInstructions(Base):
 
     pi_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, server_default=text('gen_random_uuid()'))
     tx_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
-    direction: Mapped[str] = mapped_column(Enum('credit', 'debit', name='tx_direction', schema='paylink'), nullable=False)
+    direction: Mapped[str] = mapped_column(Enum('credit', 'debit','CREDIT', 'DEBIT', name='tx_direction', schema='paylink'), nullable=False)
     amount: Mapped[decimal.Decimal] = mapped_column(Numeric(20, 6), nullable=False)
     currency_code: Mapped[str] = mapped_column(CHAR(3), nullable=False)
     status: Mapped[str] = mapped_column(Enum('initiated', 'pending', 'succeeded', 'failed', 'cancelled', 'reversed', 'chargeback', name='tx_status', schema='paylink'), nullable=False, server_default=text("'pending'::paylink.tx_status"))

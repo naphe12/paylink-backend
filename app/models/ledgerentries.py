@@ -24,7 +24,7 @@ class LedgerEntries(Base):
     entry_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     journal_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
     account_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
-    direction: Mapped[str] = mapped_column(Enum('credit', 'debit', name='tx_direction', schema='paylink'), nullable=False)
+    direction: Mapped[str] = mapped_column(Enum('credit', 'debit','CREDIT', 'DEBIT', name='tx_direction', schema='paylink'), nullable=False)
     amount: Mapped[decimal.Decimal] = mapped_column(Numeric(20, 6), nullable=False)
     currency_code: Mapped[str] = mapped_column(CHAR(3), nullable=False)
 
