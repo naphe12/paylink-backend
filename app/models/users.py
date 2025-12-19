@@ -49,6 +49,7 @@ class UserStatus(enum.Enum):
     active = "active"
     frozen = "frozen"
     closed = "closed"
+    suspended="suspended"
 
 
 class KycStatus(enum.Enum):
@@ -84,7 +85,7 @@ class Users(Base):
     phone_e164 = Column(CITEXT, unique=True)
     country_code = Column(Text)
     #status = Column(Enum(UserStatus), nullable=False, default=UserStatus.pending)
-    status = Column(Enum("pending", "active", "frozen", "closed", name="user_status", schema="paylink"), nullable=False)
+    status = Column(Enum("pending", "active", "frozen", "closed","suspended", name="user_status", schema="paylink"), nullable=False)
     kyc_status  = Column(Enum("unverified", "verified", "reviewing", "rejected", name="kyc_status", schema="paylink"), nullable=False)
     referred_by = Column(UUID(as_uuid=True), ForeignKey("paylink.users.user_id"))
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
