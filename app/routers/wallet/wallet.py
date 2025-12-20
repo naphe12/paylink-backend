@@ -700,7 +700,8 @@ async def get_balance_events(
             "balance_before": float(r.balance_before) if r.balance_before is not None else None,
             "amount_delta": float(r.amount_delta) if r.amount_delta is not None else None,
             "balance_after": float(r.balance_after) if r.balance_after is not None else None,
-            "currency": getattr(r, "currency_code", None),
+            # utilise currency si présent, sinon currency_code
+            "currency": getattr(r, "currency", None) or getattr(r, "currency_code", None),
             "source": r.source,
             "occurred_at": r.occurred_at,
             "created_at": r.created_at,
