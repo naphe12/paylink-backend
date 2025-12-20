@@ -4,6 +4,7 @@ from sqlalchemy import (
     ForeignKey,
     Numeric,
     Text,
+    String,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID
