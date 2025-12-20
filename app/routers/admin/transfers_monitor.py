@@ -15,11 +15,7 @@ from app.models.users import Users
 from app.models.general_settings import GeneralSettings
 
 EXTERNAL_CHANNELS = {
-    "bank_transfer",
-    "bank",
-    "mobile_money",
-    "cash",
-    "card",
+    "external_transfer",
 }
 
 router = APIRouter(prefix="/admin/transfers", tags=["Admin Transfers"])
