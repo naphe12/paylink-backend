@@ -40,6 +40,9 @@ from app.models.webhookevents import WebhookEvents
 from app.models.webhooks import Webhooks
 from app.models.wallet_cash_requests import WalletCashRequests
 from app.models.credit_line_history import CreditLineHistory
+from app.models.credit_line_events import CreditLineEvents
+from app.models.credit_lines import CreditLines
+from app.models.client_balance_events import ClientBalanceEvents
 
 __all__ = [
     "AgentLocations",
@@ -83,4 +86,7 @@ __all__ = [
     "Webhooks",
     "WalletCashRequests",
     "CreditLineHistory",
+    "CreditLineEvents",
+    "CreditLines",
+    "ClientBalanceEvents",
 ]

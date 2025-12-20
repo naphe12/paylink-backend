@@ -1,13 +1,15 @@
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, select, or_, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
+from app.models.client_balance_events import ClientBalanceEvents
 from app.models.transactions import Transactions
 from app.models.users import Users
 from app.models.general_settings import GeneralSettings
@@ -189,3 +191,87 @@ async def transfers_gains(
         },
         "rows": serialized,
     }
+
+
+@router.get("/balance-events")
+async def list_balance_events(
+    user_id: UUID | None = Query(None),
+    q: str | None = Query(None, description="Recherche nom/email/téléphone"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    stmt = (
+        select(
+            ClientBalanceEvents,
+            Users.full_name,
+            Users.email,
+            Users.phone_e164,
+        )
+        .join(Users, Users.user_id == ClientBalanceEvents.user_id)
+        .order_by(desc(ClientBalanceEvents.occurred_at))
+        .offset(offset)
+        .limit(limit)
+    )
+
+    if user_id:
+        stmt = stmt.where(ClientBalanceEvents.user_id == user_id)
+    if q:
+        pattern = f"%{q}%"
+        stmt = stmt.where(
+            or_(
+                Users.full_name.ilike(pattern),
+                Users.email.ilike(pattern),
+                Users.phone_e164.ilike(pattern),
+            )
+        )
+
+    rows = (await db.execute(stmt)).all()
+    return [
+        {
+            "event_id": str(ev.event_id),
+            "user_id": str(ev.user_id),
+            "full_name": full_name,
+            "email": email,
+            "phone": phone,
+            "balance_before": float(ev.balance_before) if ev.balance_before is not None else None,
+            "amount_delta": float(ev.amount_delta) if ev.amount_delta is not None else None,
+            "balance_after": float(ev.balance_after) if ev.balance_after is not None else None,
+            "source": ev.source,
+            "occurred_at": ev.occurred_at,
+            "created_at": ev.created_at,
+        }
+        for ev, full_name, email, phone in rows
+    ]
+
+
+@router.get("/users/{user_id}/balance-events")
+async def list_user_balance_events(
+    user_id: UUID,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    stmt = (
+        select(ClientBalanceEvents)
+        .where(ClientBalanceEvents.user_id == user_id)
+        .order_by(desc(ClientBalanceEvents.occurred_at))
+        .offset(offset)
+        .limit(limit)
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    return [
+        {
+            "event_id": str(ev.event_id),
+            "user_id": str(ev.user_id),
+            "balance_before": float(ev.balance_before) if ev.balance_before is not None else None,
+            "amount_delta": float(ev.amount_delta) if ev.amount_delta is not None else None,
+            "balance_after": float(ev.balance_after) if ev.balance_after is not None else None,
+            "source": ev.source,
+            "occurred_at": ev.occurred_at,
+            "created_at": ev.created_at,
+        }
+        for ev in rows
+    ]
