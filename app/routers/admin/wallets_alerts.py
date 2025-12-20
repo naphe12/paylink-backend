@@ -27,7 +27,7 @@ def compute_alert_label(balance: Decimal) -> str:
 
 @router.get("/")
 async def list_wallet_alerts(
-    min_available: float = Query(10000.0, description="Inclut les wallets à/bas ce solde"),
+    min_available: float = Query(10000.0, description="Inclut les wallets a/bas ce solde"),
     wallet_type: str | None = Query(None, description="Filtre par type de wallet"),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
