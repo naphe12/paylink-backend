@@ -13,6 +13,7 @@ from app.models.client_balance_events import ClientBalanceEvents
 from app.models.transactions import Transactions
 from app.models.users import Users
 from app.models.general_settings import GeneralSettings
+from app.models.external_transfers import ExternalTransfers
 
 EXTERNAL_CHANNELS = {
     "external_transfer",
@@ -57,8 +58,15 @@ async def list_external_transfers(
             Users.user_id,
             Users.full_name,
             Users.email,
+            ExternalTransfers.local_amount,
+            ExternalTransfers.currency.label("local_currency"),
         )
         .join(Users, Users.user_id == Transactions.initiated_by, isouter=True)
+        .join(
+            ExternalTransfers,
+            ExternalTransfers.transfer_id == Transactions.related_entity_id,
+            isouter=True,
+        )
         .where(channel_field != "internal")
         .order_by(Transactions.created_at.desc())
         .limit(limit)
@@ -91,6 +99,8 @@ async def list_external_transfers(
             "initiator_id": str(r.user_id) if r.user_id else None,
             "initiator_name": r.full_name,
             "initiator_email": r.email,
+            "local_amount": serialize_decimal(r.local_amount) if r.local_amount is not None else None,
+            "local_currency": r.local_currency,
         }
         for r in rows
     ]
