@@ -43,7 +43,21 @@ class Transactions(Base):
     tx_id = Column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
     amount = Column(Numeric(20, 6), nullable=False)
     currency_code = Column(CHAR(3), nullable=False)
-    channel = Column(Enum("mobile_money", "bank", "card","external_transfer", "cash", "internal", "bank_transfer", name="tx_channel", schema="paylink"), nullable=False)
+    channel = Column(
+        Enum(
+            "mobile_money",
+            "bank",
+            "card",
+            "external_transfer",
+            "EXTERNAL_TRANSFER",
+            "cash",
+            "internal",
+            "bank_transfer",
+            name="tx_channel",
+            schema="paylink",
+        ),
+        nullable=False,
+    )
     status = Column(Enum("initiated", "pending", "succeeded", "failed", "cancelled", "reversed", "chargeback","completed", name="tx_status", schema="paylink"), nullable=False, server_default=text("'initiated'::paylink.tx_status"))
     created_at = Column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
