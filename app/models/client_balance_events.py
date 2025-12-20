@@ -33,5 +33,5 @@ class ClientBalanceEvents(Base):
     legacy_id = Column(Numeric(19, 0))
     occurred_at = Column(DateTime(timezone=True), nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
-    currency = Column(CHAR(3), nullable=False)
+    currency = Column(String(3), nullable=False)
     user = relationship("Users", back_populates="client_balance_events")
