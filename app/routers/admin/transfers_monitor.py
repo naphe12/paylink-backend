@@ -66,7 +66,11 @@ async def list_external_transfers(
         stmt = stmt.where(Transactions.channel.in_(EXTERNAL_CHANNELS))
 
     if status:
-        stmt = stmt.where(Transactions.status == status)
+        if status.lower() == "pending":
+            # si on demande pending, on renvoie tout sauf pending
+            stmt = stmt.where(Transactions.status != "pending")
+        else:
+            stmt = stmt.where(Transactions.status == status)
 
     rows = (await db.execute(stmt)).all()
 
