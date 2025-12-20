@@ -121,6 +121,7 @@ class Users(Base):
         foreign_keys="Transactions.initiated_by",
         back_populates="initiator",
     )
+    credit_line_events = relationship("CreditLineEvents", back_populates="user")
 
     # ✅ Relation wallet
     # (removed duplicate untyped wallets relationship; see typed one below)
@@ -135,6 +136,8 @@ class Users(Base):
     notifications: Mapped[list['Notifications']] = relationship('Notifications', back_populates='user')
     security_events: Mapped[list['SecurityEvents']] = relationship('SecurityEvents', back_populates='user')
     sanctions_screening: Mapped[list['SanctionsScreening']] = relationship('SanctionsScreening', back_populates='user')
+    credit_lines: Mapped[list['CreditLines']] = relationship('CreditLines', back_populates='user')
+    client_balance_events: Mapped[list['ClientBalanceEvents']] = relationship('ClientBalanceEvents', back_populates='user')
     tontines: Mapped[list['Tontines']] = relationship('Tontines', back_populates='users')
     user_devices: Mapped[list['UserDevices']] = relationship('UserDevices', back_populates='user')
     wallets: Mapped[list['Wallets']] = relationship('Wallets', back_populates='user')

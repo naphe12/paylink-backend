@@ -5,7 +5,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
-from sqlalchemy import cast, select, String, or_
+from sqlalchemy import cast, select, String, or_, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -25,6 +25,7 @@ from app.models.wallet_cash_requests import (
 )
 from app.models.wallets import Wallets
 from app.models.credit_line_history import CreditLineHistory
+from app.models.client_balance_events import ClientBalanceEvents
 from app.schemas.wallet_cash_requests import (
     WalletCashDepositCreate,
     WalletCashRequestRead,
@@ -676,6 +677,35 @@ async def get_wallet_transactions(
         })
 
     return response
+
+
+@router.get("/balance-events")
+async def get_balance_events(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user),
+):
+    stmt = (
+        select(ClientBalanceEvents)
+        .where(ClientBalanceEvents.user_id == current_user.user_id)
+        .order_by(desc(ClientBalanceEvents.occurred_at))
+        .offset(offset)
+        .limit(limit)
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    return [
+        {
+            "event_id": str(r.event_id),
+            "balance_before": float(r.balance_before) if r.balance_before is not None else None,
+            "amount_delta": float(r.amount_delta) if r.amount_delta is not None else None,
+            "balance_after": float(r.balance_after) if r.balance_after is not None else None,
+            "source": r.source,
+            "occurred_at": r.occurred_at,
+            "created_at": r.created_at,
+        }
+        for r in rows
+    ]
 
 from decimal import Decimal
 
