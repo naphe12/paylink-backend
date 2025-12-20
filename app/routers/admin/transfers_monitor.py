@@ -40,6 +40,9 @@ async def list_external_transfers(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
 ):
+    channel_param = channel.lower() if channel else None
+    external_channels_lower = {c.lower() for c in EXTERNAL_CHANNELS}
+
     stmt = (
         select(
             Transactions.tx_id,
@@ -55,15 +58,15 @@ async def list_external_transfers(
             Users.email,
         )
         .join(Users, Users.user_id == Transactions.initiated_by, isouter=True)
-        .where(Transactions.channel != "internal")
+        .where(func.lower(Transactions.channel) != "internal")
         .order_by(Transactions.created_at.desc())
         .limit(limit)
     )
 
-    if channel:
-        stmt = stmt.where(Transactions.channel == channel)
+    if channel_param:
+        stmt = stmt.where(func.lower(Transactions.channel) == channel_param)
     elif channel is None:
-        stmt = stmt.where(Transactions.channel.in_(EXTERNAL_CHANNELS))
+        stmt = stmt.where(func.lower(Transactions.channel).in_(external_channels_lower))
 
     if status:
         if status.lower() == "pending":
@@ -97,9 +100,10 @@ async def transfers_summary(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
 ):
+    external_channels_lower = {c.lower() for c in EXTERNAL_CHANNELS}
     stmt = (
         select(Transactions.status, func.count(Transactions.tx_id))
-        .where(Transactions.channel.in_(EXTERNAL_CHANNELS))
+        .where(func.lower(Transactions.channel).in_(external_channels_lower))
         .group_by(Transactions.status)
     )
     rows = (await db.execute(stmt)).all()
