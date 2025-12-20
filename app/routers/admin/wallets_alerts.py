@@ -25,6 +25,7 @@ def compute_alert_label(balance: Decimal) -> str:
     return "ok"
 
 
+@router.get("")
 @router.get("/")
 async def list_wallet_alerts(
     min_available: float | None = Query(
