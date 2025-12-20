@@ -27,7 +27,7 @@ def compute_alert_label(balance: Decimal) -> str:
 
 @router.get("/")
 async def list_wallet_alerts(
-    min_available: float = Query(0.0, description="Inclut les wallets â‰¤ ce solde"),
+    min_available: float = Query(10000.0, description="Inclut les wallets à/bas ce solde"),
     wallet_type: str | None = Query(None, description="Filtre par type de wallet"),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -45,7 +45,7 @@ async def list_wallet_alerts(
             Users.email,
         )
         .join(Users, Users.user_id == Wallets.user_id, isouter=True)
-        .where(Wallets.available <= min_available)
+        .where(func.coalesce(Wallets.available, 0) <= min_available)
         .order_by(Wallets.available.asc())
         .limit(limit)
     )
@@ -81,7 +81,7 @@ async def wallets_summary(
         select(func.count(Wallets.wallet_id)).where(Wallets.available < 0)
     )
     low_balance_wallets = await db.scalar(
-        select(func.count(Wallets.wallet_id)).where(Wallets.available < 10000)
+        select(func.count(Wallets.wallet_id)).where(Wallets.available < 10)
     )
 
     return {
@@ -154,3 +154,4 @@ async def wallet_history_admin(
         }
         for r in rows
     ]
+
