@@ -4,7 +4,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select, or_, desc
+from sqlalchemy import func, select, or_, desc, cast, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -42,6 +42,7 @@ async def list_external_transfers(
 ):
     channel_param = channel.lower() if channel else None
     external_channels_lower = {c.lower() for c in EXTERNAL_CHANNELS}
+    channel_field = func.lower(cast(Transactions.channel, String))
 
     stmt = (
         select(
@@ -58,15 +59,15 @@ async def list_external_transfers(
             Users.email,
         )
         .join(Users, Users.user_id == Transactions.initiated_by, isouter=True)
-        .where(func.lower(Transactions.channel) != "internal")
+        .where(channel_field != "internal")
         .order_by(Transactions.created_at.desc())
         .limit(limit)
     )
 
     if channel_param:
-        stmt = stmt.where(func.lower(Transactions.channel) == channel_param)
+        stmt = stmt.where(channel_field == channel_param)
     elif channel is None:
-        stmt = stmt.where(func.lower(Transactions.channel).in_(external_channels_lower))
+        stmt = stmt.where(channel_field.in_(external_channels_lower))
 
     if status:
         if status.lower() == "pending":
@@ -101,9 +102,10 @@ async def transfers_summary(
     admin=Depends(get_current_admin),
 ):
     external_channels_lower = {c.lower() for c in EXTERNAL_CHANNELS}
+    channel_field = func.lower(cast(Transactions.channel, String))
     stmt = (
         select(Transactions.status, func.count(Transactions.tx_id))
-        .where(func.lower(Transactions.channel).in_(external_channels_lower))
+        .where(channel_field.in_(external_channels_lower))
         .group_by(Transactions.status)
     )
     rows = (await db.execute(stmt)).all()
