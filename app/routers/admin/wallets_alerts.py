@@ -27,7 +27,9 @@ def compute_alert_label(balance: Decimal) -> str:
 
 @router.get("/")
 async def list_wallet_alerts(
-    min_available: float = Query(10000.0, description="Inclut les wallets a/bas ce solde"),
+    min_available: float | None = Query(
+        None, description="Filtre solde max (None = 50 plus bas)"
+    ),
     wallet_type: str | None = Query(None, description="Filtre par type de wallet"),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -45,11 +47,12 @@ async def list_wallet_alerts(
             Users.email,
         )
         .join(Users, Users.user_id == Wallets.user_id, isouter=True)
-        .where(func.coalesce(Wallets.available, 0) <= min_available)
         .order_by(Wallets.available.asc())
         .limit(limit)
     )
 
+    if min_available is not None:
+        stmt = stmt.where(func.coalesce(Wallets.available, 0) <= min_available)
     if wallet_type:
         stmt = stmt.where(Wallets.type == wallet_type)
 
