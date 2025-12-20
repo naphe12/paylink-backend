@@ -18,8 +18,9 @@ from app.core.database import Base
 
 
 class WalletCashRequestType(str, enum.Enum):
-    DEPOSIT = "deposit"
-    WITHDRAW = "withdraw"
+    DEPOSIT = "DEPOSIT"
+    WITHDRAW = "WITHDRAW"
+    EXTERNAL_TRANSFER = "EXTERNAL_TRANSFER"
 
 
 class WalletCashRequestStatus(str, enum.Enum):
