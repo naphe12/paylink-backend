@@ -111,10 +111,14 @@ async def transfers_summary(
     rows = (await db.execute(stmt)).all()
     summary = {status: count for status, count in rows}
 
+    succeeded = summary.get("succeeded", 0) + summary.get("completed", 0)
+    pending = summary.get("pending", 0) + summary.get("initiated", 0)
+    failed = summary.get("failed", 0) + summary.get("cancelled", 0)
+
     return {
-        "pending": summary.get("pending", 0) + summary.get("initiated", 0),
-        "failed": summary.get("failed", 0) + summary.get("cancelled", 0),
-        "succeeded": summary.get("succeeded", 0),
+        "pending": pending,
+        "failed": failed,
+        "succeeded": succeeded,
         "total": sum(summary.values()),
     }
 
