@@ -29,6 +29,7 @@ def serialize_decimal(value: Optional[Decimal]) -> float:
     return float(value or 0)
 
 
+@router.get("")
 @router.get("/")
 async def list_external_transfers(
     status: Optional[str] = Query(
