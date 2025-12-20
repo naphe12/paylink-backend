@@ -256,17 +256,24 @@ async def list_user_balance_events(
     admin=Depends(get_current_admin),
 ):
     stmt = (
-        select(ClientBalanceEvents)
+        select(
+            ClientBalanceEvents,
+            Users.full_name,
+            Users.email,
+        )
+        .join(Users, Users.user_id == ClientBalanceEvents.user_id)
         .where(ClientBalanceEvents.user_id == user_id)
         .order_by(desc(ClientBalanceEvents.occurred_at))
         .offset(offset)
         .limit(limit)
     )
-    rows = (await db.execute(stmt)).scalars().all()
+    rows = (await db.execute(stmt)).all()
     return [
         {
             "event_id": str(ev.event_id),
             "user_id": str(ev.user_id),
+            "full_name": full_name,
+            "email": email,
             "balance_before": float(ev.balance_before) if ev.balance_before is not None else None,
             "amount_delta": float(ev.amount_delta) if ev.amount_delta is not None else None,
             "balance_after": float(ev.balance_after) if ev.balance_after is not None else None,
@@ -275,5 +282,5 @@ async def list_user_balance_events(
             "occurred_at": ev.occurred_at,
             "created_at": ev.created_at,
         }
-        for ev in rows
+        for ev, full_name, email in rows
     ]
