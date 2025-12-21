@@ -21,6 +21,25 @@ EXTERNAL_CHANNELS = {
 
 router = APIRouter(prefix="/admin/transfers", tags=["Admin Transfers"])
 
+DESTINATION_CURRENCY_MAP = {
+    "burundi": "BIF",
+    "rwanda": "RWF",
+    "drc": "CDF",
+    "rd congo": "CDF",
+    "democratic republic of congo": "CDF",
+    "rdc": "CDF",
+}
+
+
+def _resolve_local_currency(country: str | None, stored_currency: str | None) -> str | None:
+    """
+    Ensure local_currency reflects destination country when legacy rows stored EUR.
+    """
+    if stored_currency and stored_currency != "EUR":
+        return stored_currency
+    key = (country or "").strip().lower()
+    return DESTINATION_CURRENCY_MAP.get(key, stored_currency or None)
+
 
 def serialize_decimal(value: Optional[Decimal]) -> float:
     return float(value or 0)
@@ -60,6 +79,7 @@ async def list_external_transfers(
             Users.email,
             ExternalTransfers.local_amount,
             ExternalTransfers.currency.label("local_currency"),
+            ExternalTransfers.country_destination,
         )
         .join(Users, Users.user_id == Transactions.initiated_by, isouter=True)
         .join(
@@ -100,7 +120,7 @@ async def list_external_transfers(
             "initiator_name": r.full_name,
             "initiator_email": r.email,
             "local_amount": serialize_decimal(r.local_amount) if r.local_amount is not None else None,
-            "local_currency": r.local_currency,
+            "local_currency": _resolve_local_currency(r.country_destination, r.local_currency),
         }
         for r in rows
     ]
