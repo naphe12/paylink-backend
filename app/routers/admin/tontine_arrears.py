@@ -211,3 +211,121 @@ async def create_tontine_admin(
         "amount_per_member": float(tontine.amount_per_member),
         "members_added": len(payload.member_ids),
     }
+
+
+class AdminTontineMembersAdd(BaseModel):
+    member_ids: List[UUID] = Field(default_factory=list)
+
+
+def _serialize_members(rows):
+    return [
+        {
+            "user_id": str(user_id),
+            "user_name": user_name,
+            "email": email,
+            "join_order": join_order,
+        }
+        for user_id, user_name, email, join_order in rows
+    ]
+
+
+@router.get("/{tontine_id}/members")
+async def get_tontine_members_admin(
+    tontine_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    rows = (
+        await db.execute(
+            select(
+                TontineMembers.user_id,
+                TontineMembers.user_name,
+                Users.email,
+                TontineMembers.join_order,
+            )
+            .join(Users, Users.user_id == TontineMembers.user_id, isouter=True)
+            .where(TontineMembers.tontine_id == tontine_id)
+            .order_by(TontineMembers.join_order)
+        )
+    ).all()
+    return _serialize_members(rows)
+
+
+@router.post("/{tontine_id}/members", status_code=201)
+async def add_tontine_members_admin(
+    tontine_id: UUID,
+    payload: AdminTontineMembersAdd,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    tontine = await db.scalar(select(Tontines).where(Tontines.tontine_id == tontine_id))
+    if not tontine:
+        raise HTTPException(404, "Tontine introuvable")
+
+    if not payload.member_ids:
+        return []
+
+    existing_members = (
+        await db.execute(
+            select(TontineMembers.user_id, TontineMembers.join_order).where(
+                TontineMembers.tontine_id == tontine_id
+            )
+        )
+    ).all()
+    existing_ids = {row.user_id for row in existing_members}
+    max_order = max([row.join_order for row in existing_members], default=-1)
+
+    new_ids = [mid for mid in payload.member_ids if mid not in existing_ids]
+    if not new_ids:
+        return await get_tontine_members_admin(tontine_id, db, admin)
+
+    users_rows = (
+        await db.execute(
+            select(Users.user_id, Users.full_name, Users.email).where(
+                Users.user_id.in_(new_ids)
+            )
+        )
+    ).all()
+    found_map = {row.user_id: (row.full_name, row.email) for row in users_rows}
+
+    members_to_add = []
+    for mid in new_ids:
+        names = found_map.get(mid)
+        if not names:
+            raise HTTPException(404, f"Membre introuvable: {mid}")
+        full_name, email = names
+        max_order += 1
+        members_to_add.append(
+            TontineMembers(
+                tontine_id=tontine_id,
+                user_id=mid,
+                join_order=max_order,
+                user_name=full_name or email or "Membre",
+            )
+        )
+    db.add_all(members_to_add)
+    await db.commit()
+
+    return await get_tontine_members_admin(tontine_id, db, admin)
+
+
+@router.delete("/{tontine_id}/members/{user_id}")
+async def remove_tontine_member_admin(
+    tontine_id: UUID,
+    user_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    member = await db.scalar(
+        select(TontineMembers).where(
+            TontineMembers.tontine_id == tontine_id,
+            TontineMembers.user_id == user_id,
+        )
+    )
+    if not member:
+        raise HTTPException(404, "Membre introuvable dans la tontine")
+
+    await db.delete(member)
+    await db.commit()
+
+    return await get_tontine_members_admin(tontine_id, db, admin)
