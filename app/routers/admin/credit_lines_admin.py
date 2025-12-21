@@ -1,4 +1,6 @@
 from typing import Optional
+from decimal import Decimal
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -10,6 +12,7 @@ from app.dependencies.auth import get_current_admin
 from app.models.credit_lines import CreditLines
 from app.models.credit_line_events import CreditLineEvents
 from app.models.users import Users
+from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/admin/credit-lines", tags=["Admin Credit Lines"])
 
@@ -108,3 +111,44 @@ async def get_credit_line_detail(
             for ev in events
         ],
     }
+
+
+class CreditLineIncrease(BaseModel):
+    amount: Decimal = Field(..., gt=0)
+
+
+@router.post("/{credit_line_id}/increase")
+async def increase_credit_line(
+    credit_line_id: UUID,
+    payload: CreditLineIncrease,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    credit_line = await db.scalar(
+        select(CreditLines).where(CreditLines.credit_line_id == credit_line_id)
+    )
+    if not credit_line:
+        raise HTTPException(404, "Ligne de crédit introuvable")
+
+    delta = Decimal(payload.amount)
+    old_limit = credit_line.initial_amount or Decimal("0")
+    credit_line.initial_amount = old_limit + delta
+    credit_line.outstanding_amount = (credit_line.outstanding_amount or Decimal("0")) + delta
+    credit_line.updated_at = datetime.utcnow()
+
+    event = CreditLineEvents(
+        credit_line_id=credit_line.credit_line_id,
+        user_id=credit_line.user_id,
+        amount_delta=delta,
+        currency_code=credit_line.currency_code,
+        old_limit=old_limit,
+        new_limit=credit_line.initial_amount,
+        operation_code=9001,
+        status="updated",
+        source="admin",
+        occurred_at=datetime.utcnow(),
+    )
+    db.add(event)
+    await db.commit()
+
+    return await get_credit_line_detail(credit_line_id, db, admin)
