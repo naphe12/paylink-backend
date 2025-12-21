@@ -81,6 +81,7 @@ class Users(Base):
 
     user_id = Column(UUID(as_uuid=True), primary_key=True,server_default=text('gen_random_uuid()'))
     full_name = Column(Text, nullable=False)
+    username = Column(Text, nullable=True)
     email = Column(CITEXT, unique=True)
     phone_e164 = Column(CITEXT, unique=True)
     country_code = Column(Text)
