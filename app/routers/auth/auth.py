@@ -155,6 +155,7 @@ async def login(
             or_(
                 func.lower(Users.email) == normalized,
                 func.lower(Users.paytag) == paytag,
+                func.lower(Users.username) == normalized,
                 Users.phone_e164 == raw_username,
             )
         )
