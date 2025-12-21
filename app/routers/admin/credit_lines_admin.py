@@ -12,6 +12,8 @@ from app.dependencies.auth import get_current_admin
 from app.models.credit_lines import CreditLines
 from app.models.credit_line_events import CreditLineEvents
 from app.models.users import Users
+from app.models.wallets import Wallets
+from app.services.wallet_history import log_wallet_movement
 from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/admin/credit-lines", tags=["Admin Credit Lines"])
@@ -145,6 +147,71 @@ async def increase_credit_line(
         new_limit=credit_line.initial_amount,
         operation_code=9001,
         status="updated",
+        source="admin",
+        occurred_at=datetime.utcnow(),
+    )
+    db.add(event)
+    await db.commit()
+
+    return await get_credit_line_detail(credit_line_id, db, admin)
+
+
+class CreditLineRepay(BaseModel):
+    amount: Decimal = Field(..., gt=0)
+
+
+@router.post("/{credit_line_id}/repay")
+async def repay_credit_line(
+    credit_line_id: UUID,
+    payload: CreditLineRepay,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    credit_line = await db.scalar(
+        select(CreditLines).where(CreditLines.credit_line_id == credit_line_id)
+    )
+    if not credit_line:
+        raise HTTPException(404, "Ligne de crédit introuvable")
+
+    amount = Decimal(payload.amount)
+    old_used = credit_line.used_amount or Decimal("0")
+    old_outstanding = credit_line.outstanding_amount or Decimal("0")
+
+    new_used = max(Decimal("0"), old_used - amount)
+    new_outstanding = old_outstanding + amount
+
+    credit_line.used_amount = new_used
+    credit_line.outstanding_amount = new_outstanding
+    credit_line.updated_at = datetime.utcnow()
+
+    movement = None
+    if credit_line.currency_code.upper() == "EUR":
+        wallet = await db.scalar(
+            select(Wallets).where(Wallets.user_id == credit_line.user_id).order_by(Wallets.created_at.asc())
+        )
+        if not wallet:
+            raise HTTPException(404, "Wallet introuvable pour crédit EUR")
+        wallet.available = (wallet.available or Decimal("0")) + amount
+        movement = await log_wallet_movement(
+            db,
+            wallet=wallet,
+            user_id=credit_line.user_id,
+            amount=amount,
+            direction="credit",
+            operation_type="credit_line_repay",
+            reference=str(credit_line.credit_line_id),
+            description="Remboursement ligne de crédit (EUR)",
+        )
+
+    event = CreditLineEvents(
+        credit_line_id=credit_line.credit_line_id,
+        user_id=credit_line.user_id,
+        amount_delta=-amount,
+        currency_code=credit_line.currency_code,
+        old_limit=credit_line.initial_amount,
+        new_limit=credit_line.initial_amount,
+        operation_code=9002,
+        status="repaid",
         source="admin",
         occurred_at=datetime.utcnow(),
     )
