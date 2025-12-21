@@ -117,6 +117,7 @@ from app.routers.admin.analytics import router as admin_analytics_router
 from app.routers.admin.agents import router as admin_agents_router
 from app.routers.admin.mobilemoney import router as admin_mobilemoney_router
 from app.routers.admin.tontine_arrears import router as admin_tontine_arrears_router
+from app.routers.admin.credit_lines_admin import router as admin_credit_lines_router
 from app.routers.admin.notifications import router as admin_notifications_router
 from app.routers.admin.loan_stats import router as admin_loan_stats_router
 from app.routers.admin.aml_events import router as admin_aml_router
@@ -132,6 +133,7 @@ app.include_router(admin_analytics_router)
 app.include_router(admin_agents_router)
 app.include_router(admin_mobilemoney_router)
 app.include_router(admin_tontine_arrears_router)
+app.include_router(admin_credit_lines_router)
 app.include_router(admin_notifications_router)
 app.include_router(admin_loan_stats_router)
 app.include_router(admin_aml_router)
