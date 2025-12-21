@@ -37,6 +37,23 @@ from app.models.fxconversions import FxConversions
 router = APIRouter(prefix="/wallet/transfer", tags=["External Transfer"])
 AGENT_EMAIL = "adolphe.nahimana@yahoo.fr"
 
+DESTINATION_CURRENCY_MAP = {
+    "burundi": "BIF",
+    "rwanda": "RWF",
+    "drc": "CDF",
+    "rd congo": "CDF",
+    "democratic republic of congo": "CDF",
+    "rdc": "CDF",
+}
+
+
+def _get_destination_currency(country: str) -> str:
+    """
+    Map country names to currency codes; fall back to the provided value or EUR.
+    """
+    key = (country or "").strip().lower()
+    return DESTINATION_CURRENCY_MAP.get(key, country or "EUR")
+
 
 async def _resolve_fx_rate(
     db: AsyncSession,
@@ -110,7 +127,7 @@ async def external_transfer(
     fee_amount = (amount * fee_rate / decimal.Decimal(100)).quantize(decimal.Decimal("0.01"))
 
     origin_currency = wallet.currency_code or "EUR"
-    destination_currency = "BIF" if origin_currency != "BIF" else "EUR"
+    destination_currency = _get_destination_currency(data.country_destination)
     fx_rate = await _resolve_fx_rate(db, origin_currency, destination_currency)
 
     total_required = amount + fee_amount
@@ -179,7 +196,7 @@ async def external_transfer(
         recipient_name=data.recipient_name,
         recipient_phone=data.recipient_phone,
         amount=amount,
-        currency=origin_currency,
+        currency=destination_currency,
         rate=fx_rate,
         local_amount=local_amount,
         credit_used=(credit_used > 0),
@@ -294,9 +311,9 @@ async def external_transfer(
             client_name=current_user.full_name,
             client_email=current_user.email,
             amount=amount,
-            currency="EUR",
-            payout_amount=f"{local_amount} BIF",
-            used_credit=f"{credit_used}EUR",
+            currency=origin_currency,
+            payout_amount=f"{local_amount} {destination_currency}",
+            used_credit=f"{credit_used} {origin_currency}",
             recipient_name=data.recipient_name,
             recipient_phone=data.recipient_phone,
             partner="Lumicash",
@@ -307,7 +324,7 @@ async def external_transfer(
         telegram_message = (
             "Nouvelle demande de transfert externe\n"
             f"Client: {current_user.full_name} ({current_user.email})\n"
-            f"Montant: {amount} EUR\n"
+            f"Montant: {amount} {origin_currency}\n"
             f"Destinataire: {data.recipient_name} ({data.recipient_phone})\n"
             f"Partenaire: {data.partner_name}\n"
             f"Reference: {transfer.reference_code}"
@@ -327,8 +344,8 @@ async def external_transfer(
         client_email=current_user.email,
         client_phone=current_user.phone_e164 or "",
         amount=amount,
-        currency="EUR",
-        payout_amount=f"{local_amount} BIF",
+        currency=origin_currency,
+        payout_amount=f"{local_amount} {destination_currency}",
         credit_available=f"{credit_available_after}",
         receiver_name=data.recipient_name,
         receiver_phone=data.recipient_phone,
@@ -368,8 +385,8 @@ async def external_transfer(
             client_name=current_user.full_name or "",
             reference=transfer.reference_code,
             amount=str(amount),
-            currency="EUR",
-            payout_amount=f"{local_amount} BIF",
+            currency=origin_currency,
+            payout_amount=f"{local_amount} {destination_currency}",
             receiver_name=data.recipient_name,
             receiver_phone=data.recipient_phone,
             partner_name=data.partner_name,
