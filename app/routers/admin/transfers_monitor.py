@@ -56,6 +56,10 @@ async def list_external_transfers(
         None,
         description="Filtre par channel (bank_transfer, mobile_money, ...)",
     ),
+    user_id: Optional[UUID] = Query(
+        None,
+        description="Filtre par utilisateur (initiated_by)",
+    ),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
@@ -96,6 +100,9 @@ async def list_external_transfers(
         stmt = stmt.where(channel_field == channel_param)
     elif channel is None:
         stmt = stmt.where(channel_field.in_(external_channels_lower))
+
+    if user_id:
+        stmt = stmt.where(Transactions.initiated_by == user_id)
 
     if status:
         if status.lower() == "pending":
