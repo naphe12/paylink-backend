@@ -134,8 +134,10 @@ async def increase_credit_line(
 
     delta = Decimal(payload.amount)
     old_limit = credit_line.initial_amount or Decimal("0")
+    old_outstanding = credit_line.outstanding_amount or Decimal("0")
     credit_line.initial_amount = old_limit + delta
-    credit_line.outstanding_amount = (credit_line.outstanding_amount or Decimal("0")) + delta
+    new_outstanding = old_outstanding + delta
+    credit_line.outstanding_amount = new_outstanding
     credit_line.updated_at = datetime.utcnow()
 
     event = CreditLineEvents(
@@ -143,8 +145,8 @@ async def increase_credit_line(
         user_id=credit_line.user_id,
         amount_delta=delta,
         currency_code=credit_line.currency_code,
-        old_limit=old_limit,
-        new_limit=credit_line.initial_amount,
+        old_limit=old_outstanding,
+        new_limit=new_outstanding,
         operation_code=9001,
         status="updated",
         source="admin",
@@ -208,8 +210,8 @@ async def repay_credit_line(
         user_id=credit_line.user_id,
         amount_delta=-amount,
         currency_code=credit_line.currency_code,
-        old_limit=credit_line.initial_amount,
-        new_limit=credit_line.initial_amount,
+        old_limit=old_outstanding,
+        new_limit=new_outstanding,
         operation_code=9002,
         status="repaid",
         source="admin",
