@@ -280,7 +280,7 @@ async def add_tontine_members_admin(
         raise HTTPException(404, "Tontine introuvable")
 
     if not payload.member_ids:
-        return []
+        return await get_tontine_members_admin(str(tontine_uuid), db, admin)
 
     existing_members = (
         await db.execute(
