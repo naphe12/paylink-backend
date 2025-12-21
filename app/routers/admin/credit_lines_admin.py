@@ -187,7 +187,7 @@ async def repay_credit_line(
     movement = None
     if credit_line.currency_code.upper() == "EUR":
         wallet = await db.scalar(
-            select(Wallets).where(Wallets.user_id == credit_line.user_id).order_by(Wallets.created_at.asc())
+            select(Wallets).where(Wallets.user_id == credit_line.user_id)
         )
         if not wallet:
             raise HTTPException(404, "Wallet introuvable pour crédit EUR")
