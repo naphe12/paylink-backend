@@ -910,19 +910,23 @@ async def get_wallet_ledger(
        print(r.direction)
 
 
-    return [
-        {
-            "transaction_id": r.transaction_id,
-            "amount": float(r.amount),
-            "direction": r.direction,  # debit / credit
-            "balance_after": float(r.balance_after),
-            "created_at": r.created_at.isoformat(),
-            "reference": r.reference,
-            "operation_type": r.operation_type,
-            "description": r.description or "",
-        }
-        for r in rows
-    ]
+    entries = []
+    for r in rows:
+        direction_flag = str(r.direction or "").lower()
+        signed_amount = float(r.amount) * (-1 if direction_flag.startswith("debit") else 1)
+        entries.append(
+            {
+                "transaction_id": r.transaction_id,
+                "amount": signed_amount,
+                "direction": direction_flag or r.direction,  # debit / credit
+                "balance_after": float(r.balance_after),
+                "created_at": r.created_at.isoformat(),
+                "reference": r.reference,
+                "operation_type": r.operation_type,
+                "description": r.description or "",
+            }
+        )
+    return entries
 
 
 @router.get("/limits")
