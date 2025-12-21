@@ -1,10 +1,10 @@
 from datetime import date, datetime, time, timedelta, timezone
+import uuid
 from decimal import Decimal
 from typing import List
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import Text, cast, select, update
+from sqlalchemy import Text, cast, select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
@@ -229,12 +229,27 @@ def _serialize_members(rows):
     ]
 
 
+async def _resolve_tontine_id(identifier: str, db: AsyncSession) -> uuid.UUID:
+    try:
+        return uuid.UUID(identifier)
+    except Exception:
+        pass
+    # Fallback: chercher par nom (case-insensitive)
+    tontine_row = await db.scalar(
+        select(Tontines.tontine_id).where(func.lower(Tontines.name) == identifier.lower())
+    )
+    if not tontine_row:
+        raise HTTPException(404, "Tontine introuvable")
+    return tontine_row
+
+
 @router.get("/{tontine_id}/members")
 async def get_tontine_members_admin(
-    tontine_id: UUID,
+    tontine_id: str,
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
 ):
+    tontine_uuid = await _resolve_tontine_id(tontine_id, db)
     rows = (
         await db.execute(
             select(
@@ -244,7 +259,7 @@ async def get_tontine_members_admin(
                 TontineMembers.join_order,
             )
             .join(Users, Users.user_id == TontineMembers.user_id, isouter=True)
-            .where(TontineMembers.tontine_id == tontine_id)
+            .where(TontineMembers.tontine_id == tontine_uuid)
             .order_by(TontineMembers.join_order)
         )
     ).all()
@@ -253,12 +268,13 @@ async def get_tontine_members_admin(
 
 @router.post("/{tontine_id}/members", status_code=201)
 async def add_tontine_members_admin(
-    tontine_id: UUID,
+    tontine_id: str,
     payload: AdminTontineMembersAdd,
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
 ):
-    tontine = await db.scalar(select(Tontines).where(Tontines.tontine_id == tontine_id))
+    tontine_uuid = await _resolve_tontine_id(tontine_id, db)
+    tontine = await db.scalar(select(Tontines).where(Tontines.tontine_id == tontine_uuid))
     if not tontine:
         raise HTTPException(404, "Tontine introuvable")
 
@@ -268,7 +284,7 @@ async def add_tontine_members_admin(
     existing_members = (
         await db.execute(
             select(TontineMembers.user_id, TontineMembers.join_order).where(
-                TontineMembers.tontine_id == tontine_id
+                TontineMembers.tontine_id == tontine_uuid
             )
         )
     ).all()
@@ -287,17 +303,18 @@ async def add_tontine_members_admin(
         )
     ).all()
     found_map = {row.user_id: (row.full_name, row.email) for row in users_rows}
+    missing = [str(mid) for mid in new_ids if mid not in found_map]
+    if missing:
+        raise HTTPException(400, f"Membres introuvables: {', '.join(missing)}")
 
     members_to_add = []
     for mid in new_ids:
         names = found_map.get(mid)
-        if not names:
-            raise HTTPException(404, f"Membre introuvable: {mid}")
         full_name, email = names
         max_order += 1
         members_to_add.append(
             TontineMembers(
-                tontine_id=tontine_id,
+                tontine_id=tontine_uuid,
                 user_id=mid,
                 join_order=max_order,
                 user_name=full_name or email or "Membre",
@@ -306,20 +323,22 @@ async def add_tontine_members_admin(
     db.add_all(members_to_add)
     await db.commit()
 
-    return await get_tontine_members_admin(tontine_id, db, admin)
+    return await get_tontine_members_admin(str(tontine_uuid), db, admin)
 
 
 @router.delete("/{tontine_id}/members/{user_id}")
 async def remove_tontine_member_admin(
-    tontine_id: UUID,
-    user_id: UUID,
+    tontine_id: str,
+    user_id: str,
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
 ):
+    tontine_uuid = await _resolve_tontine_id(tontine_id, db)
+    user_uuid = uuid.UUID(user_id)
     member = await db.scalar(
         select(TontineMembers).where(
-            TontineMembers.tontine_id == tontine_id,
-            TontineMembers.user_id == user_id,
+            TontineMembers.tontine_id == tontine_uuid,
+            TontineMembers.user_id == user_uuid,
         )
     )
     if not member:
@@ -328,4 +347,4 @@ async def remove_tontine_member_admin(
     await db.delete(member)
     await db.commit()
 
-    return await get_tontine_members_admin(tontine_id, db, admin)
+    return await get_tontine_members_admin(str(tontine_uuid), db, admin)
