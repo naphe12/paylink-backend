@@ -1,5 +1,6 @@
 from datetime import date, datetime, time, timedelta, timezone
 import uuid
+from uuid import UUID
 from decimal import Decimal
 from typing import List
 
