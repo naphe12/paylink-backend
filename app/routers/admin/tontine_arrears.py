@@ -2,9 +2,9 @@ from datetime import date, datetime, time, timedelta, timezone
 import uuid
 from uuid import UUID
 from decimal import Decimal
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import Text, cast, select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
@@ -212,6 +212,24 @@ async def create_tontine_admin(
         "amount_per_member": float(tontine.amount_per_member),
         "members_added": len(payload.member_ids),
     }
+
+
+@router.get("")
+async def list_tontines_admin(
+    q: Optional[str] = Query(None, description="Filtre nom (ilike)"),
+    limit: int = Query(100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    stmt = select(Tontines.tontine_id, Tontines.name).order_by(Tontines.created_at.desc()).limit(limit)
+    if q:
+        pattern = f"%{q}%"
+        stmt = stmt.where(Tontines.name.ilike(pattern))
+    rows = (await db.execute(stmt)).all()
+    return [
+        {"tontine_id": str(tid), "name": name}
+        for tid, name in rows
+    ]
 
 
 class AdminTontineMembersAdd(BaseModel):
