@@ -38,6 +38,8 @@ from app.services.ledger import LedgerLine, LedgerService
 from app.services.limits import reset_limits_if_needed
 from app.services.risk_engine import calculate_risk_score
 from app.services.wallet_history import log_wallet_movement
+from app.models.credit_lines import CreditLines
+from app.models.credit_line_events import CreditLineEvents
 router = APIRouter()
 
 # 🔹 Obtenir le portefeuille utilisateur
@@ -524,6 +526,63 @@ async def get_credit_history(
         CreditLineHistoryRead.model_validate(row, from_attributes=True)
         for row in rows
     ]
+
+
+@router.get("/credit/line/events")
+async def get_credit_line_events(
+    limit: int = Query(100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user),
+):
+    credit_line = await db.scalar(
+        select(CreditLines)
+        .where(CreditLines.user_id == current_user.user_id)
+        .order_by(CreditLines.created_at.desc())
+    )
+    if not credit_line:
+        return {
+            "summary": {
+                "initial_amount": 0.0,
+                "used_amount": 0.0,
+                "outstanding_amount": 0.0,
+                "currency_code": current_user.country_code or "EUR",
+            },
+            "events": [],
+        }
+
+    events_rows = (
+        await db.execute(
+            select(CreditLineEvents)
+            .where(CreditLineEvents.credit_line_id == credit_line.credit_line_id)
+            .order_by(CreditLineEvents.created_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+
+    return {
+        "summary": {
+            "initial_amount": float(credit_line.initial_amount or 0),
+            "used_amount": float(credit_line.used_amount or 0),
+            "outstanding_amount": float(credit_line.outstanding_amount or 0),
+            "currency_code": credit_line.currency_code,
+        },
+        "events": [
+            {
+                "event_id": str(ev.event_id),
+                "credit_line_id": str(ev.credit_line_id),
+                "amount_delta": float(ev.amount_delta or 0),
+                "currency_code": ev.currency_code,
+                "old_limit": float(ev.old_limit) if ev.old_limit is not None else None,
+                "new_limit": float(ev.new_limit) if ev.new_limit is not None else None,
+                "operation_code": ev.operation_code,
+                "status": ev.status,
+                "source": ev.source,
+                "occurred_at": ev.occurred_at.isoformat() if ev.occurred_at else None,
+                "created_at": ev.created_at.isoformat() if ev.created_at else None,
+            }
+            for ev in events_rows
+        ],
+    }
 @router.get("/bonus/history")
 async def bonus_history(
     db: AsyncSession = Depends(get_db),
