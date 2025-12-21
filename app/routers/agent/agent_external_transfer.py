@@ -1,4 +1,4 @@
-from datetime import datetime
+﻿from datetime import datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -114,13 +114,41 @@ async def get_pending_transfers(
     current_user: Users = Depends(get_current_user)
 ):
     if current_user.role not in ["agent", "admin"]:
-        raise HTTPException(status_code=403, detail="Accès refusé")
+        raise HTTPException(status_code=403, detail="Acces refuse")
 
-    result = await db.execute(
-        select(ExternalTransfers).where(ExternalTransfers.status == "pending")
+    stmt = (
+        select(ExternalTransfers, Users.full_name, Users.email)
+        .join(Users, Users.user_id == ExternalTransfers.user_id, isouter=True)
+        .where(ExternalTransfers.status == "pending")
     )
-    transfers = result.scalars().all()
-    return transfers
+    rows = (await db.execute(stmt)).all()
+
+    serialized = []
+    for transfer, full_name, email in rows:
+        serialized.append(
+            {
+                "transfer_id": str(transfer.transfer_id),
+                "user_id": str(transfer.user_id),
+                "partner_name": transfer.partner_name,
+                "country_destination": transfer.country_destination,
+                "recipient_name": transfer.recipient_name,
+                "recipient_phone": transfer.recipient_phone,
+                "amount": float(transfer.amount),
+                "currency": transfer.currency,
+                "rate": float(transfer.rate) if transfer.rate is not None else None,
+                "local_amount": float(transfer.local_amount) if transfer.local_amount is not None else None,
+                "credit_used": bool(transfer.credit_used),
+                "status": transfer.status,
+                "reference_code": transfer.reference_code,
+                "metadata": transfer.metadata_,
+                "created_at": transfer.created_at,
+                "processed_by": str(transfer.processed_by) if transfer.processed_by else None,
+                "processed_at": transfer.processed_at,
+                "user_name": full_name,
+                "user_email": email,
+            }
+        )
+    return serialized
 
 
 @router.get("/ready")
