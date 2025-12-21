@@ -55,6 +55,7 @@ class WalletsRead(BaseModel):
     currency_code: str
     available: Decimal
     pending: Decimal
+    bonus_balance: Decimal | None = None
     display_currency_code: Optional[str] = None
     user_country_code: Optional[str] = None
     user_country_currency_code: Optional[str] = None
