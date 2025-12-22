@@ -15,6 +15,7 @@ router = APIRouter(prefix="/admin/users", tags=["Admin Users"])
 @router.get("/")
 async def list_users(
     q: str = "",
+    status: str = "",
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin)
 ):
@@ -37,6 +38,8 @@ async def list_users(
         .order_by(Users.created_at.desc())
         .limit(100)
     )
+    if status:
+        stmt = stmt.where(Users.status == status)
     rows = (await db.execute(stmt)).all()
     return [
         {
@@ -112,6 +115,22 @@ async def unblock_external(user_id: str, db: AsyncSession = Depends(get_db), adm
     await db.execute(update(Users).where(Users.user_id==user_id).values(external_transfers_blocked=False))
     await db.commit()
     return {"message": "✅ Transferts externes rétablis"}
+
+
+@router.delete("/{user_id}")
+async def delete_user(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin)
+):
+    user = await db.scalar(select(Users).where(Users.user_id == user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    if getattr(user, "status", "") != "suspended":
+        raise HTTPException(status_code=400, detail="Suppression réservée aux comptes suspendus.")
+    await db.delete(user)
+    await db.commit()
+    return {"message": "Utilisateur supprimé"}
 
 
 @router.post("/{user_id}/request-kyc-upgrade")
