@@ -126,11 +126,18 @@ async def delete_user(
     user = await db.scalar(select(Users).where(Users.user_id == user_id))
     if not user:
         raise HTTPException(status_code=404, detail="Utilisateur introuvable")
-    if getattr(user, "status", "") != "suspended":
-        raise HTTPException(status_code=400, detail="Suppression réservée aux comptes suspendus.")
-    await db.delete(user)
+    if getattr(user, "status", "") not in {"active", "suspended"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Suppression réservée aux comptes actifs ou suspendus.",
+        )
+    await db.execute(
+        update(Users)
+        .where(Users.user_id == user_id)
+        .values(status="closed")
+    )
     await db.commit()
-    return {"message": "Utilisateur supprimé"}
+    return {"message": "Utilisateur clôturé"}
 
 
 @router.post("/{user_id}/request-kyc-upgrade")
