@@ -19,6 +19,7 @@ from app.models.wallet_transactions import WalletTransactions
 from app.models.wallets import Wallets
 from app.services.mailer import send_email
 from app.models.agents import Agents
+from app.schemas.external_transfers import ExternalBeneficiaryRead
 
 router = APIRouter(prefix="/agent/external", tags=["Agent External Transfers"])
 
@@ -236,3 +237,66 @@ async def close_external_transfer(
         "message": "Transfert clôturé",
         "balance": float(wallet.available),
     }
+
+
+@router.get("/users")
+async def list_external_users(
+    db: AsyncSession = Depends(get_db),
+    current_agent: Users = Depends(get_current_agent),
+):
+    """
+    Liste des utilisateurs qui ont déjà fait un transfert externe.
+    """
+    stmt = (
+        select(
+            Users.user_id,
+            Users.full_name,
+            Users.email,
+            Users.phone_e164,
+        )
+        .join(ExternalTransfers, ExternalTransfers.user_id == Users.user_id)
+        .distinct()
+        .order_by(Users.full_name.asc())
+    )
+    rows = (await db.execute(stmt)).all()
+    return [
+        {
+            "user_id": str(r.user_id),
+            "full_name": r.full_name,
+            "email": r.email,
+            "phone": r.phone_e164,
+        }
+        for r in rows
+    ]
+
+
+@router.get("/beneficiaries", response_model=list[ExternalBeneficiaryRead])
+async def list_external_beneficiaries_for_user(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_agent: Users = Depends(get_current_agent),
+):
+    """
+    Bénéficiaires utilisés par un utilisateur pour ses transferts externes.
+    """
+    stmt = (
+        select(
+            ExternalTransfers.recipient_name,
+            ExternalTransfers.recipient_phone,
+            ExternalTransfers.partner_name,
+            ExternalTransfers.country_destination,
+        )
+        .where(ExternalTransfers.user_id == user_id)
+        .distinct()
+        .order_by(ExternalTransfers.recipient_name.asc())
+    )
+    rows = (await db.execute(stmt)).all()
+    return [
+        {
+            "recipient_name": r.recipient_name,
+            "recipient_phone": r.recipient_phone,
+            "partner_name": r.partner_name,
+            "country_destination": r.country_destination,
+        }
+        for r in rows
+    ]
