@@ -11,7 +11,8 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import get_current_user, get_current_admin
+from app.core.security import get_current_user
+from app.dependencies.auth import get_current_admin
 from app.models.bonus_history import BonusHistory
 from app.models.transactions import Transactions
 from app.models.users import Users
