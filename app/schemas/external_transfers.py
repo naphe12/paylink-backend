@@ -31,3 +31,10 @@ class ExternalTransferRead(ExternalTransferBase):
 
     class Config:
         from_attributes = True
+
+
+class ExternalBeneficiaryRead(BaseModel):
+    recipient_name: str
+    recipient_phone: str
+    partner_name: str
+    country_destination: str
