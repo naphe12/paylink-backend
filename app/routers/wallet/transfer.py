@@ -19,7 +19,11 @@ from app.models.transactions import Transactions
 from app.models.users import Users
 from app.models.wallet_transactions import WalletEntryDirectionEnum
 from app.models.wallets import Wallets
-from app.schemas.external_transfers import ExternalTransferCreate, ExternalTransferRead
+from app.schemas.external_transfers import (
+    ExternalBeneficiaryRead,
+    ExternalTransferCreate,
+    ExternalTransferRead,
+)
 from app.schemas.transactions import TransactionSend
 from app.services.aml import update_risk_score
 from app.services.ledger import LedgerLine, LedgerService
@@ -94,6 +98,38 @@ async def _resolve_fx_rate(
     if fx_row:
         return decimal.Decimal(fx_row)
     return decimal.Decimal("1")
+
+
+@router.get("/external/beneficiaries", response_model=list[ExternalBeneficiaryRead])
+async def list_external_beneficiaries(
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user),
+):
+    """
+    Liste des bénéficiaires déjà utilisés par l'utilisateur pour ses transferts externes.
+    """
+    stmt = (
+        select(
+            ExternalTransfers.recipient_name,
+            ExternalTransfers.recipient_phone,
+            ExternalTransfers.partner_name,
+            ExternalTransfers.country_destination,
+        )
+        .where(ExternalTransfers.user_id == current_user.user_id)
+        .distinct()
+        .order_by(ExternalTransfers.recipient_name.asc())
+    )
+    result = await db.execute(stmt)
+    rows = result.all()
+    return [
+        {
+          "recipient_name": r.recipient_name,
+          "recipient_phone": r.recipient_phone,
+          "partner_name": r.partner_name,
+          "country_destination": r.country_destination,
+        }
+        for r in rows
+    ]
 
 
 @router.post("/external", response_model=ExternalTransferRead)
