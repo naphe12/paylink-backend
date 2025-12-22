@@ -14,6 +14,9 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
+from app.models.credit_line_payments import CreditLinePayments
+from app.models.credit_line_events import CreditLineEvents
+from app.models.users import Users
 
 
 class CreditLines(Base):
@@ -52,3 +55,4 @@ class CreditLines(Base):
 
     user = relationship("Users", back_populates="credit_lines")
     events = relationship("CreditLineEvents", back_populates="credit_line")
+    payments = relationship("CreditLinePayments", back_populates="credit_line")
