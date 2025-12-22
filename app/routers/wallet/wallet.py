@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_user, get_current_admin
 from app.models.bonus_history import BonusHistory
 from app.models.transactions import Transactions
 from app.models.users import Users
@@ -1053,6 +1053,63 @@ async def financial_summary(
         select(func.count())
         .select_from(TontineMembers)
         .where(TontineMembers.user_id == current_user.user_id)
+    )
+
+    return FinancialSummary(
+        wallet_available=wallet.available or decimal.Decimal(0),
+        wallet_pending=wallet.pending or decimal.Decimal(0),
+        wallet_currency=wallet.currency_code or "EUR",
+        bonus_balance=wallet.bonus_balance,
+        credit_limit=credit_limit,
+        credit_used=credit_used,
+        credit_available=credit_available,
+        tontines_count=int(tontines_count or 0),
+    )
+
+
+@router.get("/admin/financial-summary/{user_id}", response_model=FinancialSummary)
+async def financial_summary_admin(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_admin: Users = Depends(get_current_admin),
+):
+    """
+    Vue synthétique de la situation financière pour un utilisateur (admin).
+    """
+    user = await db.get(Users, uuid.UUID(user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+
+    ledger = LedgerService(db)
+    result = await db.execute(
+        select(Wallets)
+        .options(selectinload(Wallets.user))
+        .where(Wallets.user_id == user.user_id)
+    )
+    wallet = result.scalar_one_or_none()
+    if not wallet:
+        wallet = Wallets(
+            user_id=user.user_id,
+            type="personal",
+            currency_code="EUR",
+            available=decimal.Decimal("0.00"),
+            pending=decimal.Decimal("0.00"),
+        )
+        db.add(wallet)
+        await db.commit()
+        await db.refresh(wallet)
+        wallet.user = user
+
+    await ledger.ensure_wallet_account(wallet)
+
+    credit_limit = decimal.Decimal(getattr(user, "credit_limit", 0) or 0)
+    credit_used = decimal.Decimal(getattr(user, "credit_used", 0) or 0)
+    credit_available = max(credit_limit - credit_used, decimal.Decimal(0))
+
+    tontines_count = await db.scalar(
+        select(func.count())
+        .select_from(TontineMembers)
+        .where(TontineMembers.user_id == user.user_id)
     )
 
     return FinancialSummary(
