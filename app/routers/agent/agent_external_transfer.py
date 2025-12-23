@@ -1,5 +1,7 @@
 ﻿from datetime import datetime
 from decimal import Decimal
+from datetime import date
+from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy import select
@@ -27,6 +29,19 @@ async def _require_agent(db: AsyncSession, user: Users) -> Agents:
     if not agent:
         raise HTTPException(status_code=404, detail="Profil agent introuvable.")
     return agent
+
+
+def _jsonify_metadata(value):
+    """
+    Ensure metadata content is JSON serializable for JSONB column.
+    """
+    if isinstance(value, (Decimal, UUID, datetime, date)):
+        return str(value)
+    if isinstance(value, dict):
+        return {k: _jsonify_metadata(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_jsonify_metadata(v) for v in value]
+    return value
 
 
 @router.patch("/{transfer_id}/status")
@@ -71,7 +86,7 @@ async def update_external_transfer_status(
     )
     if metadata_payload and isinstance(metadata_payload, dict):
         merged_metadata.update(metadata_payload)
-    transfer.metadata_ = merged_metadata
+    transfer.metadata_ = _jsonify_metadata(merged_metadata)
 
     txn = await db.scalar(
         select(Transactions).where(Transactions.related_entity_id == transfer.transfer_id)
@@ -265,7 +280,7 @@ async def close_external_transfer(
     )
     if metadata_payload and isinstance(metadata_payload, dict):
         metadata.update(metadata_payload)
-    transfer.metadata_ = {k: v for k, v in metadata.items() if v is not None}
+    transfer.metadata_ = _jsonify_metadata({k: v for k, v in metadata.items() if v is not None})
 
     await db.commit()
 
