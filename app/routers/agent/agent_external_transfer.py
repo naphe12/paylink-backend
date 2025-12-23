@@ -1,8 +1,7 @@
 ﻿from datetime import datetime
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.concurrency import run_in_threadpool
+from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,7 +16,7 @@ from app.models.transactions import Transactions
 from app.models.users import Users
 from app.models.wallet_transactions import WalletTransactions
 from app.models.wallets import Wallets
-from app.services.mailer import send_email
+from app.services.transaction_notifications import send_transaction_emails
 from app.models.agents import Agents
 from app.schemas.external_transfers import ExternalBeneficiaryRead
 
@@ -35,14 +34,14 @@ async def update_external_transfer_status(
     transfer_id: str,
     payload: dict,
     db: AsyncSession = Depends(get_db),
-    current_user: Users = Depends(get_current_user)
+    current_user: Users = Depends(get_current_user),
 ):
     """
-    ✅ Route Agent :
-    Met à jour le statut d'un transfert externe :
+    Route Agent :
+    Met a jour le statut d'un transfert externe :
     - status = 'succeeded' ou 'failed' (accepte aussi 'success' comme alias et normalise vers 'succeeded')
     - envoie email client
-    - met à jour la transaction liée
+    - met a jour la transaction liee
     """
 
     raw_status = (payload.get("status") or "").lower()
@@ -50,64 +49,77 @@ async def update_external_transfer_status(
         raise HTTPException(status_code=400, detail="Statut invalide (succeeded/failed uniquement)")
     new_status = "succeeded" if raw_status in ["succeeded", "success"] else "failed"
 
-    # 🔹 Récupère le transfert
-    result = await db.execute(select(ExternalTransfers).where(ExternalTransfers.transfer_id == transfer_id))
-    transfer = result.scalar_one_or_none()
+    transfer = await db.scalar(select(ExternalTransfers).where(ExternalTransfers.transfer_id == transfer_id))
     if not transfer:
         raise HTTPException(status_code=404, detail="Transfert introuvable")
 
-    # 🔹 Met à jour le statut
-    transfer.status = new_status
+    user = await db.scalar(select(Users).where(Users.user_id == transfer.user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur lie introuvable")
 
-    # 🔹 Met à jour la transaction associée
-    result_txn = await db.execute(
+    transfer.status = new_status
+    transfer.processed_by = current_user.user_id
+    transfer.processed_at = datetime.utcnow()
+
+    metadata_payload = payload.get("metadata") or payload.get("product_metadata")
+    merged_metadata = (transfer.metadata_ or {}).copy()
+    merged_metadata.update(
+        {
+            "status": new_status,
+            "processed_by_agent": str(current_user.user_id),
+        }
+    )
+    if metadata_payload and isinstance(metadata_payload, dict):
+        merged_metadata.update(metadata_payload)
+    transfer.metadata_ = merged_metadata
+
+    txn = await db.scalar(
         select(Transactions).where(Transactions.related_entity_id == transfer.transfer_id)
     )
-    txn = result_txn.scalar_one_or_none()
     if txn:
         txn.status = new_status
+        txn.updated_at = datetime.utcnow()
 
     await db.commit()
 
-    # 🔹 Prépare l’email
-    subject = f"Transfert {new_status.upper()} - Référence {transfer.reference_code}"
+    subject = f"Transfert {new_status.upper()} - Reference {transfer.reference_code}"
 
     if new_status == "succeeded":
         msg = f"""
-        Bonjour {transfer.user.full_name},
+        Bonjour {user.full_name},
 
-        ✅ Votre transfert a été effectué avec succès !
+        Votre transfert a ete effectue avec succes.
 
-        Détails :
-        - Référence : {transfer.reference_code}
-        - Bénéficiaire : {transfer.recipient_name}
-        - Téléphone : {transfer.recipient_phone}
-        - Montant envoyé : {transfer.amount} EUR
+        Details :
+        - Reference : {transfer.reference_code}
+        - Beneficiaire : {transfer.recipient_name}
+        - Telephone : {transfer.recipient_phone}
+        - Montant envoye : {transfer.amount} EUR
         - Partenaire : {transfer.partner_name}
         - Pays destination : {transfer.country_destination}
 
-        Merci d'utiliser PayLink 🌍
+        Merci d'utiliser PayLink.
         """
     else:
         msg = f"""
-        Bonjour {transfer.user.full_name},
+        Bonjour {user.full_name},
 
-        ❌ Votre transfert n’a pas pu être traité pour le moment.
-        Référence : {transfer.reference_code}
+        Votre transfert n'a pas pu etre traite pour le moment.
+        Reference : {transfer.reference_code}
         Montant : {transfer.amount} EUR
 
-        Un agent vous contactera pour plus d’informations.
+        Un agent vous contactera pour plus d'informations.
         """
 
-    await run_in_threadpool(
-        send_email,
-        transfer.user.email,
-        subject,
-        None,
-        body_html=msg,
+    await send_transaction_emails(
+        db,
+        initiator=user,
+        subject=subject,
+        template=None,
+        body=msg,
     )
 
-    return {"detail": f"Transfert {new_status} et e-mail envoyé."}
+    return {"detail": f"Transfert {new_status} et e-mail envoye."}
 
 @router.get("/pending")
 async def get_pending_transfers(
@@ -165,6 +177,7 @@ async def get_ready_transfers(
 @router.post("/{transfer_id}/close")
 async def close_external_transfer(
     transfer_id: str,
+    payload: dict | None = Body(None),
     db: AsyncSession = Depends(get_db),
     current_agent: Users = Depends(get_current_agent),
 ):
@@ -174,7 +187,7 @@ async def close_external_transfer(
         select(ExternalTransfers).where(ExternalTransfers.transfer_id == transfer_id)
     )
     if not transfer or transfer.status != "approved":
-        raise HTTPException(status_code=404, detail="Transfert introuvable ou déjà clos.")
+        raise HTTPException(status_code=404, detail="Transfert introuvable ou deja clos.")
 
     wallet = await db.scalar(
         select(Wallets).where(
@@ -216,7 +229,7 @@ async def close_external_transfer(
         currency_code=wallet.currency_code,
         balance_after=wallet.available,
         reference=str(transfer.transfer_id),
-        description=f"Clôture transfert {transfer.reference_code or transfer.reference}",
+        description=f"Cloture transfert {transfer.reference_code or transfer.transfer_id}",
     )
     db.add(wallet_tx)
 
@@ -232,9 +245,50 @@ async def close_external_transfer(
     )
     db.add(agent_tx)
 
+    await db.flush()
+
+    metadata_payload = (payload or {}).get("metadata") or (payload or {}).get("product_metadata")
+    metadata = (transfer.metadata_ or {}).copy()
+    metadata.update(
+        {
+            "operation": "external_transfer_close",
+            "transfer_id": str(transfer.transfer_id),
+            "transaction_id": str(txn.tx_id) if txn else None,
+            "agent_wallet_id": str(wallet.wallet_id),
+            "agent_user_id": str(current_agent.user_id),
+            "wallet_transaction_id": str(wallet_tx.transaction_id),
+            "agent_transaction_id": str(agent_tx.transaction_id),
+            "amount_debited": str(amount_to_debit),
+            "currency": wallet.currency_code,
+            "reference_code": transfer.reference_code,
+        }
+    )
+    if metadata_payload and isinstance(metadata_payload, dict):
+        metadata.update(metadata_payload)
+    transfer.metadata_ = {k: v for k, v in metadata.items() if v is not None}
+
     await db.commit()
+
+    user = await db.scalar(select(Users).where(Users.user_id == transfer.user_id))
+    if user:
+        body = f"""
+        Bonjour {user.full_name},
+
+        Votre transfert {transfer.reference_code} a ete complete par un agent.
+        Montant envoye : {transfer.amount} {transfer.currency}
+        Beneficiaire : {transfer.recipient_name} ({transfer.recipient_phone})
+
+        Merci d'utiliser PayLink.
+        """
+        await send_transaction_emails(
+            db,
+            initiator=user,
+            subject=f"Transfert {transfer.reference_code} complete",
+            template=None,
+            body=body,
+        )
     return {
-        "message": "Transfert clôturé",
+        "message": "Transfert cloture",
         "balance": float(wallet.available),
     }
 
