@@ -44,6 +44,39 @@ def _jsonify_metadata(value):
     return value
 
 
+async def _ensure_transfer_transaction(
+    db: AsyncSession,
+    transfer: ExternalTransfers,
+    fallback_tx: Transactions | None,
+) -> Transactions:
+    """
+    Garantit qu'une ligne Transactions existe avec tx_id == transfer.transfer_id
+    (FK strict coté DB). Si absente, on en crée une minimale en copiant les
+    infos connues du tx lié (related_entity_id) si disponible.
+    """
+    tx_by_id = await db.scalar(select(Transactions).where(Transactions.tx_id == transfer.transfer_id))
+    if tx_by_id:
+        return tx_by_id
+
+    amount = fallback_tx.amount if fallback_tx else transfer.amount or Decimal("0")
+    currency_code = fallback_tx.currency_code if fallback_tx else transfer.currency or "EUR"
+    new_tx = Transactions(
+        tx_id=transfer.transfer_id,  # respecte le FK
+        amount=amount,
+        currency_code=currency_code,
+        channel="external_transfer",
+        status=fallback_tx.status if fallback_tx else transfer.status or "completed",
+        initiated_by=fallback_tx.initiated_by if fallback_tx else transfer.user_id,
+        sender_wallet=fallback_tx.sender_wallet if fallback_tx else None,
+        receiver_wallet=fallback_tx.receiver_wallet if fallback_tx else None,
+        related_entity_id=transfer.transfer_id,
+        description=fallback_tx.description if fallback_tx else f"External transfer {transfer.reference_code}",
+    )
+    db.add(new_tx)
+    await db.flush()
+    return new_tx
+
+
 @router.patch("/{transfer_id}/status")
 async def update_external_transfer_status(
     transfer_id: str,
@@ -91,9 +124,9 @@ async def update_external_transfer_status(
     txn = await db.scalar(
         select(Transactions).where(Transactions.related_entity_id == transfer.transfer_id)
     )
-    if txn:
-        txn.status = new_status
-        txn.updated_at = datetime.utcnow()
+    txn = await _ensure_transfer_transaction(db, transfer, txn)
+    txn.status = new_status
+    txn.updated_at = datetime.utcnow()
 
     await db.commit()
 
@@ -231,9 +264,9 @@ async def close_external_transfer(
     txn = await db.scalar(
         select(Transactions).where(Transactions.related_entity_id == transfer.transfer_id)
     )
-    if txn:
-        txn.status = "completed"
-        txn.updated_at = datetime.utcnow()
+    txn = await _ensure_transfer_transaction(db, transfer, txn)
+    txn.status = "completed"
+    txn.updated_at = datetime.utcnow()
 
     wallet_tx = WalletTransactions(
         wallet_id=wallet.wallet_id,
