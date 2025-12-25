@@ -161,3 +161,52 @@ async def list_payment_requests(
             }
         )
     return results
+
+
+@router.get("/debtors")
+async def list_clients_with_debt(
+    limit: int = 200,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    """
+    Clients avec dette : credit_used > 0 ou solde wallet negatif.
+    """
+    stmt = (
+        select(
+            Users.user_id,
+            Users.full_name,
+            Users.email,
+            Users.paytag,
+            Users.username,
+            Users.credit_limit,
+            Users.credit_used,
+            Wallets.available,
+            Wallets.currency_code,
+        )
+        .join(Wallets, Wallets.user_id == Users.user_id)
+        .where(
+            or_(
+                Users.credit_used > 0,
+                Wallets.available < 0,
+            )
+        )
+        .order_by(func.coalesce(Users.credit_used, 0).desc(), Wallets.available.asc())
+        .limit(limit)
+    )
+
+    rows = (await db.execute(stmt)).all()
+    return [
+        {
+            "user_id": str(r.user_id),
+            "full_name": r.full_name,
+            "email": r.email,
+            "paytag": r.paytag,
+            "username": r.username,
+            "credit_limit": float(r.credit_limit or 0),
+            "credit_used": float(r.credit_used or 0),
+            "wallet_available": float(r.available or 0),
+            "wallet_currency": r.currency_code,
+        }
+        for r in rows
+    ]
