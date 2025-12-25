@@ -22,7 +22,7 @@ from app.utils.notify import send_notification
 from app.websocket_manager import ws_push_room
 from app.realtime.manager import ws_manager
 
-router = APIRouter()
+router = APIRouter(prefix="/wallet", tags=["Wallet Payments"])
 
 
 class PaymentRequestCreate(BaseModel):
