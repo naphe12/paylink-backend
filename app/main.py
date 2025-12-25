@@ -15,6 +15,7 @@ from app.routers.ref import exchange
 from app.routers.wallet import   wallet
 from app.routers.notifications import websocket as notif_ws
 from app.routers.wallet import payments as wallet_payments
+from app.routers.admin import payment_requests as admin_payment_requests_router
 from app.routers.invoices import router as invoices_router
 from app.routers.merchant import router as merchant_router
 from app.routers.loans import router as loans_router
@@ -79,6 +80,7 @@ app.include_router(country.router, prefix="/api/countries", tags=["Countries"])
 app.include_router(exchange.router)
 app.include_router(notif_ws.router)
 app.include_router(wallet_payments.router)
+app.include_router(admin_payment_requests_router.router)
 app.include_router(invoices_router)
 app.include_router(merchant_router)
 app.include_router(loans_router)
