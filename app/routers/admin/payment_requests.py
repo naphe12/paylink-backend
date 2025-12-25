@@ -1,5 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+import decimal
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy import select, or_, func
 from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,10 +14,73 @@ from app.models.wallets import Wallets
 router = APIRouter(prefix="/admin/payment-requests", tags=["Admin Payment Requests"])
 
 
+class AdminPaymentRequestCreate(BaseModel):
+    user_identifier: str
+    amount: decimal.Decimal
+    reason: str | None = None  # credit | credit_line | other
+
+
+async def _find_user(db: AsyncSession, identifier: str) -> Users | None:
+    ident = identifier.strip()
+    normalized = ident.lower()
+    paytag = normalized if normalized.startswith("@") else f"@{normalized}"
+    return await db.scalar(
+        select(Users).where(
+            or_(
+                func.lower(Users.email) == normalized,
+                func.lower(Users.username) == normalized,
+                func.lower(Users.paytag) == paytag,
+                Users.phone_e164 == ident,
+            )
+        )
+    )
+
+
+@router.post("")
+async def create_admin_payment_request(
+    payload: AdminPaymentRequestCreate,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    amount = decimal.Decimal(payload.amount)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Montant invalide")
+
+    user = await _find_user(db, payload.user_identifier)
+    if not user:
+        raise HTTPException(status_code=404, detail="Client introuvable")
+
+    wallet = await db.scalar(select(Wallets).where(Wallets.user_id == user.user_id))
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Wallet client introuvable")
+
+    description = "Demande de paiement (admin)"
+    reason = payload.reason
+    if reason == "credit":
+        description = "Demande remboursement credit"
+    elif reason == "credit_line":
+        description = "Demande remboursement ligne de credit"
+
+    tx = Transactions(
+        tx_id=None,  # auto gen
+        initiated_by=admin.user_id,
+        receiver_wallet=wallet.wallet_id,
+        amount=amount,
+        currency_code=wallet.currency_code,
+        channel="internal",
+        status="pending",
+        description=description,
+    )
+    db.add(tx)
+    await db.commit()
+    await db.refresh(tx)
+    return {"request_id": str(tx.tx_id), "status": tx.status}
+
+
 @router.get("")
 async def list_payment_requests(
-    status: str | None = Query(None, description="pending|succeeded|cancelled"),
-    limit: int = Query(200, ge=1, le=500),
+    status: str | None = None,
+    limit: int = 200,
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
 ):
@@ -28,7 +93,7 @@ async def list_payment_requests(
 
     conditions = [
         Transactions.channel == "internal",
-        Transactions.description.ilike("Demande de paiement%"),
+        requester.role == "admin",
     ]
     if status:
         conditions.append(Transactions.status == status)
