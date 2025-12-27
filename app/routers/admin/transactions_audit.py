@@ -207,7 +207,7 @@ async def _fetch_wallet_transactions(
     return [
         {
             "transaction_id": str(r.transaction_id),
-            "amount": float(r.amount),
+            "amount": (-float(r.amount)) if str(r.direction or "").lower().startswith("debit") else float(r.amount),
             "direction": r.direction,
             "balance_after": float(r.balance_after),
             "operation_type": r.operation_type,
