@@ -135,6 +135,11 @@ class LoanAdminItem(BaseModel):
     business_name: str | None = None
 
 
+class LoanAdminList(BaseModel):
+    total: int
+    items: list[LoanAdminItem]
+
+
 class LoanReminderPayload(BaseModel):
     message: str | None = None
 
@@ -459,30 +464,39 @@ async def disburse_loan(
     )
 
 
-@router.get("/", response_model=list[LoanAdminItem])
+@router.get("/", response_model=LoanAdminList)
 async def list_loans(
     status: str | None = None,
     overdue_only: bool = False,
     limit: int = 100,
+    offset: int = 0,
     db: AsyncSession = Depends(get_db),
     admin: Users = Depends(get_current_admin),
 ):
+    limit = min(limit, 200)
+    offset = max(offset, 0)
     stmt = (
         select(Loans)
         .options(selectinload(Loans.loan_repayments), selectinload(Loans.users))
         .order_by(Loans.created_at.desc())
-        .limit(min(limit, 200))
     )
 
     if status:
         stmt = stmt.where(Loans.status == status)
 
     rows = (await db.execute(stmt)).scalars().all()
-    response: list[LoanAdminItem] = []
+    filtered: list[tuple[Loans, bool]] = []
     for loan in rows:
         overdue = has_overdue_installments(loan.loan_repayments or [])
         if overdue_only and not overdue:
             continue
+        filtered.append((loan, overdue))
+
+    total = len(filtered)
+    page = filtered[offset : offset + limit]
+
+    response: list[LoanAdminItem] = []
+    for loan, overdue in page:
         response.append(
             LoanAdminItem(
                 loan_id=str(loan.loan_id),
@@ -496,9 +510,12 @@ async def list_loans(
                 created_at=loan.created_at,
                 outstanding_balance=outstanding_balance(loan.loan_repayments or []),
                 overdue=overdue,
+                product_type=loan.product_type,
+                product_id=str(loan.product_id) if loan.product_id else None,
+                business_name=loan.business_name,
             )
         )
-    return response
+    return LoanAdminList(total=total, items=response)
 
 
 @router.post("/{loan_id}/repay")
