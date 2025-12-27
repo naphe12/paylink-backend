@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -93,6 +93,8 @@ async def list_loans_admin(
     status: str | None = None,
     overdue_only: bool = False,
     limit: int = 100,
+    offset: int = 0,
+    product_type: str | None = None,
     db: AsyncSession = Depends(get_db),
     _: object = Depends(get_current_admin),
 ):
@@ -102,9 +104,12 @@ async def list_loans_admin(
         .options(selectinload(Loans.loan_repayments), selectinload(Loans.users))
         .order_by(Loans.created_at.desc())
         .limit(min(limit, 200))
+        .offset(max(offset, 0))
     )
     if status:
         stmt = stmt.where(Loans.status == status)
+    if product_type:
+        stmt = stmt.where(Loans.product_type == product_type)
 
     rows = (await db.execute(stmt)).scalars().all()
     response: list[LoanAdminItem] = []
@@ -125,6 +130,9 @@ async def list_loans_admin(
                 created_at=loan.created_at,
                 outstanding_balance=outstanding_balance(loan.loan_repayments or []),
                 overdue=overdue,
+                product_type=getattr(loan, "product_type", None),
+                product_id=str(getattr(loan, "product_id", "")) if getattr(loan, "product_id", None) else None,
+                business_name=getattr(loan, "business_name", None),
             )
         )
     return response
@@ -135,10 +143,12 @@ async def list_loans_admin_alias(
     status: str | None = None,
     overdue_only: bool = False,
     limit: int = 100,
+    offset: int = 0,
+    product_type: str | None = None,
     db: AsyncSession = Depends(get_db),
     _: object = Depends(get_current_admin),
 ):
-    return await list_loans_admin(status, overdue_only, limit, db, _)
+    return await list_loans_admin(status, overdue_only, limit, offset, product_type, db, _)
 
 
 @router.post("/{loan_id}/approve")
@@ -149,11 +159,26 @@ async def approve_loan(
 ):
     loan = await db.get(Loans, loan_id)
     if not loan:
-        raise HTTPException(404, "Crédit introuvable.")
+        raise HTTPException(404, "Credit introuvable.")
     if loan.status != "draft":
-        raise HTTPException(400, "Ce crédit n'est pas en attente (draft).")
+        raise HTTPException(400, "Ce credit n'est pas en attente (draft).")
+
+    if loan.product_id:
+        prod = (
+            await db.execute(
+                text("SELECT require_documents FROM paylink.loan_products WHERE product_id = :pid"),
+                {"pid": str(loan.product_id)},
+            )
+        ).mappings().first()
+        require_docs = prod["require_documents"] if prod else False
+        docs_status = (loan.metadata_ or {}).get("documents_status")
+        docs_payload = (loan.metadata_ or {}).get("documents") or []
+        if require_docs and not docs_payload:
+            raise HTTPException(400, "Documents requis manquants pour ce pret.")
+        if require_docs and docs_status != "approved":
+            raise HTTPException(400, "Documents requis non valides pour ce pret.")
 
     loan.status = "active"
     loan.updated_at = datetime.utcnow()
     await db.commit()
-    return {"message": "Crédit validé", "loan_id": str(loan.loan_id), "status": loan.status}
+    return {"message": "Credit valide", "loan_id": str(loan.loan_id), "status": loan.status}

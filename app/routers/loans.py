@@ -7,7 +7,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -32,12 +32,36 @@ from app.services.wallet_history import log_wallet_movement
 
 router = APIRouter(prefix="/loans", tags=["Loans"])
 
+def _row_to_product(row) -> dict:
+    return {
+        "product_id": str(row["product_id"]),
+        "name": row["name"],
+        "product_type": row["product_type"],
+        "min_principal": float(row["min_principal"]),
+        "max_principal": float(row["max_principal"]),
+        "term_min_months": row["term_min_months"],
+        "term_max_months": row["term_max_months"],
+        "apr_percent": float(row["apr_percent"]),
+        "fee_flat": float(row["fee_flat"]) if row["fee_flat"] is not None else None,
+        "fee_percent": float(row["fee_percent"]) if row["fee_percent"] is not None else None,
+        "penalty_rate_percent": float(row["penalty_rate_percent"]) if row["penalty_rate_percent"] is not None else None,
+        "grace_days": row["grace_days"],
+        "require_documents": bool(row["require_documents"]),
+        "metadata": row["metadata"],
+    }
+
 
 class LoanApplicationPayload(BaseModel):
     principal: Decimal = Field(..., gt=0)
     currency_code: str = Field(..., min_length=3, max_length=3)
     term_months: int = Field(..., ge=1, le=12)
-    apr_percent: Decimal = Field(default=Decimal("12.0"), gt=0)
+    apr_percent: Decimal | None = Field(default=Decimal("12.0"), gt=0)
+    product_id: uuid.UUID | None = None
+    product_type: Literal["consumer", "business"] | None = None
+    business_name: str | None = None
+    business_activity: str | None = None
+    monthly_revenue: Decimal | None = None
+    documents: list[dict] | None = None
 
 
 class LoanDecisionResponse(BaseModel):
@@ -78,6 +102,11 @@ class LoanDetail(BaseModel):
     risk_level: str | None
     outstanding_balance: Decimal
     overdue: bool
+    product_type: str | None = None
+    product_id: str | None = None
+    business_name: str | None = None
+    business_activity: str | None = None
+    monthly_revenue: Decimal | None = None
     installments: list[InstallmentRead]
 
 
@@ -101,6 +130,9 @@ class LoanAdminItem(BaseModel):
     created_at: datetime
     outstanding_balance: Decimal
     overdue: bool
+    product_type: str | None = None
+    product_id: str | None = None
+    business_name: str | None = None
 
 
 class LoanReminderPayload(BaseModel):
@@ -112,6 +144,22 @@ class LoanReminderResponse(BaseModel):
     reminder_sent: bool
     overdue_installments: int
     message: str
+
+
+@router.get("/products")
+async def list_loan_products(
+    product_type: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user_db),
+):
+    params = {}
+    sql = "SELECT * FROM paylink.loan_products"
+    if product_type:
+        sql += " WHERE product_type = :ptype"
+        params["ptype"] = product_type
+    sql += " ORDER BY created_at DESC"
+    rows = (await db.execute(text(sql), params)).mappings().all()
+    return [_row_to_product(r) for r in rows]
 
 
 def _ensure_active_user(user: Users):
@@ -130,6 +178,22 @@ async def apply_for_short_term_loan(
 ):
     _ensure_active_user(current_user)
 
+    product = None
+    if payload.product_id:
+        product_row = (
+            await db.execute(
+                text("SELECT * FROM paylink.loan_products WHERE product_id = :pid"),
+                {"pid": str(payload.product_id)},
+            )
+        ).mappings().first()
+        if not product_row:
+            raise HTTPException(404, "Produit de crédit introuvable.")
+        product = product_row
+
+    product_type = payload.product_type or (product["product_type"] if product else None) or "consumer"
+    if product and product["product_type"] != product_type:
+        raise HTTPException(400, "Type de produit incohérent.")
+
     active_stmt = select(func.count(Loans.loan_id)).where(
         Loans.borrower_user == current_user.user_id,
         Loans.status.in_(("draft", "active", "in_arrears")),
@@ -142,15 +206,36 @@ async def apply_for_short_term_loan(
     if payload.principal > available:
         raise HTTPException(400, "Montant demandé supérieur au plafond disponible.")
 
+    if product:
+        if payload.principal < Decimal(product["min_principal"]) or payload.principal > Decimal(product["max_principal"]):
+            raise HTTPException(400, "Montant hors des limites du produit.")
+        if payload.term_months < int(product["term_min_months"]) or payload.term_months > int(product["term_max_months"]):
+            raise HTTPException(400, "Duree hors des limites du produit.")
+        payload.apr_percent = Decimal(product["apr_percent"])
+        if product.get("require_documents") and not payload.documents:
+            raise HTTPException(400, "Documents requis pour ce produit.")
+
+    if product_type == "business":
+        if not payload.business_name and not payload.business_activity:
+            raise HTTPException(400, "Renseignez au moins le nom ou l'activite de l'entreprise.")
+
     risk_level = map_score_to_risk(current_user.risk_score)
     loan = Loans(
         borrower_user=current_user.user_id,
         principal=payload.principal,
         currency_code=payload.currency_code.upper(),
-        apr_percent=payload.apr_percent,
+        apr_percent=payload.apr_percent or Decimal("12.0"),
         term_months=payload.term_months,
         status="draft",
         risk_level=risk_level,
+        product_type=product_type,
+        product_id=str(payload.product_id) if payload.product_id else None,
+        business_name=payload.business_name,
+        business_activity=payload.business_activity,
+        monthly_revenue=payload.monthly_revenue,
+        penalty_rate_percent=Decimal(product["penalty_rate_percent"] or 0) if product else None,
+        grace_days=int(product["grace_days"]) if product else None,
+        metadata_=({"documents": payload.documents} if payload.documents else None),
     )
     db.add(loan)
     await db.commit()
@@ -203,6 +288,11 @@ async def get_my_loans(
                 risk_level=loan.risk_level,
                 outstanding_balance=outstanding_balance(loan.loan_repayments or []),
                 overdue=has_overdue_installments(loan.loan_repayments or []),
+                product_type=getattr(loan, "product_type", None),
+                product_id=str(getattr(loan, "product_id", "")) if getattr(loan, "product_id", None) else None,
+                business_name=getattr(loan, "business_name", None),
+                business_activity=getattr(loan, "business_activity", None),
+                monthly_revenue=getattr(loan, "monthly_revenue", None),
                 installments=installments,
             )
         )
@@ -298,6 +388,21 @@ async def disburse_loan(
         raise HTTPException(404, "Crédit introuvable.")
     if loan.status not in {"draft"}:
         raise HTTPException(400, "Crédit déjà débloqué.")
+
+    if loan.product_id:
+        prod_row = (
+            await db.execute(
+                text("SELECT require_documents FROM paylink.loan_products WHERE product_id = :pid"),
+                {"pid": str(loan.product_id)},
+            )
+        ).mappings().first()
+        require_docs = prod_row["require_documents"] if prod_row else False
+        docs_status = (loan.metadata_ or {}).get("documents_status")
+        docs_payload = (loan.metadata_ or {}).get("documents") or []
+        if require_docs and not docs_payload:
+            raise HTTPException(400, "Documents requis manquants pour ce prêt.")
+        if require_docs and docs_status != "approved":
+            raise HTTPException(400, "Documents requis non valides pour ce prêt.")
 
     installments = (
         await db.execute(
