@@ -328,7 +328,7 @@ def _build_alerts(
 
     net_ledger = net(ledger_rows, key="direction", amount="amount")
     net_wallet = net(wallet_rows, key="direction", amount="amount")
-    drift = net_wallet - net_ledger
+    drift = net_ledger + net_wallet
     if abs(drift) > 1:  # tolérance 1 unité monétaire
         alerts.append(
             {
