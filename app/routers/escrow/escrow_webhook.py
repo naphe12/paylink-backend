@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db import get_db
+from app.core.database import get_db
 from security.webhook_signing import verify_hmac_signature
 from settings import settings
 from schemas.escrow_chain import ChainDepositWebhook

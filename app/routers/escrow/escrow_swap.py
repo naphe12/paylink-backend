@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from decimal import Decimal
 
-from db import get_db
+from app.core.database import get_db
 from schemas.escrow_swap import SwapExecuteResponse
 from services.swap_engine import InternalInventorySwapProvider
 from services.escrow_swap_service import EscrowSwapService

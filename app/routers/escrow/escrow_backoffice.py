@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime, timezone
 
-from db import get_db
+from app.core.database import get_db
 from models.escrow_order import EscrowOrder
 from models.escrow_event import EscrowEvent
 from models.escrow_proof import EscrowProof

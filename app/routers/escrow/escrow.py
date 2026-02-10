@@ -5,7 +5,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from models.escrow_order import EscrowOrder
 from services.escrow_service import EscrowService
-from db import get_db  # ton provider AsyncSession
+from app.core.database import get_db
 import math
 
 from models.escrow_enums import EscrowOrderStatus

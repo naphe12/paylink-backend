@@ -170,12 +170,12 @@ app.include_router(debug.router)
 from app.routers import test_email
 app.include_router(test_email.router)
 
-from routers.escrow.escrow import router as escrow_router
+from app.routers.escrow.escrow import router as escrow_router
 app.include_router(escrow_router)
 
-from routers.escrow.escrow_webhook import router as escrow_webhook_router
+from app.routers.escrow.escrow_webhook import router as escrow_webhook_router
 app.include_router(escrow_webhook_router)
-from routers.escrow.backoffice_webhooks import router as backoffice_webhooks_router
+from app.routers.escrow.backoffice_webhooks import router as backoffice_webhooks_router
 app.include_router(backoffice_webhooks_router)
 
 

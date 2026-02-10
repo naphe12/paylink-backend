@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db import get_db
+from app.core.database import get_db
 
 router = APIRouter(prefix="/backoffice/webhooks", tags=["Backoffice - Webhooks"])
 
