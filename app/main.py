@@ -25,18 +25,24 @@ from app.routers.merchant import router as merchant_router
 from app.routers.loans import router as loans_router
 from app.routers.wallet import transactions
 from app.services.tontine_rotation import process_tontine_rotations
+from services.escrow_webhook_retry_worker import run_escrow_webhook_retry_worker
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 logging.getLogger("websockets.client").setLevel(logging.WARNING)
 logging.getLogger("websockets.server").setLevel(logging.WARNING)
 logger = get_logger("paylink")
 app = FastAPI(title="PayLink API (Dev Mode)", version="0.1")
+background_tasks = []
 
-async def rotation_worker():
+
+async def webhook_retry_worker():
     async for db in get_db():
         while True:
-            await process_tontine_rotations(db)
-            await asyncio.sleep(60 * 60)  # Vérifie toutes les heures
+            try:
+                await run_escrow_webhook_retry_worker(db)
+            except Exception as exc:
+                logger.error(f"Webhook retry worker error: {exc}")
+            await asyncio.sleep(60)
 
 # ✅ Ajout du middleware
 app.add_middleware(LoggerMiddleware)
@@ -164,11 +170,19 @@ app.include_router(debug.router)
 from app.routers import test_email
 app.include_router(test_email.router)
 
+from routers.escrow.escrow import router as escrow_router
+app.include_router(escrow_router)
+
+from routers.escrow.escrow_webhook import router as escrow_webhook_router
+app.include_router(escrow_webhook_router)
+from routers.escrow.backoffice_webhooks import router as backoffice_webhooks_router
+app.include_router(backoffice_webhooks_router)
 
 
 
 @app.on_event("startup")
 async def startup_event():
+    background_tasks.append(asyncio.create_task(webhook_retry_worker()))
     print("📜 Routes disponibles :")
     for route in app.router.routes:
         if isinstance(route, APIRoute):  # ✅ route HTTP classique
@@ -181,3 +195,5 @@ async def startup_event():
 async def root():
     return {"message": "🚀 PayLink backend en mode développement (sans Docker)"}
 logger.info("🚀 Démarrage du backend PayLink...")
+
+
