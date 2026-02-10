@@ -54,11 +54,12 @@ def _estimate_minutes_remaining(order: EscrowOrder) -> int:
 
 @router.post("/orders", response_model=dict)
 async def create_escrow(
-    order: EscrowOrder,
+    order_payload: dict,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     try:
+        order = EscrowOrder(**order_payload)
         today_stats = (
             await db.execute(
                 text(
