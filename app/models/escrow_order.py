@@ -1,4 +1,7 @@
 import uuid
+import decimal
+from datetime import datetime
+
 from sqlalchemy import String, Integer, Numeric, Text, ARRAY
 from sqlalchemy.dialects.postgresql import UUID, TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
@@ -21,22 +24,22 @@ class EscrowOrder(Base):
 
     status: Mapped[EscrowOrderStatus] = mapped_column(default=EscrowOrderStatus.CREATED)
     ttl_seconds: Mapped[int] = mapped_column(Integer, default=1800)
-    expires_at: Mapped = mapped_column(TIMESTAMP(timezone=True))
-    cancelled_at: Mapped = mapped_column(TIMESTAMP(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
-    usdc_expected: Mapped = mapped_column(Numeric(24, 8))
-    usdc_received: Mapped = mapped_column(Numeric(24, 8), default=0)
-    usdc_fee: Mapped = mapped_column(Numeric(24, 8), default=0)
+    usdc_expected: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 8))
+    usdc_received: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 8), default=0)
+    usdc_fee: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 8), default=0)
 
     conversion_mode: Mapped[EscrowConversionMode] = mapped_column(default=EscrowConversionMode.INVENTORY_INTERNAL)
-    usdt_target: Mapped = mapped_column(Numeric(24, 8))
-    usdt_received: Mapped = mapped_column(Numeric(24, 8), default=0)
-    conversion_fee_usdt: Mapped = mapped_column(Numeric(24, 8), default=0)
-    conversion_rate_usdc_usdt: Mapped = mapped_column(Numeric(24, 12))
+    usdt_target: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 8))
+    usdt_received: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 8), default=0)
+    conversion_fee_usdt: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 8), default=0)
+    conversion_rate_usdc_usdt: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 12))
 
-    rate_bif_usdt: Mapped = mapped_column(Numeric(24, 8))
-    bif_target: Mapped = mapped_column(Numeric(24, 2))
-    bif_paid: Mapped = mapped_column(Numeric(24, 2), default=0)
+    rate_bif_usdt: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 8))
+    bif_target: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 2))
+    bif_paid: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 2), default=0)
 
     deposit_network: Mapped[EscrowNetwork]
     deposit_address: Mapped[str] = mapped_column(String)
@@ -45,11 +48,11 @@ class EscrowOrder(Base):
 
     deposit_tx_hash: Mapped[str | None] = mapped_column(String)
     deposit_tx_from: Mapped[str | None] = mapped_column(String)
-    deposit_tx_amount: Mapped = mapped_column(Numeric(24, 8))
+    deposit_tx_amount: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 8))
     deposit_confirmations: Mapped[int] = mapped_column(Integer, default=0)
-    funded_at: Mapped = mapped_column(TIMESTAMP(timezone=True))
+    funded_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
-    swapped_at: Mapped = mapped_column(TIMESTAMP(timezone=True))
+    swapped_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     swap_reference: Mapped[str | None] = mapped_column(String)
 
     payout_method: Mapped[EscrowPayoutMethod] = mapped_column(default=EscrowPayoutMethod.MOBILE_MONEY)
@@ -57,11 +60,11 @@ class EscrowOrder(Base):
     payout_account_number: Mapped[str | None] = mapped_column(String)
     payout_provider: Mapped[str | None] = mapped_column(String)
     payout_reference: Mapped[str | None] = mapped_column(String)
-    payout_initiated_at: Mapped = mapped_column(TIMESTAMP(timezone=True))
-    paid_out_at: Mapped = mapped_column(TIMESTAMP(timezone=True))
+    payout_initiated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    paid_out_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
     risk_score: Mapped[int] = mapped_column(Integer, default=0)
     flags: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
 
-    created_at: Mapped = mapped_column(TIMESTAMP(timezone=True))
-    updated_at: Mapped = mapped_column(TIMESTAMP(timezone=True))
+    created_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))

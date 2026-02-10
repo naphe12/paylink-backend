@@ -1,3 +1,6 @@
+import decimal
+from datetime import datetime
+
 from sqlalchemy import String, Integer, Numeric, BigInteger
 from sqlalchemy.dialects.postgresql import TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
@@ -15,8 +18,8 @@ class EscrowChainDeposit(Base):
     tx_hash: Mapped[str] = mapped_column(String, nullable=False)
     from_address: Mapped[str | None] = mapped_column(String)
     to_address: Mapped[str] = mapped_column(String, nullable=False)
-    amount: Mapped = mapped_column(Numeric(24, 8))
+    amount: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 8))
     block_number: Mapped[int | None] = mapped_column(BigInteger)
     confirmations: Mapped[int] = mapped_column(Integer, default=0)
-    detected_at: Mapped = mapped_column(TIMESTAMP(timezone=True))
-    confirmed_at: Mapped = mapped_column(TIMESTAMP(timezone=True))
+    detected_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    confirmed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))

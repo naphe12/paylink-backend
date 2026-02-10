@@ -1,3 +1,6 @@
+import decimal
+from datetime import datetime
+
 from sqlalchemy import String, Numeric
 from sqlalchemy.dialects.postgresql import TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
@@ -13,9 +16,9 @@ class EscrowSwap(Base):
     mode: Mapped[EscrowConversionMode]
     input_symbol: Mapped[str] = mapped_column(String, default="USDC")
     output_symbol: Mapped[str] = mapped_column(String, default="USDT")
-    input_amount: Mapped = mapped_column(Numeric(24, 8))
-    output_amount: Mapped = mapped_column(Numeric(24, 8))
-    fee_amount: Mapped = mapped_column(Numeric(24, 8), default=0)
-    rate: Mapped = mapped_column(Numeric(24, 12))
+    input_amount: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 8))
+    output_amount: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 8))
+    fee_amount: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 8), default=0)
+    rate: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 12))
     reference: Mapped[str | None] = mapped_column(String)
-    executed_at: Mapped = mapped_column(TIMESTAMP(timezone=True))
+    executed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
