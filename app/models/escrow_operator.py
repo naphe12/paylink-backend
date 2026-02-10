@@ -1,4 +1,6 @@
 import uuid
+from datetime import datetime
+
 from sqlalchemy import Boolean, String
 from sqlalchemy.dialects.postgresql import UUID, TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
@@ -14,5 +16,5 @@ class EscrowOperator(Base):
     role: Mapped[str] = mapped_column(String, default="OPERATOR")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
-    created_at: Mapped = mapped_column(TIMESTAMP(timezone=True))
-    updated_at: Mapped = mapped_column(TIMESTAMP(timezone=True))
+    created_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))

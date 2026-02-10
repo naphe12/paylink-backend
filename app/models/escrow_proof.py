@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from sqlalchemy import String
 from sqlalchemy.dialects.postgresql import TIMESTAMP, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -15,4 +17,4 @@ class EscrowProof(Base):
     metadata: Mapped[dict] = mapped_column(JSONB, default=dict)
     created_by_type: Mapped[EscrowActorType] = mapped_column(default=EscrowActorType.OPERATOR)
     created_by_id: Mapped[str | None]
-    created_at: Mapped = mapped_column(TIMESTAMP(timezone=True))
+    created_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))

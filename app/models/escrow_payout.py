@@ -1,3 +1,6 @@
+import decimal
+from datetime import datetime
+
 from sqlalchemy import String, Numeric
 from sqlalchemy.dialects.postgresql import TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
@@ -14,9 +17,9 @@ class EscrowPayout(Base):
     provider: Mapped[str | None] = mapped_column(String)
     account_name: Mapped[str | None] = mapped_column(String)
     account_number: Mapped[str | None] = mapped_column(String)
-    amount_bif: Mapped = mapped_column(Numeric(24, 2))
+    amount_bif: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 2))
     reference: Mapped[str | None] = mapped_column(String)
     status: Mapped[str] = mapped_column(String, default="PENDING")
-    initiated_at: Mapped = mapped_column(TIMESTAMP(timezone=True))
-    confirmed_at: Mapped = mapped_column(TIMESTAMP(timezone=True))
+    initiated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    confirmed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     failure_reason: Mapped[str | None] = mapped_column(String)
