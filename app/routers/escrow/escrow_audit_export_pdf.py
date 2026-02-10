@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
-from db import get_db
+from app.core.database import get_db
 
 router = APIRouter(prefix="/backoffice/escrow/audit", tags=["Backoffice - Audit Export"])
 

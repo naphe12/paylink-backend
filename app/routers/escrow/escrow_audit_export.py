@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
-from db import get_db
+from app.core.database import get_db
 
 router = APIRouter(prefix="/backoffice/escrow/audit", tags=["Backoffice - Audit Export"])
 
