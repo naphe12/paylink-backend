@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     # =====================
     REDIS_URL: str | None = None
     VITE_API_URL: str | None = None
-
+    ESCROW_WEBHOOK_SECRET:str
     
     TZ:str
 # --- Backend ---   
