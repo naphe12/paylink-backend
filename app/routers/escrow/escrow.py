@@ -1,4 +1,6 @@
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
@@ -59,6 +61,49 @@ async def create_escrow(
     db: AsyncSession = Depends(get_db),
 ):
     try:
+        if "amount_usdc" in order_payload:
+            raw_amount = order_payload.get("amount_usdc")
+            try:
+                amount_usdc = Decimal(str(raw_amount))
+            except (InvalidOperation, TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="Montant USDC invalide")
+
+            if amount_usdc <= 0:
+                raise HTTPException(status_code=400, detail="Le montant USDC doit etre superieur a 0")
+
+            rate_bif_usdt = Decimal(str(order_payload.get("rate_bif_usdt", "2900")))
+            payout_name = str(order_payload.get("recipient_name") or "").strip()
+            payout_phone = str(order_payload.get("recipient_phone") or "").strip()
+            if not payout_name or not payout_phone:
+                raise HTTPException(status_code=400, detail="Nom et telephone du beneficiaire sont obligatoires")
+
+            user_id = order_payload.get("user_id")
+            if user_id:
+                try:
+                    user_uuid = uuid.UUID(str(user_id))
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="user_id invalide")
+            else:
+                user_uuid = uuid.uuid4()
+
+            synthetic_address = f"0x{uuid.uuid4().hex}{uuid.uuid4().hex[:8]}"
+            order_payload = {
+                "user_id": user_uuid,
+                "usdc_expected": amount_usdc,
+                "usdt_target": amount_usdc,
+                "conversion_rate_usdc_usdt": Decimal("1"),
+                "rate_bif_usdt": rate_bif_usdt,
+                "bif_target": (amount_usdc * rate_bif_usdt).quantize(Decimal("0.01")),
+                "deposit_network": order_payload.get("deposit_network", "POLYGON"),
+                "deposit_address": order_payload.get("deposit_address") or synthetic_address,
+                "deposit_required_confirmations": int(order_payload.get("deposit_required_confirmations", 1)),
+                "deposit_tx_amount": Decimal("0"),
+                "payout_account_name": payout_name,
+                "payout_account_number": payout_phone,
+                "payout_method": order_payload.get("payout_method", "MOBILE_MONEY"),
+                "flags": list(order_payload.get("flags") or []),
+            }
+
         order = EscrowOrder(**order_payload)
         today_stats = (
             await db.execute(
