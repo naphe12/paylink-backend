@@ -2,10 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from security.webhook_signing import verify_hmac_signature
-from settings import settings
-from schemas.escrow_chain import ChainDepositWebhook
-from services.escrow_webhook_service import (
+from app.security.webhook_signing import verify_hmac_signature
+from app.config import settings
+from app.schemas.escrow_chain import ChainDepositWebhook
+from app.services.escrow_webhook_service import (
     enqueue_webhook_retry,
     process_usdc_webhook,
 )
