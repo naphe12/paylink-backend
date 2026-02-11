@@ -8,9 +8,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from models.escrow_order import EscrowOrder
 from services.escrow_service import EscrowService
 from app.core.database import get_db
+from app.config import settings
+from app.dependencies.auth import get_current_user_db
+from app.models.users import Users
+from app.security.rate_limit import rate_limit
+from app.services.audit_service import audit_log
+from app.services.risk_decision_log import log_risk_decision
+from app.services.risk_service import RiskService
 import math
 
 from models.escrow_enums import EscrowOrderStatus
+from services.escrow_ledger_hooks import (
+    post_funded_usdc_deposit_journal,
+    post_swap_usdc_to_usdt_journal,
+    on_payout_confirmed,
+)
 
 router = APIRouter(prefix="/escrow", tags=["Escrow"])
 DAILY_USDC_LIMIT = 5000
@@ -59,8 +71,25 @@ async def create_escrow(
     order_payload: dict,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user_db),
 ):
     try:
+        ip = request.client.host if request.client else None
+        ua = request.headers.get("user-agent")
+        user_id = str(getattr(current_user, "user_id", ""))
+
+        await rate_limit(request, key=f"user:{user_id}:escrow_create_min", limit=5, window_seconds=60)
+        await rate_limit(request, key=f"user:{user_id}:escrow_create_hour", limit=20, window_seconds=3600)
+
+        user_status = str(getattr(current_user, "status", "")).lower()
+        user_kyc = str(getattr(current_user, "kyc_status", "")).lower()
+        if user_status != "active":
+            raise HTTPException(status_code=403, detail="Compte inactif pour creation escrow")
+        if user_kyc != "verified":
+            raise HTTPException(status_code=403, detail="KYC non verifie")
+        if bool(getattr(current_user, "external_transfers_blocked", False)):
+            raise HTTPException(status_code=403, detail="Transferts externes bloques")
+
         if "amount_usdc" in order_payload:
             raw_amount = order_payload.get("amount_usdc")
             try:
@@ -77,14 +106,7 @@ async def create_escrow(
             if not payout_name or not payout_phone:
                 raise HTTPException(status_code=400, detail="Nom et telephone du beneficiaire sont obligatoires")
 
-            user_id = order_payload.get("user_id")
-            if user_id:
-                try:
-                    user_uuid = uuid.UUID(str(user_id))
-                except ValueError:
-                    raise HTTPException(status_code=400, detail="user_id invalide")
-            else:
-                user_uuid = uuid.uuid4()
+            user_uuid = current_user.user_id
 
             synthetic_address = f"0x{uuid.uuid4().hex}{uuid.uuid4().hex[:8]}"
             order_payload = {
@@ -105,6 +127,8 @@ async def create_escrow(
             }
 
         order = EscrowOrder(**order_payload)
+        incoming_usdc = float(order.usdc_expected or 0)
+
         today_stats = (
             await db.execute(
                 text(
@@ -124,7 +148,6 @@ async def create_escrow(
         total_usdc_today = float(today_stats[0] or 0)
         tx_count_today = int(today_stats[1] or 0)
         open_created_count = int(today_stats[2] or 0)
-        incoming_usdc = float(order.usdc_expected or 0)
 
         if total_usdc_today + incoming_usdc > DAILY_USDC_LIMIT:
             raise HTTPException(
@@ -176,7 +199,14 @@ async def create_escrow(
                 order.deposit_confirmations = order.deposit_required_confirmations
                 order.funded_at = datetime.now(timezone.utc)
 
-        o = await EscrowService.create_order(db, order)
+        o = await EscrowService.create_order(
+            db,
+            user=current_user,
+            payload=order,
+            ip=ip,
+            user_agent=ua,
+        )
+        await db.commit()
         return {
             "id": str(o.id),
             "status": o.status,
@@ -193,9 +223,18 @@ async def create_escrow(
 
 
 @router.get("/orders/{order_id}", response_model=dict)
-async def get_escrow(order_id: str, db: AsyncSession = Depends(get_db)):
+async def get_escrow(
+    order_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user_db),
+):
     try:
         o = await EscrowService.get_order(db, order_id)
+        current_user_id = str(getattr(current_user, "user_id", ""))
+        current_role = str(getattr(current_user, "role", "")).lower()
+        is_owner = str(o.user_id) == current_user_id
+        if not is_owner and current_role not in {"admin", "agent", "operator"}:
+            raise HTTPException(status_code=403, detail="Acces refuse")
         return {
             "id": str(o.id),
             "status": o.status,
@@ -222,19 +261,74 @@ async def get_escrow(order_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/orders/{order_id}/mark-paid")
-async def mark_paid(order_id: str, db: AsyncSession = Depends(get_db)):
+async def mark_paid(
+    order_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user_db),
+):
     try:
+        current_role = str(getattr(current_user, "role", "")).lower()
+        if current_role not in {"admin", "operator"}:
+            raise HTTPException(status_code=403, detail="Acces reserve aux operateurs")
         o = await EscrowService.get_order(db, order_id)
+        before = {"status": str(o.status), "bif_paid": float(o.bif_paid or 0)}
+        owner = await db.get(Users, o.user_id)
+        if owner:
+            risk = await RiskService.evaluate_payout(db, user=owner, order=o)
+            await log_risk_decision(
+                db,
+                user_id=str(owner.user_id),
+                order_id=str(o.id),
+                stage="PAYOUT",
+                result=risk,
+            )
+            if risk.decision == "BLOCK":
+                await db.commit()
+                raise HTTPException(status_code=403, detail=f"Payout blocked: {risk.reasons}")
+            if risk.decision == "REVIEW":
+                flags = [str(f) for f in list(o.flags or [])]
+                if "MANUAL_REVIEW:PAYOUT" not in flags:
+                    flags.append("MANUAL_REVIEW:PAYOUT")
+                o.flags = flags
+                await db.commit()
+                return {"status": "PAYOUT_REVIEW", "reasons": risk.reasons}
         await EscrowService.mark_paid_out(db, o)
+        after = {"status": "PAID_OUT", "bif_paid": float(o.bif_paid or 0)}
+        actor_id = getattr(current_user, "id", None) or getattr(current_user, "user_id", None)
+        await audit_log(
+            db,
+            actor_user_id=str(actor_id) if actor_id else None,
+            actor_role=str(getattr(current_user, "role", "") or ""),
+            action="ESCROW_PAYOUT_CONFIRMED",
+            entity_type="escrow_order",
+            entity_id=str(o.id),
+            before_state=before,
+            after_state=after,
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+        await db.commit()
         return {"status": "PAID_OUT"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/orders/{order_id}/retry", response_model=dict)
-async def retry_order_payment(order_id: str, db: AsyncSession = Depends(get_db)):
+async def retry_order_payment(
+    order_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user_db),
+):
     try:
         o = await EscrowService.get_order(db, order_id)
+        current_user_id = str(getattr(current_user, "user_id", ""))
+        current_role = str(getattr(current_user, "role", "")).lower()
+        is_owner = str(o.user_id) == current_user_id
+        if not is_owner and current_role not in {"admin", "agent", "operator"}:
+            raise HTTPException(status_code=403, detail="Acces refuse")
         current_status = o.status.value if hasattr(o.status, "value") else str(o.status)
         can_retry = current_status in {"CREATED", "FUNDED"}
         if not can_retry:
@@ -281,6 +375,82 @@ async def retry_order_payment(order_id: str, db: AsyncSession = Depends(get_db))
             "order_id": str(refreshed.id),
             "escrow_status": refreshed.status,
             "expires_at": refreshed.expires_at,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/orders/{order_id}/sandbox/{action}", response_model=dict)
+async def sandbox_simulate_transition(
+    order_id: str,
+    action: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user_db),
+):
+    try:
+        if not settings.SANDBOX_ENABLED:
+            raise HTTPException(status_code=403, detail="Sandbox disabled")
+        if settings.SANDBOX_ADMIN_ONLY:
+            role = (str(getattr(current_user, "role", "")) or "").strip().lower()
+            if role not in {"admin", "operator"}:
+                raise HTTPException(status_code=403, detail="Sandbox admin only")
+
+        o = await EscrowService.get_order(db, order_id)
+        flags = list(o.flags or [])
+        if "SANDBOX" not in flags:
+            raise HTTPException(status_code=400, detail="Action reservee au mode sandbox")
+
+        current_status = o.status.value if hasattr(o.status, "value") else str(o.status)
+        requested_action = str(action or "").strip().upper()
+
+        if requested_action == "FUND":
+            if current_status != "CREATED":
+                raise HTTPException(status_code=400, detail=f"Action FUND non autorisee pour status={current_status}")
+            o.usdc_received = o.usdc_expected
+            o.deposit_confirmations = o.deposit_required_confirmations
+            o.funded_at = datetime.now(timezone.utc)
+            o.status = EscrowOrderStatus.FUNDED
+            await post_funded_usdc_deposit_journal(db, o)
+
+        elif requested_action == "SWAP":
+            if current_status != "FUNDED":
+                raise HTTPException(status_code=400, detail=f"Action SWAP non autorisee pour status={current_status}")
+            o.usdt_received = o.usdc_received or o.usdt_target
+            o.conversion_fee_usdt = Decimal("0")
+            o.swapped_at = datetime.now(timezone.utc)
+            o.status = EscrowOrderStatus.SWAPPED
+            await post_swap_usdc_to_usdt_journal(db, o)
+
+        elif requested_action == "PAYOUT_PENDING":
+            if current_status != "SWAPPED":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Action PAYOUT_PENDING non autorisee pour status={current_status}",
+                )
+            o.payout_initiated_at = datetime.now(timezone.utc)
+            o.status = EscrowOrderStatus.PAYOUT_PENDING
+
+        elif requested_action == "PAYOUT":
+            if current_status != "PAYOUT_PENDING":
+                raise HTTPException(status_code=400, detail=f"Action PAYOUT non autorisee pour status={current_status}")
+            o.bif_paid = o.bif_target
+            o.paid_out_at = datetime.now(timezone.utc)
+            o.status = EscrowOrderStatus.PAID_OUT
+            await on_payout_confirmed(db, o)
+
+        else:
+            raise HTTPException(status_code=400, detail=f"Action sandbox inconnue: {requested_action}")
+
+        await db.commit()
+        await db.refresh(o)
+
+        return {
+            "status": "OK",
+            "id": str(o.id),
+            "escrow_status": o.status,
+            "is_sandbox": "SANDBOX" in list(o.flags or []),
         }
     except HTTPException:
         raise

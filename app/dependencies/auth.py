@@ -60,6 +60,10 @@ async def get_current_user(
 
     return user
 
+
+# Explicit alias for lightweight auth usage (JWT + minimal DB fields).
+get_current_user_light = get_current_user
+
 # 🧩 Version 1 — légère (JWT uniquement)
 async def get_current_user_token(token: str = Depends(oauth2_scheme)) -> UserTokenData:
     try:
@@ -96,7 +100,7 @@ async def get_current_user_db(
 
     return user
 
-async def get_current_agent(current_user: Users = Depends(get_current_user)) -> Users:
+async def get_current_agent(current_user: Users = Depends(get_current_user_db)) -> Users:
     if current_user.role not in ("agent", "admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -105,7 +109,7 @@ async def get_current_agent(current_user: Users = Depends(get_current_user)) -> 
     return current_user
 
 
-async def get_current_admin(current_user: Users = Depends(get_current_user)) -> Users:
+async def get_current_admin(current_user: Users = Depends(get_current_user_db)) -> Users:
     if current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
