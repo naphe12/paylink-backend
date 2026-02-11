@@ -1,4 +1,4 @@
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy import select
@@ -10,14 +10,40 @@ from app.logger import get_logger
 from app.models.users import Users
 from app.schemas.users import UserTokenData
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 logger = get_logger("auth")
 
+
+def _extract_bearer(raw_value: str | None) -> str | None:
+    if not raw_value:
+        return None
+    parts = raw_value.strip().split(" ", 1)
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return parts[1].strip() or None
+    return None
+
+
+def _resolve_token(token: str | None, request: Request) -> str:
+    resolved = token
+    if not resolved:
+        resolved = _extract_bearer(request.headers.get("Authorization"))
+    if not resolved:
+        resolved = request.headers.get("X-Access-Token")
+    if resolved and resolved.lower().startswith("bearer "):
+        resolved = resolved.split(" ", 1)[1].strip()
+    if not resolved:
+        resolved = request.cookies.get("access_token") or request.cookies.get("token")
+    if not resolved:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return resolved
+
 async def get_current_user(
-    token: str = Depends(oauth2_scheme),
+    request: Request,
+    token: str | None = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db)
 ) -> Users:
     try:
+        token = _resolve_token(token, request)
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         user_id: str | None = payload.get("sub")
 
@@ -65,8 +91,12 @@ async def get_current_user(
 get_current_user_light = get_current_user
 
 # 🧩 Version 1 — légère (JWT uniquement)
-async def get_current_user_token(token: str = Depends(oauth2_scheme)) -> UserTokenData:
+async def get_current_user_token(
+    request: Request,
+    token: str | None = Depends(oauth2_scheme),
+) -> UserTokenData:
     try:
+        token = _resolve_token(token, request)
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         user_id = payload.get("sub")
         email = payload.get("email")
@@ -80,10 +110,12 @@ async def get_current_user_token(token: str = Depends(oauth2_scheme)) -> UserTok
 
 # 🧩 Version 2 — ORM complète (ancien comportement)
 async def get_current_user_db(
-    token: str = Depends(oauth2_scheme),
+    request: Request,
+    token: str | None = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db)
 ):
     try:
+        token = _resolve_token(token, request)
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         user_id = payload.get("sub")
         if not user_id:

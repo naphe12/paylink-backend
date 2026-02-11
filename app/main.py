@@ -168,7 +168,7 @@ app.include_router(backoffice_risk_router)
 async def startup_event():
     background_tasks.append(asyncio.create_task(webhook_retry_worker()))
     background_tasks.append(asyncio.create_task(alerts_worker()))
-    if settings.APP_ENV != "prod":
+    if settings.APP_ENV != "prod" and settings.SANDBOX_ENABLED:
         background_tasks.append(asyncio.create_task(sandbox_transition_worker()))
 
     print("Routes disponibles :")
