@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from models.escrow_policy import EscrowPolicy
+from app.models.escrow_policy import EscrowPolicy
 
 class PolicyService:
     @staticmethod

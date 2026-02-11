@@ -1,9 +1,9 @@
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
-from models.escrow_trader import EscrowTrader
-from models.escrow_order import EscrowOrder
-from models.escrow_enums import EscrowOrderStatus
+from app.models.escrow_trader import EscrowTrader
+from app.models.escrow_order import EscrowOrder
+from app.models.escrow_enums import EscrowOrderStatus
 
 # si tu n'as pas de model SQLAlchemy pour trader_quotes, fais en SQL text() (plus rapide à intégrer).
 from sqlalchemy import text

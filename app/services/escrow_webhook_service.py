@@ -5,9 +5,9 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models.escrow_chain_deposit import EscrowChainDeposit
-from models.escrow_enums import EscrowOrderStatus
-from models.escrow_order import EscrowOrder
+from app.models.escrow_chain_deposit import EscrowChainDeposit
+from app.models.escrow_enums import EscrowOrderStatus
+from app.models.escrow_order import EscrowOrder
 from schemas.escrow_chain import ChainDepositWebhook
 from services.escrow_notifications import notify
 from services.risk_service import RiskService

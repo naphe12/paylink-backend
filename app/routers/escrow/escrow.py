@@ -5,7 +5,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-from models.escrow_order import EscrowOrder
+from app.models.escrow_order import EscrowOrder
 from services.escrow_service import EscrowService
 from app.core.database import get_db
 from app.config import settings
@@ -17,7 +17,7 @@ from app.services.risk_decision_log import log_risk_decision
 from app.services.risk_service import RiskService
 import math
 
-from models.escrow_enums import EscrowOrderStatus
+from app.models.escrow_enums import EscrowOrderStatus
 from services.escrow_ledger_hooks import (
     post_funded_usdc_deposit_journal,
     post_swap_usdc_to_usdt_journal,
