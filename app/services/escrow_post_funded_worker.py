@@ -3,9 +3,9 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models.escrow_order import EscrowOrder
-from models.escrow_enums import EscrowOrderStatus
-from models.escrow_event import EscrowEvent
+from app.models.escrow_order import EscrowOrder
+from app.models.escrow_enums import EscrowOrderStatus
+from app.models.escrow_event import EscrowEvent
 
 from services.swap_engine import InternalInventorySwapProvider
 from services.escrow_swap_service import EscrowSwapService

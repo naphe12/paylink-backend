@@ -1,6 +1,6 @@
 from decimal import Decimal
 from sqlalchemy.ext.asyncio import AsyncSession
-from models.escrow_event import EscrowEvent
+from app.models.escrow_event import EscrowEvent
 
 class EscrowLedgerService:
     def __init__(self, ledger):

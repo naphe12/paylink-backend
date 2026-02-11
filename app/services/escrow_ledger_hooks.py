@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models.escrow_order import EscrowOrder
+from app.models.escrow_order import EscrowOrder
 from services.paylink_ledger_service import PaylinkLedgerService
 
 
