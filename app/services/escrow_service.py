@@ -3,6 +3,7 @@ from sqlalchemy import select
 from fastapi import HTTPException
 from models.escrow_order import EscrowOrder
 from models.escrow_enums import EscrowOrderStatus
+from app.services.aml_service import run_aml
 from app.services.risk_service import RiskService
 from app.services.risk_decision_log import log_risk_decision
 from app.services.audit_service import audit_log
@@ -50,18 +51,47 @@ class EscrowService:
             result=risk,
         )
 
+        db.add(order)
+        await db.flush()
+
+        aml = await run_aml(
+            db,
+            user=user,
+            order=order,
+            stage="CREATE",
+            actor_user_id=str(user.user_id),
+            actor_role=str(getattr(user, "role", "") or ""),
+            ip=ip,
+            user_agent=user_agent,
+        )
+
+        flags = [str(f) for f in list(order.flags or [])]
+
+        if aml.decision == "BLOCK":
+            order.status = EscrowOrderStatus.CANCELLED
+            if "BLOCKED:AML_CREATE" not in flags:
+                flags.append("BLOCKED:AML_CREATE")
+            if "AML_REVIEW" not in flags:
+                flags.append("AML_REVIEW")
+            order.flags = flags
+            raise HTTPException(status_code=403, detail=f"AML blocked: {aml.hits}")
+
         if risk.decision == "BLOCK":
+            if "BLOCKED:RISK_CREATE" not in flags:
+                flags.append("BLOCKED:RISK_CREATE")
+            order.flags = flags
             raise HTTPException(status_code=403, detail=f"Blocked: {risk.reasons}")
 
         order.risk_score = int(risk.score or 0)
+        if aml.decision == "REVIEW":
+            if "MANUAL_REVIEW:AML_CREATE" not in flags:
+                flags.append("MANUAL_REVIEW:AML_CREATE")
+            if "AML_REVIEW" not in flags:
+                flags.append("AML_REVIEW")
         if risk.decision == "REVIEW":
-            flags = [str(f) for f in list(order.flags or [])]
             if "MANUAL_REVIEW:CREATE" not in flags:
                 flags.append("MANUAL_REVIEW:CREATE")
-            order.flags = flags
-
-        db.add(order)
-        await db.flush()
+        order.flags = flags
 
         await audit_log(
             db,
@@ -78,6 +108,11 @@ class EscrowService:
                     "score": risk.score,
                     "decision": risk.decision,
                     "reasons": risk.reasons,
+                },
+                "aml": {
+                    "score": aml.score,
+                    "decision": aml.decision,
+                    "hits": aml.hits,
                 },
             },
             ip=ip,
