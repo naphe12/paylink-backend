@@ -20,8 +20,22 @@ async def run_sandbox_auto_transitions(db):
     if not settings.SANDBOX_ENABLED:
         return
 
-    result = await db.execute(select(EscrowOrder))
+    result = await db.execute(
+        select(EscrowOrder)
+        .where(
+            EscrowOrder.flags.any("SANDBOX"),
+            EscrowOrder.status.in_(
+                [
+                    EscrowOrderStatus.CREATED,
+                    EscrowOrderStatus.FUNDED,
+                    EscrowOrderStatus.SWAPPED,
+                ]
+            ),
+        )
+        .limit(200)
+    )
     orders = result.scalars().all()
+    changed = False
 
     for order in orders:
         if not _is_sandbox(order):
@@ -34,11 +48,17 @@ async def run_sandbox_auto_transitions(db):
             order.status = EscrowOrderStatus.FUNDED
             order.usdc_received = order.usdc_expected
             order.deposit_confirmations = order.deposit_required_confirmations
+            changed = True
         elif order.status == EscrowOrderStatus.FUNDED:
             order.status = EscrowOrderStatus.SWAPPED
             order.usdt_received = order.usdc_received or order.usdt_target
+            changed = True
         elif order.status == EscrowOrderStatus.SWAPPED:
             order.bif_paid = order.bif_target
             order.status = EscrowOrderStatus.PAID_OUT
+            changed = True
 
-    await db.commit()
+    if changed:
+        await db.commit()
+    else:
+        await db.rollback()
