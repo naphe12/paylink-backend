@@ -11,6 +11,10 @@ from models.escrow_order import EscrowOrder
 from schemas.escrow_chain import ChainDepositWebhook
 from services.escrow_notifications import notify
 from services.risk_service import RiskService
+from services.escrow_ledger_hooks import post_funded_usdc_deposit_journal as on_funded
+from app.models.users import Users
+from app.services.audit_service import audit_log
+from app.services.risk_decision_log import log_risk_decision
 
 
 async def _ensure_webhook_log_table(db: AsyncSession) -> None:
@@ -61,7 +65,13 @@ async def _log_webhook_event(
     )
 
 
-async def process_usdc_webhook(db: AsyncSession, payload: ChainDepositWebhook) -> dict:
+async def process_usdc_webhook(
+    db: AsyncSession,
+    payload: ChainDepositWebhook,
+    *,
+    ip: str | None = None,
+    user_agent: str | None = None,
+) -> dict:
     res = await db.execute(
         select(EscrowOrder)
         .where(EscrowOrder.deposit_address == payload.to_address)
@@ -70,6 +80,9 @@ async def process_usdc_webhook(db: AsyncSession, payload: ChainDepositWebhook) -
     order = res.scalar_one_or_none()
     if not order:
         raise ValueError("Escrow order not found")
+
+    if order.status != EscrowOrderStatus.CREATED:
+        return {"status": "IGNORED", "order_id": str(order.id)}
 
     deposit = EscrowChainDeposit(
         order_id=order.id,
@@ -100,23 +113,66 @@ async def process_usdc_webhook(db: AsyncSession, payload: ChainDepositWebhook) -
 
     subject = None
     message = None
+    before_state = {"status": str(order.status)}
+    response_status = str(order.status)
     if payload.confirmations >= order.deposit_required_confirmations:
-        score, flags = RiskService.score(
-            usdc_amount=payload.amount,
-            confirmations=payload.confirmations,
-            network=payload.network,
-        )
         order.usdc_received = payload.amount
         order.deposit_tx_hash = payload.tx_hash
         order.deposit_confirmations = payload.confirmations
         order.funded_at = datetime.now(timezone.utc)
-        order.risk_score = score
+        user = await db.get(Users, order.user_id)
+        if not user:
+            raise ValueError("User not found")
+
+        risk = await RiskService.evaluate_funded(db, user=user, order=order)
+        await log_risk_decision(
+            db,
+            user_id=str(user.user_id),
+            order_id=str(order.id),
+            stage="FUNDED",
+            result=risk,
+        )
+        order.risk_score = int(risk.score or 0)
+
+        flags = [str(f) for f in list(order.flags or [])]
+        flags = [f for f in flags if f != "MANUAL_REVIEW:FUNDED" and f != "BLOCKED:FUNDED"]
+        if risk.decision == "BLOCK":
+            flags.append("BLOCKED:FUNDED")
+            order.status = EscrowOrderStatus.FAILED
+            response_status = "BLOCKED"
+        elif risk.decision == "REVIEW":
+            flags.append("MANUAL_REVIEW:FUNDED")
+            response_status = "MANUAL_REVIEW"
+        else:
+            order.status = EscrowOrderStatus.FUNDED
+            response_status = "FUNDED"
+            await on_funded(db, order)
+            subject = "USDC recus"
+            message = (
+                f"Nous avons recu votre paiement USDC pour la transaction {order.id}. "
+                "Nous traitons la conversion."
+            )
         order.flags = flags
-        order.status = EscrowOrderStatus.FUNDED
-        subject = "USDC recus"
-        message = (
-            f"Nous avons recu votre paiement USDC pour la transaction {order.id}. "
-            "Nous traitons la conversion."
+
+        await audit_log(
+            db,
+            actor_user_id=None,
+            actor_role="SYSTEM",
+            action="WEBHOOK_USDC_FUNDED",
+            entity_type="escrow_order",
+            entity_id=str(order.id),
+            before_state=before_state,
+            after_state={
+                "status": response_status,
+                "tx_hash": payload.tx_hash,
+                "risk": {
+                    "score": risk.score,
+                    "decision": risk.decision,
+                    "reasons": risk.reasons,
+                },
+            },
+            ip=ip,
+            user_agent=user_agent,
         )
 
     await db.commit()
@@ -140,9 +196,9 @@ async def process_usdc_webhook(db: AsyncSession, payload: ChainDepositWebhook) -
     await db.commit()
 
     return {
-        "status": "OK",
+        "status": response_status if payload.confirmations >= order.deposit_required_confirmations else "PENDING_CONFIRMATIONS",
         "order_id": str(order.id),
-        "escrow_status": order.status,
+        "escrow_status": response_status if payload.confirmations >= order.deposit_required_confirmations else str(order.status),
     }
 
 
@@ -152,6 +208,10 @@ async def enqueue_webhook_retry(
     event_type: str,
     payload: dict,
     last_error: str,
+    actor_user_id: str | None = None,
+    actor_role: str | None = "SYSTEM",
+    ip: str | None = None,
+    user_agent: str | None = None,
 ) -> None:
     await _ensure_webhook_log_table(db)
     await db.execute(
@@ -190,6 +250,23 @@ async def enqueue_webhook_retry(
         attempts=0,
         payload=payload,
         error=last_error,
+    )
+    await audit_log(
+        db,
+        actor_user_id=actor_user_id,
+        actor_role=actor_role,
+        action="WEBHOOK_RETRY_ENQUEUED",
+        entity_type="escrow_webhook",
+        entity_id=None,
+        before_state=None,
+        after_state={
+            "status": "QUEUED_RETRY",
+            "event_type": event_type,
+            "tx_hash": payload.get("tx_hash"),
+            "error": last_error,
+        },
+        ip=ip,
+        user_agent=user_agent,
     )
     await db.commit()
 
