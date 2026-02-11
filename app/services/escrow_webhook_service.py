@@ -13,6 +13,7 @@ from services.escrow_notifications import notify
 from services.risk_service import RiskService
 from services.escrow_ledger_hooks import post_funded_usdc_deposit_journal as on_funded
 from app.models.users import Users
+from app.services.aml_service import run_aml
 from app.services.audit_service import audit_log
 from app.services.risk_decision_log import log_risk_decision
 
@@ -125,6 +126,16 @@ async def process_usdc_webhook(
             raise ValueError("User not found")
 
         risk = await RiskService.evaluate_funded(db, user=user, order=order)
+        aml = await run_aml(
+            db,
+            user=user,
+            order=order,
+            stage="FUNDED",
+            actor_user_id=None,
+            actor_role="SYSTEM",
+            ip=ip,
+            user_agent=user_agent,
+        )
         await log_risk_decision(
             db,
             user_id=str(user.user_id),
@@ -135,13 +146,25 @@ async def process_usdc_webhook(
         order.risk_score = int(risk.score or 0)
 
         flags = [str(f) for f in list(order.flags or [])]
-        flags = [f for f in flags if f != "MANUAL_REVIEW:FUNDED" and f != "BLOCKED:FUNDED"]
-        if risk.decision == "BLOCK":
+        flags = [
+            f
+            for f in flags
+            if f not in {"MANUAL_REVIEW:FUNDED", "BLOCKED:FUNDED", "MANUAL_REVIEW:AML_FUNDED", "BLOCKED:AML_FUNDED"}
+        ]
+        if risk.decision == "BLOCK" or aml.decision == "BLOCK":
             flags.append("BLOCKED:FUNDED")
-            order.status = EscrowOrderStatus.FAILED
+            if aml.decision == "BLOCK":
+                flags.append("BLOCKED:AML_FUNDED")
+            order.status = EscrowOrderStatus.CANCELLED
+            if "AML_REVIEW" not in flags:
+                flags.append("AML_REVIEW")
             response_status = "BLOCKED"
-        elif risk.decision == "REVIEW":
+        elif risk.decision == "REVIEW" or aml.decision == "REVIEW":
             flags.append("MANUAL_REVIEW:FUNDED")
+            if aml.decision == "REVIEW":
+                flags.append("MANUAL_REVIEW:AML_FUNDED")
+                if "AML_REVIEW" not in flags:
+                    flags.append("AML_REVIEW")
             response_status = "MANUAL_REVIEW"
         else:
             order.status = EscrowOrderStatus.FUNDED
@@ -169,6 +192,11 @@ async def process_usdc_webhook(
                     "score": risk.score,
                     "decision": risk.decision,
                     "reasons": risk.reasons,
+                },
+                "aml": {
+                    "score": aml.score,
+                    "decision": aml.decision,
+                    "hits": aml.hits,
                 },
             },
             ip=ip,

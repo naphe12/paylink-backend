@@ -3,8 +3,8 @@ import uuid
 from services.payout_port import PayoutProvider, PayoutResult
 
 
-class LumicashProvider(PayoutProvider):
-    name = "lumicash"
+class ProviderB(PayoutProvider):
+    name = "providerb"
 
     async def send_payout(
         self,
@@ -13,16 +13,15 @@ class LumicashProvider(PayoutProvider):
         phone: str,
         reference: str,
     ) -> dict:
-        # TODO: remplacer par appel API reel
         return {
-            "reference": reference or f"LUMI-{uuid.uuid4()}",
+            "reference": reference or f"PROVB-{uuid.uuid4()}",
             "provider_status": "SENT",
             "amount_bif": amount_bif,
             "phone": phone,
         }
 
     async def send_bif(self, amount_bif: float, destination: dict) -> PayoutResult:
-        ref = f"LUMI-{uuid.uuid4()}"
+        ref = f"PROVB-{uuid.uuid4()}"
         payload = await self.send_payout(
             amount_bif=amount_bif,
             phone=str(destination.get("account") or ""),

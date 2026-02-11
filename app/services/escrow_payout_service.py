@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from models.escrow_order import EscrowOrder
 from models.escrow_payout import EscrowPayout
@@ -15,9 +15,16 @@ from app.services.circuit_breaker import (
     circuit_on_failure,
     circuit_on_success,
 )
+from app.services.liquidity_guard import LiquidityGuard
+from app.services.aml_service import run_aml
 from app.services.audit_service import audit_log
 from app.services.risk_service import RiskService
 from app.services.risk_decision_log import log_risk_decision
+from app.services.aml_service import enqueue_alert
+from app.services.payout.payout_router import PayoutRouter
+from app.services.payout.providers.lumicash import LumicashProvider
+from app.services.payout.providers.providerb import ProviderBProvider
+from app.services.payout.providers.providerc import ProviderCProvider
 
 class EscrowPayoutService:
     @staticmethod
@@ -60,23 +67,128 @@ class EscrowPayoutService:
             order.flags = flags
             return {"status": "PAYOUT_REVIEW"}
 
-        if payout_port is not None:
-            if not await circuit_allow_payout(db):
-                raise HTTPException(status_code=503, detail="Payout temporarily disabled (circuit breaker)")
-            try:
-                payout_result = await payout_port.send_bif(
-                    float(order.bif_target),
-                    {
-                        "provider": order.payout_provider,
-                        "account": order.payout_account_number,
-                        "name": order.payout_account_name,
-                    },
-                )
-                order.payout_reference = getattr(payout_result, "reference", None) or order.payout_reference
-                await circuit_on_success(db)
-            except Exception:
-                await circuit_on_failure(db)
-                raise
+        aml = await run_aml(
+            db,
+            user=user,
+            order=order,
+            stage="PAYOUT",
+            actor_user_id=str(operator.user_id) if operator else None,
+            actor_role=str(operator.role) if operator else "SYSTEM",
+            ip=ip,
+            user_agent=user_agent,
+        )
+        if aml.decision == "BLOCK":
+            raise HTTPException(status_code=403, detail="AML blocked payout")
+        if aml.decision == "REVIEW":
+            order.flags = list(set(list(order.flags or []) + ["PAYOUT_REVIEW"]))
+            await db.commit()
+            return {"status": "PAYOUT_REVIEW"}
+
+        ok, balance, needed = await LiquidityGuard.require_treasury(
+            db,
+            currency="BIF",
+            required_amount=float(order.bif_target),
+        )
+        if not ok:
+            order.flags = list(set(list(order.flags or []) + ["LIQUIDITY_PENDING"]))
+            await audit_log(
+                db,
+                actor_user_id=str(operator.user_id) if operator else None,
+                actor_role=str(operator.role) if operator else None,
+                action="LIQUIDITY_BLOCK_PAYOUT",
+                entity_type="escrow_order",
+                entity_id=str(order.id),
+                before_state=None,
+                after_state={"balance": balance, "needed": needed, "currency": "BIF"},
+                ip=ip,
+                user_agent=user_agent,
+            )
+            await enqueue_alert(
+                db,
+                type="LIQUIDITY_LOW",
+                severity="HIGH",
+                user_id=str(order.user_id),
+                order_id=str(order.id),
+                payload={
+                    "balance": balance,
+                    "needed": needed,
+                    "currency": "BIF",
+                },
+            )
+            await db.commit()
+            raise HTTPException(status_code=503, detail="Treasury liquidity insufficient")
+
+        providers = [payout_port] if payout_port is not None else [
+            LumicashProvider(),
+            ProviderBProvider(),
+            ProviderCProvider(),
+        ]
+        payout_router = PayoutRouter(providers)
+
+        try:
+            await db.execute(
+                text(
+                    """
+                    UPDATE escrow.orders
+                    SET payout_initiated_at = now()
+                    WHERE id = :oid::uuid
+                    """
+                ),
+                {"oid": str(order.id)},
+            )
+
+            routed = await payout_router.send_with_failover(
+                db,
+                amount_bif=float(order.bif_target),
+                account_number=str(order.payout_account_number or ""),
+                account_name=order.payout_account_name,
+                reference=str(order.id),
+            )
+
+            await db.execute(
+                text(
+                    """
+                    UPDATE escrow.orders
+                    SET payout_provider = :p,
+                        payout_reference = :ref
+                    WHERE id = :oid::uuid
+                    """
+                ),
+                {
+                    "oid": str(order.id),
+                    "p": str(routed.get("provider") or ""),
+                    "ref": str(order.id),
+                },
+            )
+            order.payout_provider = str(routed.get("provider") or order.payout_provider or "")
+            order.payout_reference = str(order.id)
+            order.payout_initiated_at = datetime.now(timezone.utc)
+            order.paid_out_at = datetime.now(timezone.utc)
+            order.flags = list(set(list(order.flags or []) + ["PAYOUT_SUCCESS"]))
+        except Exception as exc:
+            order.flags = list(set(list(order.flags or []) + ["PAYOUT_FAILED"]))
+            await audit_log(
+                db,
+                actor_user_id=str(operator.user_id) if operator else None,
+                actor_role=str(operator.role) if operator else None,
+                action="ESCROW_PAYOUT_FAILED",
+                entity_type="escrow_order",
+                entity_id=str(order.id),
+                before_state=None,
+                after_state={"error": str(exc)},
+                ip=ip,
+                user_agent=user_agent,
+            )
+            await enqueue_alert(
+                db,
+                type="PAYOUT_PROVIDER_DOWN",
+                severity="HIGH",
+                user_id=str(order.user_id),
+                order_id=str(order.id),
+                payload={"error": str(exc)},
+            )
+            await db.commit()
+            raise
 
         before_state = {"status": str(order.status)}
         order.bif_paid = order.bif_target
@@ -116,6 +228,33 @@ class EscrowPayoutService:
         if not order or order.status != EscrowOrderStatus.PAYOUT_PENDING:
             raise ValueError("Order not ready for payout")
         before = {"status": str(order.status), "bif_paid": str(order.bif_paid)}
+        user = await db.get(Users, order.user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        aml = await run_aml(
+            db,
+            user=user,
+            order=order,
+            stage="PAYOUT",
+            actor_user_id=str(getattr(actor, "user_id", None) or getattr(actor, "id", None)) if actor else None,
+            actor_role=str(getattr(actor, "role", "SYSTEM")) if actor else "SYSTEM",
+            ip=request_ip,
+            user_agent=request_ua,
+        )
+        if aml.decision == "BLOCK":
+            flags = [str(f) for f in list(order.flags or [])]
+            if "BLOCKED:AML_PAYOUT" not in flags:
+                flags.append("BLOCKED:AML_PAYOUT")
+            order.flags = flags
+            raise HTTPException(status_code=403, detail=f"AML payout blocked: {aml.hits}")
+        if aml.decision == "REVIEW":
+            flags = [str(f) for f in list(order.flags or [])]
+            if "MANUAL_REVIEW:AML_PAYOUT" not in flags:
+                flags.append("MANUAL_REVIEW:AML_PAYOUT")
+            order.flags = flags
+            await db.commit()
+            return {"status": "PAYOUT_REVIEW"}
 
         if not await circuit_allow_payout(db):
             raise HTTPException(status_code=503, detail="Payout temporarily disabled (circuit breaker)")
