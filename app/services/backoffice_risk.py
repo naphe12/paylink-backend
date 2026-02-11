@@ -2,12 +2,12 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from app.core.database import get_db
-from app.security.rbac import require_admin_user
+from app.dependencies.auth import get_current_admin
 
 router = APIRouter(prefix="/backoffice/risk", tags=["Backoffice - Risk"])
 
 @router.get("/summary")
-async def risk_summary(db: AsyncSession = Depends(get_db), user=Depends(require_admin_user)):
+async def risk_summary(db: AsyncSession = Depends(get_db), user=Depends(get_current_admin)):
     high = await db.execute(text("""
       SELECT user_id, MAX(score)::int AS max_score, COUNT(*)::int AS events
       FROM paylink.risk_decisions
