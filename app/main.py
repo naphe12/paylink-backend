@@ -12,6 +12,8 @@ from app.core.database import get_db
 from app.logger import get_logger
 from app.logger_middleware import LoggerMiddleware
 from app.routers import debug, test_email
+from app.routers import backoffice_audit as backoffice_audit_router
+from app.routers import backoffice_monitoring as backoffice_monitoring_router
 from app.routers.admin import analytics as admin_analytics_router
 from app.routers.admin import agents as admin_agents_router
 from app.routers.admin import aml_events as admin_aml_router
@@ -39,6 +41,7 @@ from app.routers.agent.agent_external_transfer import router as agent_router_ext
 from app.routers.auth import auth
 from app.routers.auth.change_password import router as change_password_router
 from app.routers.escrow import sandbox
+from app.routers.escrow import backoffice_ledger as backoffice_ledger_router
 from app.routers.escrow.backoffice_webhooks import router as backoffice_webhooks_router
 from app.routers.escrow.escrow import router as escrow_router
 from app.routers.escrow.escrow_webhook import router as escrow_webhook_router
@@ -160,8 +163,11 @@ app.include_router(health_router)
 app.include_router(escrow_router)
 app.include_router(escrow_webhook_router)
 app.include_router(backoffice_webhooks_router)
+app.include_router(backoffice_ledger_router.router)
 app.include_router(sandbox.router)
 app.include_router(backoffice_risk_router)
+app.include_router(backoffice_audit_router.router)
+app.include_router(backoffice_monitoring_router.router)
 
 
 @app.on_event("startup")
