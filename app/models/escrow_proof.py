@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import String
-from sqlalchemy.dialects.postgresql import TIMESTAMP, JSONB
+from sqlalchemy.dialects.postgresql import TIMESTAMP, JSONB, ENUM as PGEnum
 from sqlalchemy.orm import Mapped, mapped_column
 from models.base import Base
 from models.escrow_enums import EscrowProofType, EscrowActorType
@@ -12,9 +12,24 @@ class EscrowProof(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     order_id: Mapped[str]
-    proof_type: Mapped[EscrowProofType] = mapped_column(String)
+    proof_type: Mapped[EscrowProofType] = mapped_column(
+        PGEnum(
+            EscrowProofType,
+            name="escrow_proof_type",
+            schema="escrow",
+            create_type=False,
+        )
+    )
     proof_ref: Mapped[str] = mapped_column(String, nullable=False)
     metadata: Mapped[dict] = mapped_column(JSONB, default=dict)
-    created_by_type: Mapped[EscrowActorType] = mapped_column(String, default=EscrowActorType.OPERATOR.value)
+    created_by_type: Mapped[EscrowActorType] = mapped_column(
+        PGEnum(
+            EscrowActorType,
+            name="escrow_actor_type",
+            schema="escrow",
+            create_type=False,
+        ),
+        default=EscrowActorType.OPERATOR,
+    )
     created_by_id: Mapped[str | None]
     created_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
