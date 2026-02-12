@@ -2,7 +2,7 @@ import decimal
 from datetime import datetime
 
 from sqlalchemy import String, Integer, Numeric, BigInteger
-from sqlalchemy.dialects.postgresql import TIMESTAMP
+from sqlalchemy.dialects.postgresql import TIMESTAMP, ENUM as PGEnum
 from sqlalchemy.orm import Mapped, mapped_column
 from models.base import Base
 from models.escrow_enums import EscrowNetwork
@@ -13,7 +13,14 @@ class EscrowChainDeposit(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     order_id: Mapped[str]
-    network: Mapped[EscrowNetwork] = mapped_column(String)
+    network: Mapped[EscrowNetwork] = mapped_column(
+        PGEnum(
+            EscrowNetwork,
+            name="escrow_network",
+            schema="escrow",
+            create_type=False,
+        )
+    )
     token_symbol: Mapped[str] = mapped_column(String, default="USDC")
     tx_hash: Mapped[str] = mapped_column(String, nullable=False)
     from_address: Mapped[str | None] = mapped_column(String)
