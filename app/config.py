@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     REDIS_URL: str | None = None
     RATE_LIMIT_ENABLED: bool = True
 
+    # Blockchain
+    ESCROW_NETWORK: str = "polygon_mumbai"
+    POLYGON_RPC_URL: str
+    POLYGON_CHAIN_ID: int
+    USDC_CONTRACT_ADDRESS: str
     # -------------------------------------------------
     # ALERTING / NOTIFICATIONS
     # -------------------------------------------------
