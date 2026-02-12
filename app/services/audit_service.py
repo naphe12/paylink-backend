@@ -1,3 +1,4 @@
+import json
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
@@ -26,8 +27,8 @@ async def audit_log(
         "action": action,
         "entity_type": entity_type,
         "entity_id": entity_id,
-        "before_state": before_state,
-        "after_state": after_state,
+        "before_state": json.dumps(before_state) if before_state is not None else None,
+        "after_state": json.dumps(after_state) if after_state is not None else None,
         "ip": ip,
         "user_agent": user_agent,
     })

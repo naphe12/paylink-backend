@@ -1,3 +1,4 @@
+import json
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from app.services.risk_service import RiskResult
@@ -19,7 +20,7 @@ async def enqueue_alert(
         "severity": severity,
         "user_id": user_id,
         "order_id": order_id,
-        "payload": payload,
+        "payload": json.dumps(payload),
     })
 
 async def log_risk_decision(
@@ -39,7 +40,7 @@ async def log_risk_decision(
         "stage": stage,
         "decision": result.decision,
         "score": result.score,
-        "reasons": result.reasons,
+        "reasons": json.dumps(result.reasons),
     })
 
     if result.score >= 80:

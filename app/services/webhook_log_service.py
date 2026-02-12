@@ -1,3 +1,4 @@
+import json
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
@@ -21,7 +22,7 @@ async def log_webhook(
     """), {
         "event_type": event_type,
         "status": status,
-        "payload": payload,
+        "payload": json.dumps(payload),
         "tx_hash": tx_hash,
         "order_id": order_id,
         "network": network,

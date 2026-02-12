@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
@@ -26,7 +27,7 @@ async def _set(db: AsyncSession, key: str, value: dict):
             DO UPDATE SET value = EXCLUDED.value, updated_at = now()
             """
         ),
-        {"k": key, "v": value},
+        {"k": key, "v": json.dumps(value)},
     )
 
 

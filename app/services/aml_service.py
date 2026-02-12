@@ -1,3 +1,4 @@
+import json
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from app.services.aml_engine import AMLEngine, AMLResult
@@ -21,7 +22,7 @@ async def enqueue_alert(
         "severity": severity,
         "user_id": user_id,
         "order_id": order_id,
-        "payload": payload,
+        "payload": json.dumps(payload),
     })
 
 async def run_aml(
@@ -48,7 +49,7 @@ async def run_aml(
             "stage": stage,
             "decision": result.decision,
             "score": result.score,
-            "hits": result.hits,
+            "hits": json.dumps(result.hits),
         },
     )
 
