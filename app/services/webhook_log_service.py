@@ -17,7 +17,7 @@ async def log_webhook(
         INSERT INTO escrow.webhook_logs
           (event_type, status, payload, tx_hash, order_id, network, attempts, error)
         VALUES
-          (:event_type, :status, :payload::jsonb, :tx_hash, :order_id::uuid, :network, :attempts, :error)
+          (:event_type, :status, CAST(:payload AS jsonb), :tx_hash, CAST(:order_id AS uuid), :network, :attempts, :error)
     """), {
         "event_type": event_type,
         "status": status,

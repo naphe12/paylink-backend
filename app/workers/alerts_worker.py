@@ -57,7 +57,7 @@ async def deliver_alerts(db: AsyncSession):
             text(
                 """
                 INSERT INTO paylink.notifications (user_id, title, message, type)
-                VALUES (:user_id::uuid, :title, :message, :type)
+                VALUES (CAST(:user_id AS uuid), :title, :message, :type)
                 """
             ),
             {

@@ -13,7 +13,7 @@ async def enqueue_alert(
 ):
     await db.execute(text("""
       INSERT INTO paylink.alerts(type, severity, user_id, order_id, payload)
-      VALUES (:type, :severity, :user_id::uuid, :order_id::uuid, :payload::jsonb)
+      VALUES (:type, :severity, CAST(:user_id AS uuid), CAST(:order_id AS uuid), CAST(:payload AS jsonb))
     """), {
         "type": type,
         "severity": severity,
@@ -32,7 +32,7 @@ async def log_risk_decision(
 ):
     await db.execute(text("""
       INSERT INTO paylink.risk_decisions (user_id, order_id, stage, decision, score, reasons)
-      VALUES (:user_id::uuid, :order_id::uuid, :stage, :decision, :score, :reasons::jsonb)
+      VALUES (CAST(:user_id AS uuid), CAST(:order_id AS uuid), :stage, :decision, :score, CAST(:reasons AS jsonb))
     """), {
         "user_id": user_id,
         "order_id": order_id,

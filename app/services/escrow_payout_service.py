@@ -131,7 +131,7 @@ class EscrowPayoutService:
                     """
                     UPDATE escrow.orders
                     SET payout_initiated_at = now()
-                    WHERE id = :oid::uuid
+                    WHERE id = CAST(:oid AS uuid)
                     """
                 ),
                 {"oid": str(order.id)},
@@ -151,7 +151,7 @@ class EscrowPayoutService:
                     UPDATE escrow.orders
                     SET payout_provider = :p,
                         payout_reference = :ref
-                    WHERE id = :oid::uuid
+                    WHERE id = CAST(:oid AS uuid)
                     """
                 ),
                 {

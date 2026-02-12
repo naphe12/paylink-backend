@@ -18,8 +18,8 @@ async def audit_log(
         INSERT INTO paylink.audit_log
           (actor_user_id, actor_role, action, entity_type, entity_id, before_state, after_state, ip, user_agent)
         VALUES
-          (:actor_user_id::uuid, :actor_role, :action, :entity_type, :entity_id::uuid,
-           :before_state::jsonb, :after_state::jsonb, :ip, :user_agent)
+          (CAST(:actor_user_id AS uuid), :actor_role, :action, :entity_type, CAST(:entity_id AS uuid),
+           CAST(:before_state AS jsonb), CAST(:after_state AS jsonb), :ip, :user_agent)
     """), {
         "actor_user_id": actor_user_id,
         "actor_role": actor_role,

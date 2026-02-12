@@ -21,7 +21,7 @@ async def _set(db: AsyncSession, key: str, value: dict):
         text(
             """
             INSERT INTO paylink.system_flags(key, value)
-            VALUES (:k, :v::jsonb)
+            VALUES (:k, CAST(:v AS jsonb))
             ON CONFLICT (key)
             DO UPDATE SET value = EXCLUDED.value, updated_at = now()
             """

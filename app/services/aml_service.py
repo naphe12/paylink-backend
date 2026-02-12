@@ -15,7 +15,7 @@ async def enqueue_alert(
 ):
     await db.execute(text("""
       INSERT INTO paylink.alerts(type, severity, user_id, order_id, payload)
-      VALUES (:type, :severity, :user_id::uuid, :order_id::uuid, :payload::jsonb)
+      VALUES (:type, :severity, CAST(:user_id AS uuid), CAST(:order_id AS uuid), CAST(:payload AS jsonb))
     """), {
         "type": type,
         "severity": severity,
@@ -40,7 +40,7 @@ async def run_aml(
     await db.execute(
         text("""
           INSERT INTO paylink.aml_screenings(user_id, order_id, stage, decision, score, hits)
-          VALUES (:uid::uuid, :oid::uuid, :stage, :decision, :score, :hits::jsonb)
+          VALUES (CAST(:uid AS uuid), CAST(:oid AS uuid), :stage, :decision, :score, CAST(:hits AS jsonb))
         """),
         {
             "uid": str(user.user_id),
@@ -61,7 +61,7 @@ async def run_aml(
                     SELECT DISTINCT unnest(COALESCE(flags, ARRAY[]::text[]) || ARRAY['AML_REVIEW']::text[])
                   ),
                   risk_score = GREATEST(COALESCE(risk_score, 0), :score)
-              WHERE id = :oid::uuid
+              WHERE id = CAST(:oid AS uuid)
             """),
             {"oid": str(order.id), "score": result.score},
         )
@@ -74,7 +74,7 @@ async def run_aml(
                     SELECT DISTINCT unnest(COALESCE(flags, ARRAY[]::text[]) || ARRAY['AML_BLOCK']::text[])
                   ),
                   risk_score = 100
-              WHERE id = :oid::uuid
+              WHERE id = CAST(:oid AS uuid)
             """),
             {"oid": str(order.id)},
         )
