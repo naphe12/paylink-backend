@@ -41,7 +41,7 @@ class AMLEngine:
         res = await db.execute(text("""
           SELECT COUNT(*)::int
           FROM escrow.orders
-          WHERE user_id = :uid::uuid
+          WHERE user_id = CAST(:uid AS uuid)
             AND created_at >= now() - interval '24 hours'
             AND usdc_expected < 300
         """), {"uid": str(user.user_id)})
@@ -53,7 +53,7 @@ class AMLEngine:
         res2 = await db.execute(text("""
           SELECT COUNT(*)::int
           FROM escrow.orders
-          WHERE user_id = :uid::uuid
+          WHERE user_id = CAST(:uid AS uuid)
             AND created_at >= now() - interval '60 minutes'
             AND status = 'CREATED'
         """), {"uid": str(user.user_id)})

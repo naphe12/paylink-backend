@@ -50,7 +50,7 @@ class RiskService:
         res = await db.execute(text("""
             SELECT COUNT(*)::int
             FROM escrow.orders
-            WHERE user_id = :uid::uuid
+            WHERE user_id = CAST(:uid AS uuid)
               AND created_at >= now() - interval '60 minutes'
               AND status = 'CREATED'
         """), {"uid": str(user.user_id)})
@@ -96,7 +96,7 @@ class RiskService:
         res = await db.execute(text("""
             SELECT COUNT(*)::int
             FROM escrow.orders
-            WHERE user_id = :uid::uuid
+            WHERE user_id = CAST(:uid AS uuid)
               AND created_at >= date_trunc('day', now())
               AND status IN ('FUNDED', 'SWAPPED', 'PAYOUT_PENDING', 'PAID_OUT')
         """), {"uid": str(user.user_id)})
