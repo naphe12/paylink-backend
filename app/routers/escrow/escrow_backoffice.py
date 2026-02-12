@@ -131,7 +131,7 @@ async def confirm_paid_out(
             order_id=order.id,
             proof_type=EscrowProofType(body.proof_type),
             proof_ref=body.proof_ref,
-            metadata=body.proof_metadata,
+            metadata_=body.proof_metadata,
             created_by_type=EscrowActorType.OPERATOR,
         )
         db.add(proof)

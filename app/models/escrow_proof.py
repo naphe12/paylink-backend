@@ -21,7 +21,7 @@ class EscrowProof(Base):
         )
     )
     proof_ref: Mapped[str] = mapped_column(String, nullable=False)
-    metadata: Mapped[dict] = mapped_column(JSONB, default=dict)
+    metadata_: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
     created_by_type: Mapped[EscrowActorType] = mapped_column(
         PGEnum(
             EscrowActorType,
