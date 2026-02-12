@@ -13,7 +13,7 @@ class EscrowSwap(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     order_id: Mapped[str]
-    mode: Mapped[EscrowConversionMode]
+    mode: Mapped[EscrowConversionMode] = mapped_column(String)
     input_symbol: Mapped[str] = mapped_column(String, default="USDC")
     output_symbol: Mapped[str] = mapped_column(String, default="USDT")
     input_amount: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 8))
