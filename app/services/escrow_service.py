@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from fastapi import HTTPException
@@ -50,6 +51,12 @@ class EscrowService:
             stage="CREATE",
             result=risk,
         )
+
+        now_utc = datetime.now(timezone.utc)
+        if getattr(order, "created_at", None) is None:
+            order.created_at = now_utc
+        if getattr(order, "updated_at", None) is None:
+            order.updated_at = now_utc
 
         db.add(order)
         await db.flush()

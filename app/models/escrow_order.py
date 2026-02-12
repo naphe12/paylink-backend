@@ -1,6 +1,6 @@
 import uuid
 import decimal
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import String, Integer, Numeric, Text, ARRAY
 from sqlalchemy.dialects.postgresql import UUID, TIMESTAMP, ENUM as PGEnum
@@ -97,5 +97,14 @@ class EscrowOrder(Base):
     risk_score: Mapped[int] = mapped_column(Integer, default=0)
     flags: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
 
-    created_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
-    updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
