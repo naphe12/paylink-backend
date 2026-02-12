@@ -13,7 +13,7 @@ class EscrowChainDeposit(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     order_id: Mapped[str]
-    network: Mapped[EscrowNetwork]
+    network: Mapped[EscrowNetwork] = mapped_column(String)
     token_symbol: Mapped[str] = mapped_column(String, default="USDC")
     tx_hash: Mapped[str] = mapped_column(String, nullable=False)
     from_address: Mapped[str | None] = mapped_column(String)

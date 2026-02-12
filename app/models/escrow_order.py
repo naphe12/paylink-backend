@@ -22,7 +22,7 @@ class EscrowOrder(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     trader_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
 
-    status: Mapped[EscrowOrderStatus] = mapped_column(default=EscrowOrderStatus.CREATED)
+    status: Mapped[EscrowOrderStatus] = mapped_column(String, default=EscrowOrderStatus.CREATED.value)
     ttl_seconds: Mapped[int] = mapped_column(Integer, default=1800)
     expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     cancelled_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
@@ -31,7 +31,7 @@ class EscrowOrder(Base):
     usdc_received: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 8), default=0)
     usdc_fee: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 8), default=0)
 
-    conversion_mode: Mapped[EscrowConversionMode] = mapped_column(default=EscrowConversionMode.INVENTORY_INTERNAL)
+    conversion_mode: Mapped[EscrowConversionMode] = mapped_column(String, default=EscrowConversionMode.INVENTORY_INTERNAL.value)
     usdt_target: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 8))
     usdt_received: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 8), default=0)
     conversion_fee_usdt: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 8), default=0)
@@ -41,7 +41,7 @@ class EscrowOrder(Base):
     bif_target: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 2))
     bif_paid: Mapped[decimal.Decimal] = mapped_column(Numeric(24, 2), default=0)
 
-    deposit_network: Mapped[EscrowNetwork]
+    deposit_network: Mapped[EscrowNetwork] = mapped_column(String)
     deposit_address: Mapped[str] = mapped_column(String)
     deposit_memo: Mapped[str | None] = mapped_column(String)
     deposit_required_confirmations: Mapped[int] = mapped_column(Integer, default=1)
@@ -55,7 +55,7 @@ class EscrowOrder(Base):
     swapped_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     swap_reference: Mapped[str | None] = mapped_column(String)
 
-    payout_method: Mapped[EscrowPayoutMethod] = mapped_column(default=EscrowPayoutMethod.MOBILE_MONEY)
+    payout_method: Mapped[EscrowPayoutMethod] = mapped_column(String, default=EscrowPayoutMethod.MOBILE_MONEY.value)
     payout_account_name: Mapped[str | None] = mapped_column(String)
     payout_account_number: Mapped[str | None] = mapped_column(String)
     payout_provider: Mapped[str | None] = mapped_column(String)

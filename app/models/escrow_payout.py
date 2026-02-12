@@ -13,7 +13,7 @@ class EscrowPayout(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     order_id: Mapped[str]
-    method: Mapped[EscrowPayoutMethod]
+    method: Mapped[EscrowPayoutMethod] = mapped_column(String)
     provider: Mapped[str | None] = mapped_column(String)
     account_name: Mapped[str | None] = mapped_column(String)
     account_number: Mapped[str | None] = mapped_column(String)
