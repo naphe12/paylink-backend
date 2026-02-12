@@ -42,6 +42,9 @@ from app.routers.auth import auth
 from app.routers.auth.change_password import router as change_password_router
 from app.routers.escrow import sandbox
 from app.routers.escrow import backoffice_ledger as backoffice_ledger_router
+from app.routers.escrow import escrow_backoffice as escrow_backoffice_router
+from app.routers.escrow import escrow_audit_export as escrow_audit_export_router
+from app.routers.escrow import escrow_audit_export_pdf as escrow_audit_export_pdf_router
 from app.routers.escrow.backoffice_webhooks import router as backoffice_webhooks_router
 from app.routers.escrow.escrow import router as escrow_router
 from app.routers.escrow.escrow_webhook import router as escrow_webhook_router
@@ -164,6 +167,9 @@ app.include_router(escrow_router)
 app.include_router(escrow_webhook_router)
 app.include_router(backoffice_webhooks_router)
 app.include_router(backoffice_ledger_router.router)
+app.include_router(escrow_backoffice_router.router)
+app.include_router(escrow_audit_export_router.router)
+app.include_router(escrow_audit_export_pdf_router.router)
 app.include_router(sandbox.router)
 app.include_router(backoffice_risk_router)
 app.include_router(backoffice_audit_router.router)
