@@ -3,8 +3,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
 from app.core.database import get_db
 from app.dependencies.auth import get_current_user_db
 from app.models.users import Users
@@ -22,6 +20,14 @@ async def export_pdf(
     db: AsyncSession = Depends(get_db),
     user: Users = Depends(get_current_user_db),
 ):
+    try:
+        from fpdf import FPDF
+    except ModuleNotFoundError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="PDF export indisponible: dependance fpdf2 manquante",
+        ) from exc
+
     _require_audit_role(user)
     q = """
       SELECT id, status, usdc_expected, usdt_received, bif_target, created_at
@@ -33,31 +39,22 @@ async def export_pdf(
     res = await db.execute(text(q), {"status": status})
     rows = res.fetchall()
 
-    bio = BytesIO()
-    c = canvas.Canvas(bio, pagesize=A4)
-    width, height = A4
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=12)
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.cell(0, 8, "PayLink Escrow Audit Report", ln=1)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(0, 7, f"Filter status: {status or 'ALL'}", ln=1)
+    pdf.ln(2)
+    pdf.set_font("Courier", "", 8)
 
-    y = height - 40
-    c.setFont("Helvetica-Bold", 14)
-    c.drawString(40, y, "PayLink Escrow Audit Report")
-    y -= 24
-
-    c.setFont("Helvetica", 9)
-    c.drawString(40, y, f"Filter status: {status or 'ALL'}")
-    y -= 18
-
-    c.setFont("Helvetica", 8)
     for r in rows:
         line = f"{r[0]} | {r[1]} | USDC {r[2]} | USDT {r[3]} | BIF {r[4]} | {str(r[5])}"
-        c.drawString(40, y, line[:140])
-        y -= 12
-        if y < 60:
-            c.showPage()
-            y = height - 40
-            c.setFont("Helvetica", 8)
+        pdf.multi_cell(0, 5, line[:180])
 
-    c.showPage()
-    c.save()
+    data = pdf.output(dest="S")
+    bio = BytesIO(data if isinstance(data, (bytes, bytearray)) else data.encode("latin-1"))
     bio.seek(0)
 
     return StreamingResponse(
