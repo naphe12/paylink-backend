@@ -1,6 +1,10 @@
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
+
+from app.config import settings
+from app.services.ml_risk_model import predict_score
 
 @dataclass
 class RiskResult:
@@ -9,6 +13,43 @@ class RiskResult:
     reasons: list[str]
 
 class RiskService:
+    @staticmethod
+    async def compute_trade_risk(db, trade, buyer, seller, offer, market_median=None):
+        base = 0
+
+        if str(getattr(buyer, "kyc_status", "")).lower() != "verified":
+            base += 15
+        if str(getattr(seller, "kyc_status", "")).lower() != "verified":
+            base += 10
+
+        if float(getattr(trade, "bif_amount", 0) or 0) >= 10_000_000:
+            base += 10
+
+        deviation = 0.0
+        if market_median and float(market_median) > 0:
+            deviation = abs(float(trade.price_bif_per_usd) - float(market_median)) / float(market_median)
+            if deviation > 0.10:
+                base += 10
+
+        user_age_days = 0
+        if getattr(buyer, "created_at", None):
+            user_age_days = (datetime.now(timezone.utc).date() - buyer.created_at.date()).days
+
+        features = {
+            "amount_bif": float(trade.bif_amount),
+            "user_age_days": user_age_days,
+            "trades_24h": 0,
+            "price_deviation": deviation,
+            "kyc_verified": 1 if str(buyer.kyc_status) == "verified" else 0,
+        }
+
+        ml_score = predict_score(features) if settings.ML_SCORING_ENABLED else -1
+        if ml_score >= 0:
+            final = int(round(0.6 * base + 0.4 * ml_score))
+            return max(0, min(100, final)), {"base": base, "ml": ml_score, "features": features}
+
+        return max(0, min(100, base)), {"base": base, "ml": None, "features": features}
+
     @staticmethod
     async def evaluate_create_order(
         db: AsyncSession,

@@ -42,6 +42,16 @@ class Settings(BaseSettings):
     # Security headers
     ALLOWED_ORIGINS: str = Field(default="")
 
+    # -------------------------------------------------
+    # P2P MARKET MAKER / SYSTEM FLAGS
+    # -------------------------------------------------
+    P2P_MM_ENABLED: bool = True
+    P2P_MM_MAX_DAILY_USD: float = 2000.0
+    P2P_MM_SPREAD_BPS: int = 80  # 0.80%
+    SYSTEM_TREASURY_USER_ID: str = ""  # user_id d'un compte admin/treasury
+    ML_SCORING_ENABLED: bool = False
+    ML_MODEL_PATH: str = "models/risk_model.pkl"
+
     # Blockchain
     ESCROW_NETWORK: str = "Polygon_Amoy"
     POLYGON_RPC_URL: str = ""
@@ -53,6 +63,8 @@ class Settings(BaseSettings):
     ADMIN_ALERT_EMAIL: str | None = None
     ADMIN_ALERT_PHONE: str | None = None
     SLACK_WEBHOOK_URL: str | None = None
+    AML_AUTO_FREEZE_THRESHOLD: int = 90
+    AML_AUTO_FREEZE_ENABLED: bool = True
 
     # -------------------------------------------------
     # EMAIL SMTP

@@ -11,6 +11,8 @@ from app.models.p2p_payment_proof import P2PPaymentProof
 from app.models.p2p_enums import TradeStatus
 from app.models.users import Users
 from app.schemas.p2p_trade import TradeCreate, FiatSentIn
+from app.services.alerts import deliver_alerts
+from app.services.aml_engine import AMLEngine
 from app.services.p2p_escrow_allocator import P2PEscrowAllocator
 from app.services.p2p_fee_engine import P2PFeeEngine
 from app.services.p2p_ledger_hooks import ledger_fee, ledger_release
@@ -74,6 +76,17 @@ class P2PTradeService:
         await P2PEscrowAllocator.allocate_address(db, trade)
         await set_trade_status(db, trade, initial_status, actor_user_id=buyer_id, actor_role="CLIENT", note="Trade created")
         await P2PRiskService.apply(db, trade)
+        aml = await AMLEngine.evaluate_p2p(db, trade, event="P2P_CREATE")
+        trade.risk_score = aml["final_score"]
+        trade.flags = sorted(set(list(trade.flags or []) + [h["code"] for h in aml["hits"]]))
+
+        if aml["should_alert"]:
+            await deliver_alerts(
+                db,
+                subject="AML Alert (P2P_CREATE)",
+                message=f"Trade {trade.trade_id} AML score {aml['final_score']}",
+                metadata={"trade_id": str(trade.trade_id), "event": "P2P_CREATE", "hits": aml["hits"]},
+            )
         inc("p2p.trade.created")
 
         await db.commit()
@@ -105,6 +118,20 @@ class P2PTradeService:
         trade.fiat_sent_at = datetime.now(timezone.utc)
         await set_trade_status(db, trade, TradeStatus.FIAT_SENT, actor_user_id, "CLIENT", note="Buyer marked fiat sent")
         await P2PRiskService.apply(db, trade)
+        aml = await AMLEngine.evaluate_p2p(db, trade, event="P2P_FIAT_SENT")
+        trade.risk_score = aml["final_score"]
+        trade.flags = sorted(set(list(trade.flags or []) + [h["code"] for h in aml["hits"]]))
+        if aml["should_alert"]:
+            await deliver_alerts(
+                db,
+                subject="AML Alert (P2P_FIAT_SENT)",
+                message=f"Trade {trade.trade_id} AML score {aml['final_score']}",
+                metadata={
+                    "trade_id": str(trade.trade_id),
+                    "event": "P2P_FIAT_SENT",
+                    "hits": aml["hits"],
+                },
+            )
         inc("p2p.trade.fiat_sent")
 
         await db.commit()
@@ -159,6 +186,20 @@ class P2PTradeService:
                 fee_rate=Decimal(fee["fee_rate"]),
             )
         await set_trade_status(db, trade, TradeStatus.RELEASED, actor_user_id, "SYSTEM", note="Crypto released to buyer")
+        aml = await AMLEngine.evaluate_p2p(db, trade, event="P2P_RELEASE")
+        trade.risk_score = aml["final_score"]
+        trade.flags = sorted(set(list(trade.flags or []) + [h["code"] for h in aml["hits"]]))
+        if aml["should_alert"]:
+            await deliver_alerts(
+                db,
+                subject="AML Alert (P2P_RELEASE)",
+                message=f"Trade {trade.trade_id} AML score {aml['final_score']}",
+                metadata={
+                    "trade_id": str(trade.trade_id),
+                    "event": "P2P_RELEASE",
+                    "hits": aml["hits"],
+                },
+            )
         inc("p2p.trade.released")
 
         await db.commit()

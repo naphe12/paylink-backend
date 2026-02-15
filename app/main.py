@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute, APIWebSocketRoute
 
@@ -39,10 +39,14 @@ from app.routers.admin import transactions_audit as admin_transactions_audit_rou
 from app.routers.admin import transfers_monitor as admin_transfers_router
 from app.routers.admin.admin_users import router as admin_users_router
 from app.routers.admin.wallets_alerts import router as admin_wallets_router
+from app.routers.admin_dashboard import router as admin_dashboard_router
+from app.routers.admin_flags import router as admin_flags_router
+from app.routers.admin_reports import router as admin_reports_router
 from app.routers.agent.agent import router as agent_router
 from app.routers.agent.agent_external_transfer import router as agent_router_extern
 from app.routers.auth import auth
 from app.routers.auth.change_password import router as change_password_router
+from app.routers.admin_aml import router as admin_aml_cases_router
 from app.routers.escrow import sandbox
 from app.routers.escrow import backoffice_ledger as backoffice_ledger_router
 from app.routers.escrow import escrow_backoffice as escrow_backoffice_router
@@ -58,6 +62,7 @@ from app.routers.merchant import router as merchant_router
 from app.routers.metrics import router as metrics_router
 from app.routers.meta import router as meta_router
 from app.routers.notifications import websocket as notif_ws
+from app.routers.bif_token import router as bif_router
 from app.routers.ref import country, exchange
 from app.routers.tontines.tontines import router as tontine_router
 from app.routers.wallet import payments as wallet_payments
@@ -67,6 +72,7 @@ from app.routers.ws import router as ws_router
 from app.services.backoffice_risk import router as backoffice_risk_router
 from app.services.sandbox_transition_worker import run_sandbox_auto_transitions
 from app.services.tontine_rotation import process_tontine_rotations
+from app.ws.admin_ws import admin_ws
 from app.workers.alerts_worker import deliver_alerts
 from services.escrow_webhook_retry_worker import run_escrow_webhook_retry_worker
 
@@ -190,6 +196,7 @@ app.include_router(meta_router)
 app.include_router(test_email.router)
 app.include_router(health_router)
 app.include_router(metrics_router, prefix="/api")
+app.include_router(bif_router, prefix="/api")
 app.include_router(escrow_router)
 app.include_router(escrow_webhook_router)
 app.include_router(backoffice_webhooks_router)
@@ -201,12 +208,28 @@ app.include_router(sandbox.router)
 app.include_router(backoffice_risk_router)
 app.include_router(backoffice_audit_router.router)
 app.include_router(backoffice_monitoring_router.router)
+app.include_router(admin_aml_cases_router, prefix="/api")
+app.include_router(admin_dashboard_router, prefix="/api")
+app.include_router(admin_flags_router, prefix="/api")
+app.include_router(admin_reports_router, prefix="/api")
 
 from app.routers.p2p.p2p import router as p2p_router
 from app.routers.p2p.admin_p2p import router as admin_p2p_router
+from app.routers.p2p.admin_arbitrage import router as admin_arbitrage_router
 
 app.include_router(p2p_router, prefix="/api")
 app.include_router(admin_p2p_router, prefix="/api")
+app.include_router(admin_arbitrage_router, prefix="/api")
+
+
+@app.websocket("/ws/admin")
+async def ws_admin(ws: WebSocket):
+    await admin_ws.connect(ws)
+    try:
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        admin_ws.disconnect(ws)
 
 
 @app.on_event("startup")

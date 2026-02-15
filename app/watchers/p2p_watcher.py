@@ -8,6 +8,8 @@ from web3 import Web3
 from app.config import settings
 from app.models.p2p_enums import TradeStatus
 from app.models.p2p_trade import P2PTrade
+from app.services.alerts import deliver_alerts
+from app.services.aml_engine import AMLEngine
 from app.services.circuit_breaker import CircuitBreaker, BreakerConfig
 from app.services.metrics import inc
 from app.services.p2p_risk_service import P2PRiskService
@@ -84,6 +86,20 @@ class P2PWatcher:
             note="Crypto deposit detected",
         )
         await P2PRiskService.apply(db, trade)
+        aml = await AMLEngine.evaluate_p2p(db, trade, event="P2P_CRYPTO_LOCKED")
+        trade.risk_score = aml["final_score"]
+        trade.flags = sorted(set(list(trade.flags or []) + [h["code"] for h in aml["hits"]]))
+        if aml["should_alert"]:
+            await deliver_alerts(
+                db,
+                subject="AML Alert (P2P_CRYPTO_LOCKED)",
+                message=f"Trade {trade.trade_id} AML score {aml['final_score']}",
+                metadata={
+                    "trade_id": str(trade.trade_id),
+                    "event": "P2P_CRYPTO_LOCKED",
+                    "hits": aml["hits"],
+                },
+            )
         inc("p2p.trade.crypto_locked")
 
         await db.commit()

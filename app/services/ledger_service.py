@@ -11,6 +11,30 @@ class Posting:
 
 class LedgerService:
     @staticmethod
+    async def get_balance(
+        db: AsyncSession,
+        *,
+        account_code: str,
+        token: str,
+    ) -> Decimal:
+        res = await db.execute(
+            text(
+                """
+                SELECT balance
+                FROM paylink.v_ledger_balances
+                WHERE code = :code
+                  AND currency_code = :cc
+                LIMIT 1
+                """
+            ),
+            {"code": account_code, "cc": token},
+        )
+        row = res.first()
+        if not row or row[0] is None:
+            return Decimal("0")
+        return Decimal(str(row[0]))
+
+    @staticmethod
     async def post_entry(db: AsyncSession, ref: str, description: str, postings: list[Posting]) -> str:
         """
         Idempotent: journal_entries.ref UNIQUE.

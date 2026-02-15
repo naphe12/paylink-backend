@@ -1,6 +1,28 @@
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
+
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
+
+from app.config import settings
+from app.models.aml_case import AMLCase
+from app.models.aml_hit import AMLHit
+from app.models.p2p_offer import P2POffer
+from app.models.p2p_trade import P2PTrade
+from app.models.users import Users
+from app.services.aml_builtin_rules import (
+    AMLContext,
+    rule_fast_repeat,
+    rule_large_trade_bif,
+    rule_new_account,
+    rule_price_outlier,
+    rule_unverified_kyc,
+)
+from app.services.alerts import deliver_alerts
+
+AML_ALERT_THRESHOLD = 80
+AML_CASE_THRESHOLD = 80
 
 @dataclass
 class AMLResult:
@@ -110,3 +132,148 @@ class AMLEngine:
         if score >= 60:
             return "REVIEW"
         return "ALLOW"
+
+    @staticmethod
+    async def evaluate_p2p(db: AsyncSession, trade: P2PTrade, event: str) -> dict:
+        """
+        Return:
+        {
+          "score_delta": int,
+          "hits": [..],
+          "should_alert": bool,
+          "should_open_case": bool
+        }
+        """
+        now = datetime.now(timezone.utc)
+        ctx = AMLContext(event=event, now=now)
+
+        buyer = await db.scalar(select(Users).where(Users.user_id == trade.buyer_id))
+        seller = await db.scalar(select(Users).where(Users.user_id == trade.seller_id))
+        offer = await db.scalar(select(P2POffer).where(P2POffer.offer_id == trade.offer_id))
+
+        if not buyer or not seller or not offer:
+            return {
+                "score_delta": 0,
+                "hits": [],
+                "final_score": int(getattr(trade, "risk_score", 0) or 0),
+                "should_alert": False,
+                "should_open_case": False,
+            }
+
+        hits = []
+        total_delta = 0
+
+        # 1) KYC
+        for r in (
+            rule_unverified_kyc(str(buyer.kyc_status), "BUYER"),
+            rule_unverified_kyc(str(seller.kyc_status), "SELLER"),
+        ):
+            if r:
+                hits.append(r)
+                total_delta += r[1]
+
+        # 2) New account (if created_at exists)
+        try:
+            buyer_age_days = (date.today() - buyer.created_at.date()).days if buyer.created_at else 9999
+            seller_age_days = (date.today() - seller.created_at.date()).days if seller.created_at else 9999
+            for r in (rule_new_account(buyer_age_days), rule_new_account(seller_age_days)):
+                if r:
+                    hits.append(r)
+                    total_delta += r[1]
+        except Exception:
+            pass
+
+        # 3) Large trade
+        r = rule_large_trade_bif(Decimal(trade.bif_amount))
+        if r:
+            hits.append(r)
+            total_delta += r[1]
+
+        # 4) Rapid repeats (trades in last 1h per buyer)
+        one_hour_ago = now - timedelta(hours=1)
+        buyer_count_stmt = (
+            select(func.count())
+            .select_from(P2PTrade)
+            .where(P2PTrade.buyer_id == buyer.user_id, P2PTrade.created_at >= one_hour_ago)
+        )
+        buyer_count = (await db.execute(buyer_count_stmt)).scalar() or 0
+        r = rule_fast_repeat(int(buyer_count))
+        if r:
+            hits.append(r)
+            total_delta += r[1]
+
+        # 5) Price outlier vs median order book
+        median_stmt = select(func.percentile_cont(0.5).within_group(P2POffer.price_bif_per_usd)).where(
+            P2POffer.token == offer.token,
+            P2POffer.side == offer.side,
+            P2POffer.is_active.is_(True),
+        )
+        median = (await db.execute(median_stmt)).scalar()
+        if median and float(median) > 0:
+            diff = abs(float(trade.price_bif_per_usd) - float(median)) / float(median)
+            r = rule_price_outlier(diff)
+            if r:
+                hits.append(r)
+                total_delta += r[1]
+
+        # Persist hits
+        for (code, delta, details) in hits:
+            db.add(
+                AMLHit(
+                    user_id=buyer.user_id,
+                    trade_id=trade.trade_id,
+                    rule_code=code,
+                    score_delta=int(delta),
+                    details={"event": ctx.event, **details},
+                )
+            )
+
+        # Decision based on trade risk_score + aml deltas
+        final_score = min(100, int(trade.risk_score) + int(total_delta))
+        should_alert = final_score >= AML_ALERT_THRESHOLD
+        should_open_case = final_score >= AML_CASE_THRESHOLD
+        auto_frozen = False
+
+        if settings.AML_AUTO_FREEZE_ENABLED and final_score >= settings.AML_AUTO_FREEZE_THRESHOLD:
+            buyer.status = "frozen"
+            trade.flags = sorted(set((trade.flags or []) + ["AML_AUTO_FROZEN"]))
+            auto_frozen = True
+
+        # Open/update case (one open case per trade)
+        if should_open_case:
+            existing = await db.scalar(
+                select(AMLCase).where(AMLCase.trade_id == trade.trade_id, AMLCase.status == "OPEN")
+            )
+            if not existing:
+                db.add(
+                    AMLCase(
+                        user_id=buyer.user_id,
+                        trade_id=trade.trade_id,
+                        status="OPEN",
+                        risk_score=final_score,
+                        reason=f"AML score {final_score} triggered by event {event}",
+                    )
+                )
+            else:
+                existing.risk_score = max(int(existing.risk_score or 0), final_score)
+
+        await db.flush()
+        if auto_frozen:
+            await deliver_alerts(
+                db,
+                subject="AML AUTO-FREEZE",
+                message=f"User {buyer.user_id} frozen. Trade {trade.trade_id}, score={final_score}",
+                metadata={
+                    "user_id": str(buyer.user_id),
+                    "trade_id": str(trade.trade_id),
+                    "score": final_score,
+                },
+            )
+
+        return {
+            "score_delta": int(total_delta),
+            "hits": [{"code": c, "delta": d, "details": det} for (c, d, det) in hits],
+            "final_score": final_score,
+            "should_alert": should_alert,
+            "should_open_case": should_open_case,
+        }

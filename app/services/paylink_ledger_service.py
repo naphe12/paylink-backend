@@ -1,10 +1,35 @@
 from decimal import Decimal
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
 from uuid import UUID
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class PaylinkLedgerService:
+    @staticmethod
+    async def get_balance(
+        db: AsyncSession,
+        *,
+        account_code: str,
+        currency: str,
+    ) -> Decimal:
+        res = await db.execute(
+            text(
+                """
+                SELECT balance
+                FROM paylink.v_ledger_balances
+                WHERE code = :code
+                  AND currency_code = :ccy
+                LIMIT 1
+                """
+            ),
+            {"code": account_code, "ccy": currency},
+        )
+        row = res.first()
+        if not row or row[0] is None:
+            return Decimal("0")
+        return Decimal(str(row[0]))
+
     @staticmethod
     async def post_journal(
         db: AsyncSession,
