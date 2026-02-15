@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,8 +10,10 @@ from app.models.aml_case import AMLCase
 from app.models.aml_hit import AMLHit
 from app.models.p2p_trade import P2PTrade
 from app.models.users import Users
+from app.services.paylink_ledger_service import PaylinkLedgerService
 
 router = APIRouter(prefix="/admin/dashboard", tags=["Admin Dashboard"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/summary")
@@ -17,41 +21,74 @@ async def dashboard_summary(
     db: AsyncSession = Depends(get_db),
     me: Users = Depends(get_current_admin),
 ):
-    aml_open = (
-        await db.execute(
-            select(func.count()).select_from(AMLCase).where(AMLCase.status == "OPEN")
-        )
-    ).scalar() or 0
+    async def _safe_scalar(label: str, stmt, default=0):
+        try:
+            val = (await db.execute(stmt)).scalar()
+            return val if val is not None else default
+        except Exception:
+            logger.exception("dashboard_summary: failed metric %s", label)
+            return default
 
-    aml_hits_24h = (
-        await db.execute(
-            select(func.count())
-            .select_from(AMLHit)
-            .where(AMLHit.created_at >= text("now() - interval '24 hours'"))
-        )
-    ).scalar() or 0
+    async def _safe_balance(account_code: str, currency: str):
+        try:
+            return str(
+                await PaylinkLedgerService.get_balance(
+                    db,
+                    account_code=account_code,
+                    currency=currency,
+                )
+            )
+        except Exception:
+            logger.exception(
+                "dashboard_summary: failed balance account=%s currency=%s",
+                account_code,
+                currency,
+            )
+            return None
 
-    high_risk_trades = (
-        await db.execute(
-            select(func.count()).select_from(P2PTrade).where(P2PTrade.risk_score >= 80)
-        )
-    ).scalar() or 0
-
-    total_trades_24h = (
-        await db.execute(
-            select(func.count())
-            .select_from(P2PTrade)
-            .where(P2PTrade.created_at >= text("now() - interval '24 hours'"))
-        )
-    ).scalar() or 0
+    aml_open = await _safe_scalar(
+        "aml_open",
+        select(func.count()).select_from(AMLCase).where(AMLCase.status == "OPEN"),
+        0,
+    )
+    aml_hits_24h = await _safe_scalar(
+        "aml_hits_24h",
+        select(func.count())
+        .select_from(AMLHit)
+        .where(AMLHit.created_at >= text("now() - interval '24 hours'")),
+        0,
+    )
+    high_risk_trades = await _safe_scalar(
+        "high_risk_trades",
+        select(func.count()).select_from(P2PTrade).where(P2PTrade.risk_score >= 80),
+        0,
+    )
+    total_trades_24h = await _safe_scalar(
+        "total_trades_24h",
+        select(func.count())
+        .select_from(P2PTrade)
+        .where(P2PTrade.created_at >= text("now() - interval '24 hours'")),
+        0,
+    )
 
     liquidity = {
-        "TREASURY_BIF": None,
-        "TREASURY_USDC": None,
-        "TREASURY_USDT": None,
+        "TREASURY_BIF": await _safe_balance("TREASURY_BIF", "BIF"),
+        "TREASURY_USDC": await _safe_balance("TREASURY_USDC", "USDC"),
+        "TREASURY_USDT": await _safe_balance("TREASURY_USDT", "USDT"),
     }
 
-    arb_24h = 0
+    arb_24h = await _safe_scalar(
+        "arb_24h",
+        text(
+            """
+            SELECT COUNT(*)::int
+            FROM paylink.audit_log
+            WHERE created_at >= now() - interval '24 hours'
+              AND action = 'ARBITRAGE_EXECUTED'
+            """
+        ),
+        0,
+    )
 
     return {
         "aml_open_cases": aml_open,
