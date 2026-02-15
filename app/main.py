@@ -111,15 +111,25 @@ async def alerts_worker():
             await asyncio.sleep(60)
 
 
-origins = [o.strip() for o in str(settings.ALLOWED_ORIGINS or "").split(",") if o.strip()]
-if origins:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+configured_origins = [o.strip() for o in str(settings.ALLOWED_ORIGINS or "").split(",") if o.strip()]
+if configured_origins:
+    origins = configured_origins
+elif settings.APP_ENV == "prod":
+    origins = ["https://paylink-frontend-production.up.railway.app"]
+else:
+    origins = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://paylink-frontend-production.up.railway.app",
+    ]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.add_middleware(LoggerMiddleware)
 app.add_middleware(RequestIdMiddleware)
