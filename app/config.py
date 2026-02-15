@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
@@ -14,26 +15,38 @@ class Settings(BaseSettings):
     # -------------------------------------------------
     # ENVIRONNEMENT
     # -------------------------------------------------
-    APP_ENV: str = "dev"  # dev | staging | prod
+    APP_ENV: str = Field(default="dev")  # dev|staging|prod
 
     # -------------------------------------------------
     # SANDBOX
     # -------------------------------------------------
-    SANDBOX_ENABLED: bool = True
-    SANDBOX_ADMIN_ONLY: bool = True
+    SANDBOX_ENABLED: bool = Field(default=False)
+    SANDBOX_ADMIN_ONLY: bool = Field(default=True)
 
     # -------------------------------------------------
     # WEBHOOK SECURITY
     # -------------------------------------------------
-    ESCROW_WEBHOOK_SECRET: str 
-    REDIS_URL: str | None = None
+    ESCROW_WEBHOOK_SECRET: str = Field(default="")
+    REDIS_URL: str | None = Field(default=None)
     RATE_LIMIT_ENABLED: bool = True
+    RL_AUTH_PER_MIN: int = 20
+    RL_P2P_WRITE_PER_MIN: int = 30
+    RL_WEBHOOK_PER_MIN: int = 120
+    RL_ADMIN_PER_MIN: int = 120
+
+    # Circuit breaker
+    CB_FAIL_THRESHOLD: int = 5
+    CB_OPEN_SECONDS: int = 60
+    CB_HALFOPEN_MAX_CALLS: int = 3
+
+    # Security headers
+    ALLOWED_ORIGINS: str = Field(default="")
 
     # Blockchain
-    ESCROW_NETWORK: str = "polygon_mumbai"
-    POLYGON_RPC_URL: str
-    POLYGON_CHAIN_ID: int
-    USDC_CONTRACT_ADDRESS: str
+    ESCROW_NETWORK: str = "Polygon_Amoy"
+    POLYGON_RPC_URL: str = ""
+    POLYGON_CHAIN_ID: int = 137
+    USDC_CONTRACT_ADDRESS: str = "0x0000000000000000000000000000000000000000"
     # -------------------------------------------------
     # ALERTING / NOTIFICATIONS
     # -------------------------------------------------

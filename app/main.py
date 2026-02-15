@@ -11,6 +11,9 @@ from app.config import settings
 from app.core.database import get_db
 from app.logger import get_logger
 from app.logger_middleware import LoggerMiddleware
+from app.middlewares.rate_limit import RateLimitMiddleware
+from app.middlewares.request_id import RequestIdMiddleware
+from app.middlewares.security_headers import SecurityHeadersMiddleware
 from app.routers import debug, test_email
 from app.routers import backoffice_audit as backoffice_audit_router
 from app.routers import backoffice_monitoring as backoffice_monitoring_router
@@ -52,6 +55,7 @@ from app.routers.health import router as health_router
 from app.routers.invoices import router as invoices_router
 from app.routers.loans import router as loans_router
 from app.routers.merchant import router as merchant_router
+from app.routers.metrics import router as metrics_router
 from app.routers.meta import router as meta_router
 from app.routers.notifications import websocket as notif_ws
 from app.routers.ref import country, exchange
@@ -72,6 +76,9 @@ logging.getLogger("websockets.server").setLevel(logging.WARNING)
 logger = get_logger("paylink")
 app = FastAPI(title="PayLink API (Dev Mode)", version="0.1")
 background_tasks = []
+
+if settings.APP_ENV == "prod":
+    settings.SANDBOX_ENABLED = False
 
 
 async def webhook_retry_worker():
@@ -104,19 +111,28 @@ async def alerts_worker():
             await asyncio.sleep(60)
 
 
+origins = [o.strip() for o in str(settings.ALLOWED_ORIGINS or "").split(",") if o.strip()]
+if origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
 app.add_middleware(LoggerMiddleware)
+app.add_middleware(RequestIdMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
-origins = [
-    "https://paylink-frontend-production.up.railway.app",
-]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.state.rate_limits = {
+    "default": 120,
+    "auth": settings.RL_AUTH_PER_MIN,
+    "p2p_write": settings.RL_P2P_WRITE_PER_MIN,
+    "webhook": settings.RL_WEBHOOK_PER_MIN,
+    "admin": settings.RL_ADMIN_PER_MIN,
+}
+app.add_middleware(RateLimitMiddleware, redis_url=settings.REDIS_URL)
 
 
 app.include_router(auth.router, prefix="/auth", tags=["Auth"])
@@ -163,6 +179,7 @@ app.include_router(debug.router)
 app.include_router(meta_router)
 app.include_router(test_email.router)
 app.include_router(health_router)
+app.include_router(metrics_router, prefix="/api")
 app.include_router(escrow_router)
 app.include_router(escrow_webhook_router)
 app.include_router(backoffice_webhooks_router)
@@ -174,6 +191,12 @@ app.include_router(sandbox.router)
 app.include_router(backoffice_risk_router)
 app.include_router(backoffice_audit_router.router)
 app.include_router(backoffice_monitoring_router.router)
+
+from app.routers.p2p.p2p import router as p2p_router
+from app.routers.p2p.admin_p2p import router as admin_p2p_router
+
+app.include_router(p2p_router, prefix="/api")
+app.include_router(admin_p2p_router, prefix="/api")
 
 
 @app.on_event("startup")
