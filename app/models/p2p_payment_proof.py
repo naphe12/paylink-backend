@@ -14,6 +14,6 @@ class P2PPaymentProof(Base):
 
     kind = Column(Text, nullable=False, server_default=text("'FIAT_PROOF'"))
     url = Column(Text, nullable=False)
-    metadata = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    metadata_ = Column("metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb"))
 
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)

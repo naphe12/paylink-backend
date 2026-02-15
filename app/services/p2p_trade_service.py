@@ -98,7 +98,7 @@ class P2PTradeService:
             actor_user_id=actor_user_id,
             kind="FIAT_PROOF",
             url=data.proof_url,
-            metadata={"note": data.note} if data.note else {},
+            metadata_={"note": data.note} if data.note else {},
         )
         db.add(proof)
 
