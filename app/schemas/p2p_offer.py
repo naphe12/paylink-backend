@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from uuid import UUID
 from decimal import Decimal
 from typing import Any, Dict, Optional
@@ -15,6 +15,14 @@ class OfferCreate(BaseModel):
     payment_method: PaymentMethod
     payment_details: Dict[str, Any] = Field(default_factory=dict)
     terms: Optional[str] = None
+
+    @field_validator("payment_method", mode="before")
+    @classmethod
+    def normalize_payment_method(cls, v):
+        # Backward-compatible alias: ENOTI/eNOTI uses current enum storage ECOCASH.
+        if isinstance(v, str) and v.strip().upper() == "ENOTI":
+            return PaymentMethod.ECOCASH
+        return v
 
 class OfferOut(BaseModel):
     offer_id: UUID
