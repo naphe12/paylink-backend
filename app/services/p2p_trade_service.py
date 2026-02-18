@@ -29,6 +29,8 @@ class P2PTradeService:
         offer = await db.scalar(select(P2POffer).where(P2POffer.offer_id == data.offer_id))
         if not offer or not offer.is_active:
             raise ValueError("Offer not found or inactive")
+        if str(offer.user_id) == str(buyer_id):
+            raise PermissionError("You cannot create a trade on your own offer")
 
         if data.token_amount < offer.min_token_amount or data.token_amount > offer.max_token_amount:
             raise ValueError("Amount outside offer limits")

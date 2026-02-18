@@ -52,6 +52,8 @@ async def create_trade(
 ):
     try:
         return await P2PTradeService.create_trade(db, me.user_id, data)
+    except PermissionError as e:
+        raise HTTPException(403, str(e))
     except Exception as e:
         raise HTTPException(400, str(e))
 
@@ -180,6 +182,8 @@ async def market_order(
         )
         await db.commit()
         return trade
+    except PermissionError as e:
+        raise HTTPException(403, str(e))
     except HTTPException:
         raise
     except Exception as e:
