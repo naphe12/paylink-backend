@@ -64,6 +64,12 @@ class PaylinkLedgerService:
 
         # 2) Entries
         for p in postings:
+            # Some business flows can produce zero-fee lines; skip non-positive entries
+            # to satisfy DB check constraints on ledger amount.
+            amount = Decimal(str(p["amount"]))
+            if amount <= 0:
+                continue
+
             acc = await db.execute(
                 text("SELECT account_id FROM paylink.ledger_accounts WHERE code=:c"),
                 {"c": p["account_code"]},
@@ -83,7 +89,7 @@ class PaylinkLedgerService:
                     "jid": journal_id,
                     "aid": account_id,
                     "dir": p["direction"],  # 'DEBIT' | 'CREDIT'
-                    "amt": p["amount"],
+                    "amt": amount,
                     "ccy": p.get("currency", "USD"),
                 },
             )
