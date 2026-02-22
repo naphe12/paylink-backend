@@ -1,55 +1,30 @@
 from datetime import datetime, timezone
-import logging
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from web3 import Web3
 
-from app.config import settings
 from app.models.p2p_enums import TradeStatus
 from app.models.p2p_trade import P2PTrade
 from app.services.alerts import deliver_alerts
 from app.services.aml_engine import AMLEngine
-from app.services.circuit_breaker import CircuitBreaker, BreakerConfig
 from app.services.metrics import inc
 from app.services.p2p_risk_service import P2PRiskService
 from app.services.p2p_trade_state import set_trade_status
 
-logger = logging.getLogger("paylink")
-
-rpc_breaker = CircuitBreaker(
-    "polygon_rpc",
-    settings.REDIS_URL,
-    BreakerConfig(
-        fail_threshold=settings.CB_FAIL_THRESHOLD,
-        open_seconds=settings.CB_OPEN_SECONDS,
-        halfopen_max_calls=settings.CB_HALFOPEN_MAX_CALLS,
-    ),
-)
-
-USDC_ABI = [
-    {
-        "anonymous": False,
-        "inputs": [
-            {"indexed": True, "name": "from", "type": "address"},
-            {"indexed": True, "name": "to", "type": "address"},
-            {"indexed": False, "name": "value", "type": "uint256"},
-        ],
-        "name": "Transfer",
-        "type": "event",
-    }
-]
-
-
 class P2PWatcher:
     def __init__(self, rpc_url: str, contract_address: str):
-        self.w3 = Web3(Web3.HTTPProvider(rpc_url))
-        self.contract = self.w3.eth.contract(
-            address=Web3.to_checksum_address(contract_address),
-            abi=USDC_ABI,
-        )
+        self.rpc_url = rpc_url
+        self.contract_address = contract_address
 
-    async def process_transfer(self, db: AsyncSession, tx_hash: str, to_address: str, amount):
+    async def process_transfer(
+        self,
+        db: AsyncSession,
+        tx_hash: str,
+        to_address: str,
+        amount,
+        block_number: int | None = None,
+        block_timestamp: int | None = None,
+    ):
         to_addr_norm = to_address.lower()
 
         trade = await db.scalar(
@@ -62,20 +37,17 @@ class P2PWatcher:
         if not trade:
             return
 
-        trade.escrow_tx_hash = tx_hash
-
-        if not await rpc_breaker.allow():
-            logger.warning("Circuit breaker OPEN/HALF full for polygon_rpc; skipping tx %s", tx_hash)
+        # Idempotency guard for duplicate log detection/replay.
+        if trade.escrow_tx_hash:
             return
 
-        try:
-            block = self.w3.eth.get_block("latest")
-            ts = int(block["timestamp"])
+        trade.escrow_tx_hash = tx_hash
+
+        if block_timestamp is not None:
+            ts = int(block_timestamp)
             trade.escrow_locked_at = datetime.fromtimestamp(ts, tz=timezone.utc)
-            await rpc_breaker.record_success()
-        except Exception:
-            await rpc_breaker.record_failure()
-            raise
+        else:
+            trade.escrow_locked_at = datetime.now(timezone.utc)
 
         await set_trade_status(
             db,
@@ -89,16 +61,21 @@ class P2PWatcher:
         aml = await AMLEngine.evaluate_p2p(db, trade, event="P2P_CRYPTO_LOCKED")
         trade.risk_score = aml["final_score"]
         trade.flags = sorted(set(list(trade.flags or []) + [h["code"] for h in aml["hits"]]))
+
+        metadata = {
+            "trade_id": str(trade.trade_id),
+            "event": "P2P_CRYPTO_LOCKED",
+            "hits": aml["hits"],
+        }
+        if block_number is not None:
+            metadata["block_number"] = block_number
+
         if aml["should_alert"]:
             await deliver_alerts(
                 db,
                 subject="AML Alert (P2P_CRYPTO_LOCKED)",
                 message=f"Trade {trade.trade_id} AML score {aml['final_score']}",
-                metadata={
-                    "trade_id": str(trade.trade_id),
-                    "event": "P2P_CRYPTO_LOCKED",
-                    "hits": aml["hits"],
-                },
+                metadata=metadata,
             )
         inc("p2p.trade.crypto_locked")
 

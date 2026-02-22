@@ -1,9 +1,12 @@
+import hashlib
+import hmac
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import text
 
 from app.core.database import get_db
-from app.security.webhook_signing import verify_hmac_signature
 from app.security.rate_limit import rate_limit
 from app.config import settings
 from app.schemas.escrow_chain import ChainDepositWebhook
@@ -19,7 +22,6 @@ router = APIRouter(prefix="/escrow/webhooks", tags=["Escrow Webhooks"])
 @router.post("/usdc")
 async def usdc_webhook(
     request: Request,
-    payload: ChainDepositWebhook,
     db: AsyncSession = Depends(get_db),
 ):
     ip = request.client.host if request.client else "unknown"
@@ -27,13 +29,51 @@ async def usdc_webhook(
 
     raw_body = await request.body()
     signature = request.headers.get("X-Paylink-Signature")
+    secret = settings.HMAC_SECRET or settings.ESCROW_WEBHOOK_SECRET
 
-    if not signature or not verify_hmac_signature(
-        raw_body,
-        signature,
-        settings.ESCROW_WEBHOOK_SECRET,
-    ):
+    if not secret:
+        raise HTTPException(status_code=500, detail="Webhook secret not configured")
+
+    expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature or "", expected):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
+
+    payload_dict = await request.json()
+    payload = ChainDepositWebhook.model_validate(payload_dict)
+    tx_hash = payload_dict.get("tx_hash")
+    log_index = payload_dict.get("log_index")
+
+    if not tx_hash:
+        raise HTTPException(status_code=400, detail="Missing tx_hash")
+
+    # Idempotency guard on the webhook envelope (tx_hash + log_index when provided).
+    if log_index is not None:
+        dup = await db.execute(
+            text(
+                """
+                SELECT 1
+                FROM escrow.webhook_logs
+                WHERE tx_hash = :tx
+                  AND payload->>'log_index' = :li
+                LIMIT 1
+                """
+            ),
+            {"tx": tx_hash, "li": str(log_index)},
+        )
+    else:
+        dup = await db.execute(
+            text(
+                """
+                SELECT 1
+                FROM escrow.webhook_logs
+                WHERE tx_hash = :tx
+                LIMIT 1
+                """
+            ),
+            {"tx": tx_hash},
+        )
+    if dup.first():
+        return {"status": "DUPLICATE"}
 
     order_id: str | None = None
     try:

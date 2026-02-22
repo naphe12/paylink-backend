@@ -1,14 +1,12 @@
 import hmac
 import hashlib
-from app.config import settings
+import os
+
 
 def compute_signature(raw_body: bytes) -> str:
-    return hmac.new(
-        settings.ESCROW_WEBHOOK_SECRET.encode("utf-8"),
-        raw_body,
-        hashlib.sha256
-    ).hexdigest()
+    secret = os.getenv("HMAC_SECRET")
+    if not secret:
+        raise RuntimeError("Missing env HMAC_SECRET")
 
-def verify_signature(raw_body: bytes, signature: str) -> bool:
-    expected = compute_signature(raw_body)
-    return hmac.compare_digest(expected, signature or "")
+    mac = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256)
+    return mac.hexdigest()

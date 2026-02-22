@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.escrow_order import EscrowOrder
 from app.models.escrow_enums import EscrowOrderStatus
 from app.models.escrow_event import EscrowEvent
+from app.services.liquidity_guard import LiquidityGuard
 
 from services.swap_engine import InternalInventorySwapProvider
 from services.escrow_swap_service import EscrowSwapService
@@ -38,6 +39,15 @@ async def run_post_funded_worker(db: AsyncSession):
                 ))
                 await db.commit()
                 continue
+
+            # Liquidity guard: ensure treasury can deliver the simulated USDT output.
+            swap_preview = await provider.swap_usdc_to_usdt(order.usdc_received or Decimal("0"))
+            await LiquidityGuard.assert_balance(
+                db,
+                account_code="TREASURY_USDT",
+                token="USDT",
+                required_amount=swap_preview.output_amount_usdt,
+            )
 
             await swap_svc.execute_swap(db, order.id)
 

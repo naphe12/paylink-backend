@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     # -------------------------------------------------
     # WEBHOOK SECURITY
     # -------------------------------------------------
+    HMAC_SECRET: str = Field(default="")
     ESCROW_WEBHOOK_SECRET: str = Field(default="")
     REDIS_URL: str | None = Field(default=None)
     RATE_LIMIT_ENABLED: bool = True
