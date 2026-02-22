@@ -35,6 +35,9 @@ AsyncSessionLocal = async_sessionmaker(
     class_=AsyncSession
 )
 
+# Backward-compatible alias used by watchers
+async_session_maker = AsyncSessionLocal
+
 # Base ORM
 Base = declarative_base()
 
