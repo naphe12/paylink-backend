@@ -1,8 +1,9 @@
 import decimal
 from datetime import datetime
+import uuid
 
 from sqlalchemy import String, Integer, Numeric, BigInteger
-from sqlalchemy.dialects.postgresql import TIMESTAMP, ENUM as PGEnum
+from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID, ENUM as PGEnum
 from sqlalchemy.orm import Mapped, mapped_column
 from models.base import Base
 from models.escrow_enums import EscrowNetwork
@@ -12,7 +13,7 @@ class EscrowChainDeposit(Base):
     __table_args__ = {"schema": "escrow"}
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    order_id: Mapped[str]
+    order_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     network: Mapped[EscrowNetwork] = mapped_column(
         PGEnum(
             EscrowNetwork,
