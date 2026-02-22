@@ -67,8 +67,8 @@ class PolygonPollingWatcher:
         )
         self.p2p = P2PWatcher(self.rpc_url, self.token_address)
 
-        # Event signature topic
-        self.transfer_topic = Web3.keccak(text="Transfer(address,address,uint256)").hex()
+        # Event signature topic must be 0x-prefixed for eth_getLogs
+        self.transfer_topic = Web3.to_hex(Web3.keccak(text="Transfer(address,address,uint256)"))
 
         # Runtime state
         self._from_block = None  # will be initialized in run()
