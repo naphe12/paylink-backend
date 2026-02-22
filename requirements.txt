@@ -72,3 +72,4 @@ websockets==15.0.1
 yarl==1.22.0
 fpdf2==2.7.6
 reportlab==4.2.5
+web3==7.14.1
