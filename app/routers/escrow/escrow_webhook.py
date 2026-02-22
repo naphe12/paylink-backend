@@ -135,28 +135,35 @@ async def usdc_webhook(
 
     except Exception as exc:
         payload_data = payload.model_dump(mode="json")
+        # If the failure came from SQL execution, the transaction may be aborted.
+        # Rollback first so retry/log writes can proceed.
+        await db.rollback()
 
-        await enqueue_webhook_retry(
-            db,
-            event_type="USDC_DEPOSIT",
-            payload=payload_data,
-            last_error=str(exc),
-            actor_user_id=None,
-            actor_role="SYSTEM",
-            ip=ip,
-            user_agent=request.headers.get("user-agent"),
-        )
+        try:
+            await enqueue_webhook_retry(
+                db,
+                event_type="USDC_DEPOSIT",
+                payload=payload_data,
+                last_error=str(exc),
+                actor_user_id=None,
+                actor_role="SYSTEM",
+                ip=ip,
+                user_agent=request.headers.get("user-agent"),
+            )
 
-        await log_webhook(
-            db,
-            event_type="USDC_DEPOSIT",
-            status="FAILED",
-            payload=payload_data,
-            tx_hash=payload.tx_hash,
-            order_id=order_id,
-            network=payload.network,
-            error=str(exc),
-        )
+            await log_webhook(
+                db,
+                event_type="USDC_DEPOSIT",
+                status="FAILED",
+                payload=payload_data,
+                tx_hash=payload.tx_hash,
+                order_id=order_id,
+                network=payload.network,
+                error=str(exc),
+            )
 
-        await db.commit()
+            await db.commit()
+        except Exception:
+            # Last-resort: do not crash webhook caller if internal retry logging fails.
+            await db.rollback()
         return {"status": "QUEUED_RETRY"}
