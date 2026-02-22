@@ -1,4 +1,5 @@
 from decimal import Decimal
+import json
 from uuid import UUID
 
 from sqlalchemy import text
@@ -47,15 +48,17 @@ class PaylinkLedgerService:
         journal_id = res.scalar_one_or_none()
 
         if not journal_id:
+            # Ensure metadata is JSON-serializable for raw SQL + asyncpg.
+            meta_payload = json.dumps(metadata or {})
             res = await db.execute(
                 text(
                     """
                     INSERT INTO paylink.ledger_journal (tx_id, description, metadata)
-                    VALUES (:tx_id, :desc, :meta)
+                    VALUES (:tx_id, :desc, CAST(:meta AS jsonb))
                     RETURNING journal_id
                 """
                 ),
-                {"tx_id": tx_id, "desc": description, "meta": metadata or {}},
+                {"tx_id": tx_id, "desc": description, "meta": meta_payload},
             )
             journal_id = res.scalar_one()
 
