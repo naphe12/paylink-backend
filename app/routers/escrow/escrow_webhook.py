@@ -18,6 +18,26 @@ from app.services.webhook_log_service import log_webhook
 
 router = APIRouter(prefix="/escrow/webhooks", tags=["Escrow Webhooks"])
 
+async def _ensure_webhook_logs_schema(db: AsyncSession) -> None:
+    await db.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS escrow.webhook_logs (
+              id bigserial PRIMARY KEY,
+              event_type text NOT NULL,
+              tx_hash text,
+              status text NOT NULL,
+              attempts int NOT NULL DEFAULT 1,
+              payload jsonb NOT NULL,
+              error text,
+              created_at timestamptz NOT NULL DEFAULT now()
+            )
+            """
+        )
+    )
+    await db.execute(text("ALTER TABLE escrow.webhook_logs ADD COLUMN IF NOT EXISTS order_id uuid"))
+    await db.execute(text("ALTER TABLE escrow.webhook_logs ADD COLUMN IF NOT EXISTS network text"))
+
 
 @router.post("/usdc")
 async def usdc_webhook(
@@ -42,6 +62,8 @@ async def usdc_webhook(
     payload = ChainDepositWebhook.model_validate(payload_dict)
     tx_hash = payload_dict.get("tx_hash")
     log_index = payload_dict.get("log_index")
+
+    await _ensure_webhook_logs_schema(db)
 
     if not tx_hash:
         raise HTTPException(status_code=400, detail="Missing tx_hash")
