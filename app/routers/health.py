@@ -1,4 +1,8 @@
-from fastapi import APIRouter, Depends
+import os
+import time
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,8 +43,41 @@ async def health_ledger(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/healthz")
-async def healthz():
-    return {"status": "ok", "env": settings.APP_ENV}
+async def healthz(request: Request, db: AsyncSession = Depends(get_db)):
+    started_at_ts = float(getattr(request.app.state, "started_at_ts", time.time()))
+    uptime_seconds = int(max(time.time() - started_at_ts, 0))
+
+    db_ok = False
+    db_error = None
+    try:
+        await db.execute(text("SELECT 1"))
+        db_ok = True
+    except Exception as exc:
+        db_error = str(exc)
+
+    redis_ok = None
+    redis_error = None
+    if settings.REDIS_URL and redis:
+        try:
+            r = redis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
+            redis_ok = bool(await r.ping())
+        except Exception as exc:
+            redis_ok = False
+            redis_error = str(exc)
+
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "env": settings.APP_ENV,
+        "now_utc": datetime.now(timezone.utc).isoformat(),
+        "started_at_utc": datetime.fromtimestamp(started_at_ts, tz=timezone.utc).isoformat(),
+        "uptime_seconds": uptime_seconds,
+        "pid": os.getpid(),
+        "workers_started": int(len(getattr(request.app.state, "background_tasks", []) or [])),
+        "checks": {
+            "db": {"ok": db_ok, "error": db_error},
+            "redis": {"ok": redis_ok, "error": redis_error},
+        },
+    }
 
 
 @router.get("/readyz")

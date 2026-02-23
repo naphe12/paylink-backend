@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -238,10 +239,20 @@ async def ws_admin(ws: WebSocket):
 
 @app.on_event("startup")
 async def startup_event():
+    app.state.started_at_ts = time.time()
     background_tasks.append(asyncio.create_task(webhook_retry_worker()))
     background_tasks.append(asyncio.create_task(alerts_worker()))
     if settings.APP_ENV != "prod" and settings.SANDBOX_ENABLED:
         background_tasks.append(asyncio.create_task(sandbox_transition_worker()))
+    app.state.background_tasks = background_tasks
+
+    logger.info(
+        "Startup complete env=%s sandbox=%s cors_origins=%s bg_tasks=%s",
+        settings.APP_ENV,
+        settings.SANDBOX_ENABLED,
+        len(origins),
+        len(background_tasks),
+    )
 
     print("Routes disponibles :")
     for route in app.router.routes:
@@ -250,6 +261,14 @@ async def startup_event():
             print(f"{methods:10} {route.path}")
         elif isinstance(route, APIWebSocketRoute):
             print(f"{'WEBSOCKET':10} {route.path}")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.warning("Shutdown signal received; cancelling %s background task(s)", len(background_tasks))
+    for t in background_tasks:
+        t.cancel()
+    logger.warning("Application shutdown complete")
 
 
 @app.get("/")
