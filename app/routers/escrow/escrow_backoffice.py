@@ -35,8 +35,8 @@ async def list_orders(
     db: AsyncSession = Depends(get_db),
     user: Users = Depends(get_current_user_db),
 ):
+    _require_backoffice_role(user)
     try:
-        _require_backoffice_role(user)
         rows = await db.execute(
             text(
                 """
@@ -114,8 +114,46 @@ async def list_orders(
                 }
             )
         return out
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        # Fallback for environments where schema/column types differ.
+        q = select(EscrowOrder)
+        if status:
+            q = q.where(EscrowOrder.status == status)
+        res = await db.execute(q.order_by(EscrowOrder.created_at.desc()).limit(200))
+        orders = res.scalars().all()
+        return [
+            {
+                "id": str(o.id),
+                "status": str(o.status),
+                "user_id": str(o.user_id) if o.user_id else None,
+                "user_name": None,
+                "trader_id": str(o.trader_id) if o.trader_id else None,
+                "trader_name": None,
+                "usdc_expected": float(o.usdc_expected) if o.usdc_expected is not None else None,
+                "usdc_received": float(o.usdc_received) if o.usdc_received is not None else None,
+                "usdt_target": float(o.usdt_target) if o.usdt_target is not None else None,
+                "usdt_received": float(o.usdt_received) if o.usdt_received is not None else None,
+                "bif_target": float(o.bif_target) if o.bif_target is not None else None,
+                "bif_paid": float(o.bif_paid) if o.bif_paid is not None else None,
+                "risk_score": int(o.risk_score or 0),
+                "flags": list(o.flags or []),
+                "deposit_network": str(o.deposit_network) if o.deposit_network else None,
+                "deposit_address": o.deposit_address,
+                "deposit_tx_hash": o.deposit_tx_hash,
+                "payout_method": str(o.payout_method) if o.payout_method else None,
+                "payout_provider": o.payout_provider,
+                "payout_account_name": o.payout_account_name,
+                "payout_account_number": o.payout_account_number,
+                "payout_reference": o.payout_reference,
+                "funded_at": o.funded_at,
+                "swapped_at": o.swapped_at,
+                "payout_initiated_at": o.payout_initiated_at,
+                "paid_out_at": o.paid_out_at,
+                "created_at": o.created_at,
+                "updated_at": o.updated_at,
+            }
+            for o in orders
+        ]
 
 @router.post("/orders/{order_id}/payout-pending")
 async def mark_payout_pending(
