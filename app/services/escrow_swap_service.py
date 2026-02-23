@@ -9,6 +9,7 @@ from app.models.escrow_order import EscrowOrder
 from app.models.escrow_swap import EscrowSwap
 from app.models.escrow_event import EscrowEvent
 from app.models.escrow_enums import EscrowOrderStatus
+from app.services.escrow_tracking_ws import broadcast_tracking_update
 
 from services.swap_engine import SwapProvider
 
@@ -67,4 +68,5 @@ class EscrowSwapService:
         ))
 
         await db.commit()
+        await broadcast_tracking_update(order)
         return swap

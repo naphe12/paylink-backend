@@ -14,6 +14,7 @@ from app.models.escrow_event import EscrowEvent
 from app.models.escrow_proof import EscrowProof
 from app.models.escrow_payout import EscrowPayout
 from app.models.escrow_enums import EscrowOrderStatus, EscrowActorType, EscrowProofType
+from app.services.escrow_tracking_ws import broadcast_tracking_update
 from schemas.escrow_backoffice import MarkPayoutPendingRequest, ConfirmPaidOutRequest
 from services.escrow_ledger_hooks import on_payout_confirmed
 
@@ -68,6 +69,7 @@ async def mark_payout_pending(
 
         db.add(EscrowEvent(order_id=order.id, event_type="PAYOUT_PENDING_SET", payload={"ref": body.payout_reference}))
         await db.commit()
+        await broadcast_tracking_update(order)
         return {"status": "OK", "order_status": order.status}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -159,6 +161,7 @@ async def confirm_paid_out(
 
         db.add(EscrowEvent(order_id=order.id, event_type="PAID_OUT_CONFIRMED", payload={"amount_bif": str(body.amount_bif)}))
         await db.commit()
+        await broadcast_tracking_update(order)
         return {"status": "OK", "order_status": order.status}
     except HTTPException:
         raise

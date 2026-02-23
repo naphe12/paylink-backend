@@ -10,6 +10,8 @@ from app.dependencies.auth import get_current_user_db
 from app.models.escrow_enums import EscrowOrderStatus
 from app.models.escrow_order import EscrowOrder
 from app.models.users import Users
+from app.services.escrow_tracking_ws import broadcast_tracking_update
+from app.services.wallet_service import credit_user_usdc
 from app.services.escrow_ledger_hooks import (
     on_payout_confirmed,
     post_funded_usdc_deposit_journal,
@@ -94,7 +96,15 @@ async def sandbox_fund(
     _set_sandbox_step(order, 1)
 
     await post_funded_usdc_deposit_journal(db, order)
+    await credit_user_usdc(
+        str(order.user_id),
+        Decimal(str(order.usdc_received or order.usdc_expected)),
+        db=db,
+        ref=f"ESCROW_FUNDED_CREDIT:{order.id}",
+        description="Escrow sandbox FUND endpoint: credit user USDC wallet",
+    )
     await db.commit()
+    await broadcast_tracking_update(order)
 
     return {"status": "FUNDED"}
 
@@ -129,6 +139,7 @@ async def sandbox_swap(
 
     await post_swap_usdc_to_usdt_journal(db, order)
     await db.commit()
+    await broadcast_tracking_update(order)
 
     return {"status": "SWAPPED"}
 
@@ -156,6 +167,7 @@ async def sandbox_payout(
     if _get_sandbox_scenario(order) == "PAYOUT_STUCK":
         order.status = EscrowOrderStatus.PAYOUT_PENDING
         await db.commit()
+        await broadcast_tracking_update(order)
         return {"status": "PAYOUT_PENDING"}
 
     order.bif_paid = order.bif_target
@@ -164,5 +176,6 @@ async def sandbox_payout(
 
     await on_payout_confirmed(db, order)
     await db.commit()
+    await broadcast_tracking_update(order)
 
     return {"status": "PAID_OUT"}

@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 import json
+from decimal import Decimal
 
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
@@ -16,6 +17,8 @@ from app.models.users import Users
 from app.services.aml_service import run_aml
 from app.services.audit_service import audit_log
 from app.services.risk_decision_log import log_risk_decision
+from app.services.escrow_tracking_ws import broadcast_tracking_update
+from app.services.wallet_service import credit_user_usdc
 
 
 async def _ensure_webhook_log_table(db: AsyncSession) -> None:
@@ -170,6 +173,13 @@ async def process_usdc_webhook(
             order.status = EscrowOrderStatus.FUNDED
             response_status = "FUNDED"
             await on_funded(db, order)
+            await credit_user_usdc(
+                str(order.user_id),
+                Decimal(str(order.usdc_received or payload.amount)),
+                db=db,
+                ref=f"ESCROW_FUNDED_CREDIT:{order.id}",
+                description="Escrow FUNDED: credit user USDC wallet",
+            )
             subject = "USDC recus"
             message = (
                 f"Nous avons recu votre paiement USDC pour la transaction {order.id}. "
@@ -204,6 +214,8 @@ async def process_usdc_webhook(
         )
 
     await db.commit()
+    if payload.confirmations >= order.deposit_required_confirmations:
+        await broadcast_tracking_update(order)
 
     if subject and message:
         await notify(

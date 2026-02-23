@@ -15,6 +15,12 @@ from app.security.rate_limit import rate_limit
 from app.services.audit_service import audit_log
 from app.services.risk_decision_log import log_risk_decision
 from app.services.risk_service import RiskService
+from app.services.escrow_tracking_ws import (
+    TERMINAL_ESCROW_STATUSES,
+    build_tracking_payload,
+    broadcast_tracking_update,
+)
+from app.services.wallet_service import credit_user_usdc
 import math
 
 from app.models.escrow_enums import EscrowOrderStatus
@@ -30,10 +36,13 @@ DAILY_TX_LIMIT = 20
 MAX_OPEN_CREATED_ORDERS = 5
 
 
+def _status_to_str(status_value) -> str:
+    return status_value.value if hasattr(status_value, "value") else str(status_value)
+
+
 def _estimate_minutes_remaining(order: EscrowOrder) -> int:
-    status = order.status.value if hasattr(order.status, "value") else str(order.status)
-    terminal_statuses = {"PAID_OUT", "CANCELLED", "EXPIRED", "REFUNDED", "FAILED"}
-    if status in terminal_statuses:
+    status = _status_to_str(order.status)
+    if status in TERMINAL_ESCROW_STATUSES:
         return 0
 
     network = (
@@ -260,6 +269,27 @@ async def get_escrow(
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.get("/orders/{order_id}/tracking", response_model=dict)
+async def get_escrow_tracking(
+    order_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user_db),
+):
+    try:
+        o = await EscrowService.get_order(db, order_id)
+        current_user_id = str(getattr(current_user, "user_id", ""))
+        current_role = str(getattr(current_user, "role", "")).lower()
+        is_owner = str(o.user_id) == current_user_id
+        if not is_owner and current_role not in {"admin", "agent", "operator"}:
+            raise HTTPException(status_code=403, detail="Acces refuse")
+
+        return await build_tracking_payload(o)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @router.post("/orders/{order_id}/mark-paid")
 async def mark_paid(
     order_id: str,
@@ -413,6 +443,13 @@ async def sandbox_simulate_transition(
             o.funded_at = datetime.now(timezone.utc)
             o.status = EscrowOrderStatus.FUNDED
             await post_funded_usdc_deposit_journal(db, o)
+            await credit_user_usdc(
+                str(o.user_id),
+                Decimal(str(o.usdc_received or o.usdc_expected)),
+                db=db,
+                ref=f"ESCROW_FUNDED_CREDIT:{o.id}",
+                description="Escrow sandbox FUND: credit user USDC wallet",
+            )
 
         elif requested_action == "SWAP":
             if current_status != "FUNDED":
@@ -445,6 +482,7 @@ async def sandbox_simulate_transition(
 
         await db.commit()
         await db.refresh(o)
+        await broadcast_tracking_update(o)
 
         return {
             "status": "OK",

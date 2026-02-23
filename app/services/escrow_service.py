@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from fastapi import HTTPException
@@ -8,6 +9,8 @@ from app.services.aml_service import run_aml
 from app.services.risk_service import RiskService
 from app.services.risk_decision_log import log_risk_decision
 from app.services.audit_service import audit_log
+from app.services.escrow_tracking_ws import broadcast_tracking_update
+from app.services.wallet_service import credit_user_usdc
 
 class EscrowService:
 
@@ -141,26 +144,41 @@ class EscrowService:
     async def mark_funded(db: AsyncSession, order: EscrowOrder):
         if order.status != EscrowOrderStatus.CREATED:
             raise ValueError("Invalid status transition")
+        order.funded_at = datetime.now(timezone.utc)
         order.status = EscrowOrderStatus.FUNDED
+        await credit_user_usdc(
+            str(order.user_id),
+            Decimal(str(order.usdc_received or order.usdc_expected or 0)),
+            db=db,
+            ref=f"ESCROW_FUNDED_CREDIT:{order.id}",
+            description="Escrow mark_funded: credit user USDC wallet",
+        )
         await db.commit()
+        await broadcast_tracking_update(order)
 
     @staticmethod
     async def mark_swapped(db: AsyncSession, order: EscrowOrder):
         if order.status != EscrowOrderStatus.FUNDED:
             raise ValueError("Invalid status transition")
+        order.swapped_at = datetime.now(timezone.utc)
         order.status = EscrowOrderStatus.SWAPPED
         await db.commit()
+        await broadcast_tracking_update(order)
 
     @staticmethod
     async def mark_payout_pending(db: AsyncSession, order: EscrowOrder):
         if order.status != EscrowOrderStatus.SWAPPED:
             raise ValueError("Invalid status transition")
+        order.payout_initiated_at = datetime.now(timezone.utc)
         order.status = EscrowOrderStatus.PAYOUT_PENDING
         await db.commit()
+        await broadcast_tracking_update(order)
 
     @staticmethod
     async def mark_paid_out(db: AsyncSession, order: EscrowOrder):
         if order.status != EscrowOrderStatus.PAYOUT_PENDING:
             raise ValueError("Invalid status transition")
+        order.paid_out_at = datetime.now(timezone.utc)
         order.status = EscrowOrderStatus.PAID_OUT
         await db.commit()
+        await broadcast_tracking_update(order)
