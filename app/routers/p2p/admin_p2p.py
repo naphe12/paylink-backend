@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, text
 
@@ -6,17 +6,179 @@ from app.core.database import get_db
 from app.dependencies.auth import get_current_admin  # you already have it
 from app.models.users import Users
 from app.models.p2p_trade import P2PTrade
-from app.models.p2p_enums import TradeStatus
 
 router = APIRouter(prefix="/admin/p2p", tags=["Admin P2P"])
 
 @router.get("/trades")
-async def admin_list_trades(status: str | None = None, db: AsyncSession = Depends(get_db), me: Users = Depends(get_current_admin)):
-    stmt = select(P2PTrade)
+async def admin_list_trades(
+    status: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    me: Users = Depends(get_current_admin),
+):
+    rows = await db.execute(
+        text(
+            """
+            SELECT
+              t.trade_id,
+              t.offer_id,
+              t.status::text AS status,
+              t.created_at,
+              t.updated_at,
+              t.expires_at,
+              t.token::text AS token,
+              t.token_amount,
+              t.price_bif_per_usd,
+              t.bif_amount,
+              t.payment_method::text AS payment_method,
+              t.risk_score,
+              t.flags,
+              t.escrow_tx_hash,
+              t.fiat_sent_at,
+              t.fiat_confirmed_at,
+              t.buyer_id,
+              ub.full_name AS buyer_name,
+              t.seller_id,
+              us.full_name AS seller_name,
+              o.side::text AS offer_side,
+              o.user_id AS offer_owner_id,
+              uo.full_name AS offer_owner_name,
+              COALESCE(d.disputes_count, 0) AS disputes_count
+            FROM p2p.trades t
+            LEFT JOIN p2p.offers o ON o.offer_id = t.offer_id
+            LEFT JOIN paylink.users ub ON ub.user_id = t.buyer_id
+            LEFT JOIN paylink.users us ON us.user_id = t.seller_id
+            LEFT JOIN paylink.users uo ON uo.user_id = o.user_id
+            LEFT JOIN (
+              SELECT trade_id, COUNT(*)::int AS disputes_count
+              FROM p2p.disputes
+              GROUP BY trade_id
+            ) d ON d.trade_id = t.trade_id
+            ORDER BY t.created_at DESC
+            """
+        )
+    )
+    trades = []
+    for row in rows.mappings().all():
+        item = {
+            "trade_id": str(row["trade_id"]),
+            "offer_id": str(row["offer_id"]) if row["offer_id"] else None,
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "expires_at": row["expires_at"],
+            "token": row["token"],
+            "token_amount": float(row["token_amount"]) if row["token_amount"] is not None else None,
+            "price_bif_per_usd": float(row["price_bif_per_usd"]) if row["price_bif_per_usd"] is not None else None,
+            "bif_amount": float(row["bif_amount"]) if row["bif_amount"] is not None else None,
+            "payment_method": row["payment_method"],
+            "risk_score": int(row["risk_score"]) if row["risk_score"] is not None else 0,
+            "flags": list(row["flags"] or []),
+            "escrow_tx_hash": row["escrow_tx_hash"],
+            "fiat_sent_at": row["fiat_sent_at"],
+            "fiat_confirmed_at": row["fiat_confirmed_at"],
+            "buyer_user_id": str(row["buyer_id"]) if row["buyer_id"] else None,
+            "buyer_name": row["buyer_name"],
+            "seller_user_id": str(row["seller_id"]) if row["seller_id"] else None,
+            "seller_name": row["seller_name"],
+            "offer_side": row["offer_side"],
+            "offer_owner_user_id": str(row["offer_owner_id"]) if row["offer_owner_id"] else None,
+            "offer_owner_name": row["offer_owner_name"],
+            "disputes_count": int(row["disputes_count"] or 0),
+        }
+        trades.append(item)
+
     if status:
-        stmt = stmt.where(P2PTrade.status == TradeStatus(status))
-    res = await db.execute(stmt.order_by(P2PTrade.created_at.desc()))
-    return [t for t in res.scalars().all()]
+        wanted = status.strip().upper()
+        trades = [t for t in trades if str(t.get("status", "")).upper() == wanted]
+
+    return trades
+
+
+@router.get("/trades/{trade_id}")
+async def admin_trade_detail(
+    trade_id: str,
+    db: AsyncSession = Depends(get_db),
+    me: Users = Depends(get_current_admin),
+):
+    row = await db.execute(
+        text(
+            """
+            SELECT
+              t.trade_id,
+              t.offer_id,
+              t.status::text AS status,
+              t.created_at,
+              t.updated_at,
+              t.expires_at,
+              t.token::text AS token,
+              t.token_amount,
+              t.price_bif_per_usd,
+              t.bif_amount,
+              t.payment_method::text AS payment_method,
+              t.risk_score,
+              t.flags,
+              t.escrow_network,
+              t.escrow_deposit_addr,
+              t.escrow_tx_hash,
+              t.escrow_locked_at,
+              t.fiat_sent_at,
+              t.fiat_confirmed_at,
+              t.buyer_id,
+              ub.full_name AS buyer_name,
+              t.seller_id,
+              us.full_name AS seller_name,
+              o.side::text AS offer_side,
+              o.user_id AS offer_owner_id,
+              uo.full_name AS offer_owner_name,
+              COALESCE(d.disputes_count, 0) AS disputes_count
+            FROM p2p.trades t
+            LEFT JOIN p2p.offers o ON o.offer_id = t.offer_id
+            LEFT JOIN paylink.users ub ON ub.user_id = t.buyer_id
+            LEFT JOIN paylink.users us ON us.user_id = t.seller_id
+            LEFT JOIN paylink.users uo ON uo.user_id = o.user_id
+            LEFT JOIN (
+              SELECT trade_id, COUNT(*)::int AS disputes_count
+              FROM p2p.disputes
+              GROUP BY trade_id
+            ) d ON d.trade_id = t.trade_id
+            WHERE t.trade_id = CAST(:trade_id AS uuid)
+            """
+        ),
+        {"trade_id": trade_id},
+    )
+    data = row.mappings().first()
+    if not data:
+        raise HTTPException(status_code=404, detail="Trade not found")
+
+    return {
+        "trade_id": str(data["trade_id"]),
+        "offer_id": str(data["offer_id"]) if data["offer_id"] else None,
+        "status": data["status"],
+        "created_at": data["created_at"],
+        "updated_at": data["updated_at"],
+        "expires_at": data["expires_at"],
+        "token": data["token"],
+        "token_amount": float(data["token_amount"]) if data["token_amount"] is not None else None,
+        "price_bif_per_usd": float(data["price_bif_per_usd"]) if data["price_bif_per_usd"] is not None else None,
+        "bif_amount": float(data["bif_amount"]) if data["bif_amount"] is not None else None,
+        "payment_method": data["payment_method"],
+        "risk_score": int(data["risk_score"]) if data["risk_score"] is not None else 0,
+        "flags": list(data["flags"] or []),
+        "escrow_network": data["escrow_network"],
+        "escrow_deposit_addr": data["escrow_deposit_addr"],
+        "escrow_tx_hash": data["escrow_tx_hash"],
+        "escrow_locked_at": data["escrow_locked_at"],
+        "fiat_sent_at": data["fiat_sent_at"],
+        "fiat_confirmed_at": data["fiat_confirmed_at"],
+        "buyer_user_id": str(data["buyer_id"]) if data["buyer_id"] else None,
+        "buyer_name": data["buyer_name"],
+        "seller_user_id": str(data["seller_id"]) if data["seller_id"] else None,
+        "seller_name": data["seller_name"],
+        "offer_side": data["offer_side"],
+        "offer_owner_user_id": str(data["offer_owner_id"]) if data["offer_owner_id"] else None,
+        "offer_owner_name": data["offer_owner_name"],
+        "disputes_count": int(data["disputes_count"] or 0),
+    }
 
 
 @router.get("/disputes")
