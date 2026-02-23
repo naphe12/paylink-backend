@@ -12,7 +12,9 @@ class AMLHit(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("paylink.users.user_id", ondelete="CASCADE"), nullable=False)
 
     trade_id = Column(UUID(as_uuid=True), ForeignKey("p2p.trades.trade_id", ondelete="SET NULL"))
-    order_id = Column(UUID(as_uuid=True), ForeignKey("escrow.orders.id", ondelete="SET NULL"))
+    # Keep nullable UUID without FK to avoid cross-metadata FK resolution issues
+    # (P2P flows do not require escrow FK enforcement here).
+    order_id = Column(UUID(as_uuid=True), nullable=True)
 
     rule_code = Column(Text, nullable=False)
     score_delta = Column(Integer, nullable=False)
