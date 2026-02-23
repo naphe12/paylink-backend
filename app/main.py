@@ -7,6 +7,7 @@ from fastapi.routing import APIRoute, APIWebSocketRoute
 
 import app.schemas
 from app.api.ws_security import router as ws_security_router
+from app.api.ws_tracking import router as ws_tracking_router
 from app.config import settings
 from app.core.database import get_db
 from app.logger import get_logger
@@ -67,6 +68,7 @@ from app.routers.ref import country, exchange
 from app.routers.tontines.tontines import router as tontine_router
 from app.routers.wallet import payments as wallet_payments
 from app.routers.wallet import transactions, wallet
+from app.routers.wallet.usdc_wallet import router as usdc_wallet_router
 from app.routers.wallet.transfer import router as transfer_router
 from app.routers.ws import router as ws_router
 from app.services.backoffice_risk import router as backoffice_risk_router
@@ -154,6 +156,7 @@ app.add_middleware(RateLimitMiddleware, redis_url=settings.REDIS_URL)
 app.include_router(auth.router, prefix="/auth", tags=["Auth"])
 app.include_router(change_password_router)
 app.include_router(wallet.router, prefix="/wallet", tags=["Wallet"])
+app.include_router(usdc_wallet_router)
 app.include_router(country.router, prefix="/api/countries", tags=["Countries"])
 app.include_router(exchange.router)
 app.include_router(notif_ws.router)
@@ -173,6 +176,7 @@ app.include_router(ws_router)
 app.include_router(ws_router)
 app.include_router(risk_admin_router.router)
 app.include_router(ws_security_router)
+app.include_router(ws_tracking_router)
 app.include_router(admin_users_router)
 app.include_router(admin_wallets_router)
 app.include_router(admin_transfers_router.router)
