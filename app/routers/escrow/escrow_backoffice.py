@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 from datetime import datetime, timezone
 
 from app.core.database import get_db
@@ -37,12 +37,83 @@ async def list_orders(
 ):
     try:
         _require_backoffice_role(user)
-        q = select(EscrowOrder)
-        if status:
-            q = q.where(EscrowOrder.status == status)
-        res = await db.execute(q.order_by(EscrowOrder.created_at.desc()).limit(100))
-        orders = res.scalars().all()
-        return [{"id": str(o.id), "status": o.status, "usdc_expected": str(o.usdc_expected), "bif_target": str(o.bif_target)} for o in orders]
+        rows = await db.execute(
+            text(
+                """
+                SELECT
+                  o.id,
+                  o.status::text AS status,
+                  o.user_id,
+                  u.full_name AS user_name,
+                  o.trader_id,
+                  t.full_name AS trader_name,
+                  o.usdc_expected,
+                  o.usdc_received,
+                  o.usdt_target,
+                  o.usdt_received,
+                  o.bif_target,
+                  o.bif_paid,
+                  o.risk_score,
+                  o.flags,
+                  o.deposit_network,
+                  o.deposit_address,
+                  o.deposit_tx_hash,
+                  o.payout_method::text AS payout_method,
+                  o.payout_provider,
+                  o.payout_account_name,
+                  o.payout_account_number,
+                  o.payout_reference,
+                  o.funded_at,
+                  o.swapped_at,
+                  o.payout_initiated_at,
+                  o.paid_out_at,
+                  o.created_at,
+                  o.updated_at
+                FROM escrow.orders o
+                LEFT JOIN paylink.users u ON u.user_id = o.user_id
+                LEFT JOIN paylink.users t ON t.user_id = o.trader_id
+                WHERE (:status IS NULL OR o.status::text = :status)
+                ORDER BY o.created_at DESC
+                LIMIT 200
+                """
+            ),
+            {"status": status},
+        )
+        out = []
+        for r in rows.mappings().all():
+            out.append(
+                {
+                    "id": str(r["id"]),
+                    "status": r["status"],
+                    "user_id": str(r["user_id"]) if r["user_id"] else None,
+                    "user_name": r["user_name"],
+                    "trader_id": str(r["trader_id"]) if r["trader_id"] else None,
+                    "trader_name": r["trader_name"],
+                    "usdc_expected": float(r["usdc_expected"]) if r["usdc_expected"] is not None else None,
+                    "usdc_received": float(r["usdc_received"]) if r["usdc_received"] is not None else None,
+                    "usdt_target": float(r["usdt_target"]) if r["usdt_target"] is not None else None,
+                    "usdt_received": float(r["usdt_received"]) if r["usdt_received"] is not None else None,
+                    "bif_target": float(r["bif_target"]) if r["bif_target"] is not None else None,
+                    "bif_paid": float(r["bif_paid"]) if r["bif_paid"] is not None else None,
+                    "risk_score": int(r["risk_score"]) if r["risk_score"] is not None else 0,
+                    "flags": list(r["flags"] or []),
+                    "deposit_network": r["deposit_network"],
+                    "deposit_address": r["deposit_address"],
+                    "deposit_tx_hash": r["deposit_tx_hash"],
+                    "payout_method": r["payout_method"],
+                    "payout_provider": r["payout_provider"],
+                    "payout_account_name": r["payout_account_name"],
+                    "payout_account_number": r["payout_account_number"],
+                    "payout_reference": r["payout_reference"],
+                    "funded_at": r["funded_at"],
+                    "swapped_at": r["swapped_at"],
+                    "payout_initiated_at": r["payout_initiated_at"],
+                    "paid_out_at": r["paid_out_at"],
+                    "created_at": r["created_at"],
+                    "updated_at": r["updated_at"],
+                }
+            )
+        return out
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
