@@ -64,7 +64,6 @@ async def close_case(
 async def list_hits(
     user_id: str | None = None,
     trade_id: str | None = None,
-    order_id: str | None = None,
     limit: int = 200,
     db: AsyncSession = Depends(get_db),
     me: Users = Depends(get_current_admin),
@@ -74,8 +73,6 @@ async def list_hits(
         stmt = stmt.where(AMLHit.user_id == user_id)
     if trade_id:
         stmt = stmt.where(AMLHit.trade_id == trade_id)
-    if order_id:
-        stmt = stmt.where(AMLHit.order_id == order_id)
 
     stmt = stmt.order_by(AMLHit.created_at.desc()).limit(min(limit, 500))
     res = await db.execute(stmt)
