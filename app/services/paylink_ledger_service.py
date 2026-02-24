@@ -37,7 +37,7 @@ class PaylinkLedgerService:
         *,
         tx_id: UUID,  # escrow_order.id
         description: str,
-        postings: list[dict],  # {account_code, direction, amount, currency='USD'}
+        postings: list[dict],  # {account_code, direction, amount, currency?}
         metadata: dict | None = None,
     ) -> UUID:
         # 1) Idempotency: reuse journal if exists
@@ -71,10 +71,22 @@ class PaylinkLedgerService:
                 continue
 
             acc = await db.execute(
-                text("SELECT account_id FROM paylink.ledger_accounts WHERE code=:c"),
+                text(
+                    """
+                    SELECT account_id, currency_code
+                    FROM paylink.ledger_accounts
+                    WHERE code = :c
+                    LIMIT 1
+                    """
+                ),
                 {"c": p["account_code"]},
             )
-            account_id = acc.scalar_one()
+            acc_row = acc.first()
+            if not acc_row:
+                raise ValueError(f"Ledger account not found: {p['account_code']}")
+            account_id = acc_row[0]
+            account_currency = str(acc_row[1]) if acc_row[1] else None
+            effective_currency = str(p.get("currency") or account_currency or "USD").upper()
 
             await db.execute(
                 text(
@@ -90,7 +102,7 @@ class PaylinkLedgerService:
                     "aid": account_id,
                     "dir": p["direction"],  # 'DEBIT' | 'CREDIT'
                     "amt": amount,
-                    "ccy": p.get("currency", "USD"),
+                    "ccy": effective_currency,
                 },
             )
 
