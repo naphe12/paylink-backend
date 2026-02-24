@@ -10,6 +10,7 @@ from app.models.escrow_swap import EscrowSwap
 from app.models.escrow_event import EscrowEvent
 from app.models.escrow_enums import EscrowOrderStatus
 from app.services.escrow_tracking_ws import broadcast_tracking_update
+from app.services.payout_orchestrator import assign_agent_and_notify
 
 from services.swap_engine import SwapProvider
 
@@ -68,5 +69,7 @@ class EscrowSwapService:
         ))
 
         await db.commit()
+        await assign_agent_and_notify(str(order.id), Decimal(str(order.bif_target or 0)))
+        await db.refresh(order)
         await broadcast_tracking_update(order)
         return swap

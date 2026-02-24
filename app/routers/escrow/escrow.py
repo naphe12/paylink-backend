@@ -21,6 +21,7 @@ from app.services.escrow_tracking_ws import (
     broadcast_tracking_update,
 )
 from app.services.wallet_service import credit_user_usdc
+from app.services.payout_orchestrator import assign_agent_and_notify
 import math
 
 from app.models.escrow_enums import EscrowOrderStatus
@@ -459,6 +460,9 @@ async def sandbox_simulate_transition(
             o.swapped_at = datetime.now(timezone.utc)
             o.status = EscrowOrderStatus.SWAPPED
             await post_swap_usdc_to_usdt_journal(db, o)
+            await db.commit()
+            await assign_agent_and_notify(str(o.id), Decimal(str(o.bif_target or 0)))
+            await db.refresh(o)
 
         elif requested_action == "PAYOUT_PENDING":
             if current_status != "SWAPPED":

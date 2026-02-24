@@ -27,7 +27,11 @@ class Agents(Base):
     commission_rate: Mapped[Optional[decimal.Decimal]] = mapped_column(Numeric(5, 4), server_default=text('0.015'))
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(True), nullable=False, server_default=text('now()'))
     user_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid)
-
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    phone: Mapped[str] = mapped_column(Text, nullable=False)
+    daily_limit_bif: Mapped[Optional[decimal.Decimal]] = mapped_column(Numeric(15, 2), server_default=text('0.00'))
+    daily_used_bif: Mapped[Optional[decimal.Decimal]] = mapped_column(Numeric(15, 2), server_default=text('0.00'))
+    last_assigned_at: Mapped[datetime.datetime] = mapped_column(DateTime(True), nullable=False, server_default=text('now()'))
     countries: Mapped['Countries'] = relationship('Countries', back_populates='agents')
     user: Mapped[Optional['Users']] = relationship('Users', back_populates='agents')
     agent_locations: Mapped[list['AgentLocations']] = relationship('AgentLocations', back_populates='agent')

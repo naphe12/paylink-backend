@@ -7,6 +7,7 @@ from app.models.escrow_order import EscrowOrder
 from app.models.escrow_enums import EscrowOrderStatus
 from app.models.escrow_event import EscrowEvent
 from app.services.liquidity_guard import LiquidityGuard
+from app.services.payout_orchestrator import assign_agent_and_notify
 
 from services.swap_engine import InternalInventorySwapProvider
 from services.escrow_swap_service import EscrowSwapService
@@ -50,14 +51,12 @@ async def run_post_funded_worker(db: AsyncSession):
             )
 
             await swap_svc.execute_swap(db, order.id)
-
-            order.status = EscrowOrderStatus.PAYOUT_PENDING
-            order.payout_initiated_at = datetime.now(timezone.utc)
+            assign_res = await assign_agent_and_notify(str(order.id), Decimal(str(order.bif_target or 0)))
 
             db.add(EscrowEvent(
                 order_id=order.id,
                 event_type="AUTO_PAYOUT_PENDING",
-                payload={},
+                payload={"assignment_id": assign_res.get("assignment_id")},
             ))
             await db.commit()
 
