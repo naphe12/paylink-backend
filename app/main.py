@@ -10,6 +10,7 @@ import app.schemas
 from app.api.ws_security import router as ws_security_router
 from app.api.ws_tracking import router as ws_tracking_router
 from app.api.ops_payout import router as ops_payout_router
+from app.api.ops_liquidity import router as ops_liquidity_router
 from app.api.agent import router as agent_ops_router
 from app.config import settings
 from app.core.database import get_db
@@ -181,6 +182,7 @@ app.include_router(risk_admin_router.router)
 app.include_router(ws_security_router)
 app.include_router(ws_tracking_router)
 app.include_router(ops_payout_router)
+app.include_router(ops_liquidity_router)
 app.include_router(agent_ops_router)
 app.include_router(admin_users_router)
 app.include_router(admin_wallets_router)
