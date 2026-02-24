@@ -2,7 +2,7 @@ import asyncio
 import logging
 import time
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute, APIWebSocketRoute
 
@@ -77,7 +77,7 @@ from app.routers.ws import router as ws_router
 from app.services.backoffice_risk import router as backoffice_risk_router
 from app.services.sandbox_transition_worker import run_sandbox_auto_transitions
 from app.services.tontine_rotation import process_tontine_rotations
-from app.ws.admin_ws import admin_ws
+from app.websocket_manager import admin_ws_join, admin_ws_leave
 from app.workers.alerts_worker import deliver_alerts
 from services.escrow_webhook_retry_worker import run_escrow_webhook_retry_worker
 
@@ -232,13 +232,19 @@ app.include_router(admin_arbitrage_router, prefix="/api")
 
 
 @app.websocket("/ws/admin")
-async def ws_admin(ws: WebSocket):
-    await admin_ws.connect(ws)
+async def ws_admin(
+    ws: WebSocket,
+    topics: str | None = Query(default=None),
+):
+    topic_set = {t.strip() for t in (topics or "").split(",") if t.strip()}
+    await admin_ws_join(ws, topic_set or None)
     try:
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
-        admin_ws.disconnect(ws)
+        await admin_ws_leave(ws)
+    except Exception:
+        await admin_ws_leave(ws)
 
 
 @app.on_event("startup")
