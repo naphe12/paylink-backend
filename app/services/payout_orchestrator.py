@@ -121,7 +121,7 @@ async def assign_agent_and_notify(order_id: str, amount_bif: float | Decimal) ->
             text(
                 """
                 SELECT id, agent_id, status
-                FROM payout.assignments
+                FROM paylink.assignments
                 WHERE order_id = CAST(:oid AS uuid)
                 ORDER BY assigned_at DESC NULLS LAST, id DESC
                 LIMIT 1
@@ -200,7 +200,7 @@ async def assign_agent_and_notify(order_id: str, amount_bif: float | Decimal) ->
         await db.execute(
             text(
                 """
-                INSERT INTO payout.assignments (id, order_id, agent_id, amount_bif, status)
+                INSERT INTO paylink.assignments (id, order_id, agent_id, amount_bif, status)
                 VALUES (
                     CAST(:id AS uuid),
                     CAST(:oid AS uuid),

@@ -31,7 +31,7 @@ async def list_assignments(agent_id: str):
             text(
                 """
                 SELECT a.id, a.order_id, a.amount_bif, a.status, a.assigned_at
-                FROM payout.assignments a
+                FROM paylink.assignments a
                 WHERE a.agent_id = CAST(:aid AS uuid)
                 ORDER BY a.assigned_at DESC
                 LIMIT 100
@@ -58,7 +58,7 @@ async def confirm_assignment(assignment_id: str, payload: ConfirmRequest):
             text(
                 """
                 SELECT id, order_id, amount_bif, status
-                FROM payout.assignments
+                FROM paylink.assignments
                 WHERE id = CAST(:id AS uuid) AND agent_id = CAST(:aid AS uuid)
                 """
             ),
@@ -76,7 +76,7 @@ async def confirm_assignment(assignment_id: str, payload: ConfirmRequest):
         await db.execute(
             text(
                 """
-                UPDATE payout.assignments
+                UPDATE paylink.assignments
                 SET status = 'CONFIRMED',
                     confirmed_at = now(),
                     note = COALESCE(:note, '')

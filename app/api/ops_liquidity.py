@@ -26,19 +26,26 @@ async def get_bif_liquidity(
     )
     available = float((available_row.first() or [0])[0] or 0)
 
-    reserved_row = await db.execute(
-        text(
-            """
-            SELECT COALESCE(SUM(amount_bif), 0) AS reserved_bif
-            FROM payout.assignments
-            WHERE status = 'ASSIGNED'
-            """
-        )
+    regclass_row = await db.execute(
+        text("SELECT to_regclass('paylink.assignments')")
     )
-    reserved = float((reserved_row.first() or [0])[0] or 0)
+    assignments_table = (regclass_row.first() or [None])[0]
+
+    if assignments_table:
+        reserved_row = await db.execute(
+            text(
+                """
+                SELECT COALESCE(SUM(amount_bif), 0) AS reserved_bif
+                FROM paylink.assignments
+                WHERE status = 'ASSIGNED'
+                """
+            )
+        )
+        reserved = float((reserved_row.first() or [0])[0] or 0)
+    else:
+        reserved = 0.0
 
     return {
         "available_bif": available,
         "reserved_bif": reserved,
     }
-
