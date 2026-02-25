@@ -2,7 +2,7 @@ from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from services.mailer import send_email
+from app.services.mailjet_service import MailjetEmailService
 
 
 async def notify(
@@ -34,10 +34,12 @@ async def notify(
 
     if email:
         try:
+            mailer = MailjetEmailService()
             await run_in_threadpool(
-                send_email,
-                to=email,
-                subject=subject,
+                mailer.send_email,
+                email,
+                subject,
+                None,
                 body_html=f"<p>{message}</p>",
             )
         except Exception:
