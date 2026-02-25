@@ -1,8 +1,12 @@
+import logging
+
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.mailjet_service import MailjetEmailService
+
+logger = logging.getLogger(__name__)
 
 
 async def notify(
@@ -44,7 +48,7 @@ async def notify(
             )
         except Exception:
             # Notification is best-effort and must not break escrow processing.
-            pass
+            logger.exception("Escrow email notify failed for user_id=%s email=%s", user_id, email)
 
     if phone:
         # Placeholder: plug Twilio / Meta / 360dialog provider here.

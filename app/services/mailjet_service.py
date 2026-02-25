@@ -17,9 +17,18 @@ class MailjetEmailService:
     """
 
     def __init__(self):
-        self.api_key = (settings.BREVO_API_KEY or "").strip()
-        if not self.api_key:
-            raise ValueError("BREVO_API_KEY must be configured")
+        self.brevo_api_key = (settings.BREVO_API_KEY or "").strip()
+        self.mailjet_api_key = (settings.MAILJET_API_KEY or "").strip()
+        self.mailjet_secret_key = (settings.MAILJET_SECRET_KEY or "").strip()
+
+        if self.brevo_api_key:
+            self.provider = "brevo"
+        elif self.mailjet_api_key and self.mailjet_secret_key:
+            self.provider = "mailjet"
+        else:
+            raise ValueError(
+                "Configure BREVO_API_KEY or (MAILJET_API_KEY + MAILJET_SECRET_KEY)"
+            )
 
     def send_email(
         self,
@@ -44,40 +53,67 @@ class MailjetEmailService:
         if html_content and text is None:
             text = "Notification PayLink"
 
-        payload = {
-            "sender": {"email": settings.MAIL_FROM, "name": settings.MAIL_FROM_NAME},
-            "to": [{"email": to_email}],
-            "subject": subject,
-        }
-        if html_content:
-            payload["htmlContent"] = html_content
-        if text:
-            payload["textContent"] = text
-        if attachments:
-            payload["attachment"] = [
-                {
-                    "content": base64.b64encode(att["content"]).decode("utf-8"),
-                    "name": att.get("name", "document.pdf"),
-                }
-                for att in attachments
-                if att.get("content")
-            ]
+        if self.provider == "brevo":
+            payload = {
+                "sender": {"email": settings.MAIL_FROM, "name": settings.MAIL_FROM_NAME},
+                "to": [{"email": to_email}],
+                "subject": subject,
+            }
+            if html_content:
+                payload["htmlContent"] = html_content
+            if text:
+                payload["textContent"] = text
+            if attachments:
+                payload["attachment"] = [
+                    {
+                        "content": base64.b64encode(att["content"]).decode("utf-8"),
+                        "name": att.get("name", "document.pdf"),
+                    }
+                    for att in attachments
+                    if att.get("content")
+                ]
 
-        headers = {
-            "api-key": self.api_key,
-            "Content-Type": "application/json",
-            "accept": "application/json",
-        }
+            headers = {
+                "api-key": self.brevo_api_key,
+                "Content-Type": "application/json",
+                "accept": "application/json",
+            }
+            response = httpx.post(
+                "https://api.brevo.com/v3/smtp/email",
+                json=payload,
+                headers=headers,
+                timeout=15.0,
+            )
+        else:
+            message = {
+                "From": {"Email": settings.MAIL_FROM, "Name": settings.MAIL_FROM_NAME},
+                "To": [{"Email": to_email}],
+                "Subject": subject,
+            }
+            if html_content:
+                message["HTMLPart"] = html_content
+            if text:
+                message["TextPart"] = text
+            if attachments:
+                message["Attachments"] = [
+                    {
+                        "ContentType": att.get("content_type", "application/octet-stream"),
+                        "Filename": att.get("name", "document.bin"),
+                        "Base64Content": base64.b64encode(att["content"]).decode("utf-8"),
+                    }
+                    for att in attachments
+                    if att.get("content")
+                ]
 
-        response = httpx.post(
-            "https://api.brevo.com/v3/smtp/email",
-            json=payload,
-            headers=headers,
-            timeout=15.0,
-        )
+            response = httpx.post(
+                "https://api.mailjet.com/v3.1/send",
+                json={"Messages": [message]},
+                auth=(self.mailjet_api_key, self.mailjet_secret_key),
+                timeout=15.0,
+            )
 
         try:
-            logger.info("Brevo send to %s status=%s", to_email, response.status_code)
+            logger.info("Email provider=%s to=%s status=%s", self.provider, to_email, response.status_code)
         except Exception:
             pass
 
@@ -86,8 +122,8 @@ class MailjetEmailService:
                 detail = response.json()
             except Exception:
                 detail = response.text
-            raise RuntimeError(f"Brevo send failed: {detail}")
+            raise RuntimeError(f"Email send failed via {self.provider}: {detail}")
 
-        print(f"[brevo] email sent? status={response.status_code} to={to_email}")
+        print(f"[{self.provider}] email sent? status={response.status_code} to={to_email}")
         print(response.json())
         return {"status": response.status_code, "response": response.json()}
