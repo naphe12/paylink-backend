@@ -11,10 +11,12 @@ from sqlalchemy import select, text
 
 from app.core.database import async_session_maker
 from app.core.config import settings
+from app.models.telegram_user import TelegramUser
 from app.models.transaction_email_recipients import TransactionEmailRecipient
 from app.services.mailjet_service import MailjetEmailService
 from app.services.notifiers import EmailNotifier, NotificationMessage
 from app.services.paylink_ledger_service import PaylinkLedgerService
+from app.services.telegram import send_message as send_telegram_message
 
 logger = logging.getLogger(__name__)
 
@@ -239,6 +241,54 @@ async def _send_assignment_email(
                 )
 
 
+async def _send_assignment_telegram(
+    *,
+    order_id: str,
+    assignment_id: str,
+    agent_id: str,
+    amount_bif: Decimal,
+    usdc_amount: Decimal | None,
+    client_name: str | None,
+    client_email: str | None,
+    client_phone: str | None,
+    recipient_name: str | None,
+    recipient_phone: str | None,
+    payout_method: str | None,
+) -> None:
+    async with async_session_maker() as db:
+        chat_ids = (await db.execute(select(TelegramUser.chat_id))).scalars().all()
+
+    if not chat_ids:
+        return
+
+    deposit_label = f"{usdc_amount} USDC" if usdc_amount is not None and usdc_amount > 0 else "Depot USDC detecte"
+    message = (
+        "Nouvelle affectation payout escrow\n"
+        f"Commande: {order_id}\n"
+        f"Affectation: {assignment_id}\n"
+        f"Agent: {agent_id}\n"
+        f"Depot: {deposit_label}\n"
+        f"Montant a payer: {amount_bif} BIF\n"
+        f"Client: {client_name or '-'} ({client_email or '-'})\n"
+        f"Telephone client: {client_phone or '-'}\n"
+        f"Beneficiaire: {recipient_name or '-'} ({recipient_phone or '-'})\n"
+        f"Mode payout: {payout_method or '-'}"
+    )
+
+    for chat_id in chat_ids:
+        try:
+            await send_telegram_message(int(chat_id), message)
+        except Exception:
+            logger.exception(
+                "Failed to send payout assignment telegram "
+                "(order_id=%s, assignment_id=%s, agent_id=%s, chat_id=%s)",
+                order_id,
+                assignment_id,
+                agent_id,
+                chat_id,
+            )
+
+
 async def assign_agent_and_notify(order_id: str, amount_bif: float | Decimal) -> dict:
     amount = Decimal(str(amount_bif))
     if amount <= 0:
@@ -445,6 +495,19 @@ async def assign_agent_and_notify(order_id: str, amount_bif: float | Decimal) ->
     )
     await _send_assignment_email(
         email=agent_email,
+        order_id=order_id,
+        assignment_id=assignment_id,
+        agent_id=agent_id,
+        amount_bif=amount,
+        usdc_amount=usdc_amount,
+        client_name=client_name,
+        client_email=client_email,
+        client_phone=client_phone,
+        recipient_name=recipient_name,
+        recipient_phone=recipient_phone,
+        payout_method=payout_method,
+    )
+    await _send_assignment_telegram(
         order_id=order_id,
         assignment_id=assignment_id,
         agent_id=agent_id,
