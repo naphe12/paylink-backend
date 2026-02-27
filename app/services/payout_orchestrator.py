@@ -3,11 +3,16 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import text
+from fastapi.concurrency import run_in_threadpool
+from sqlalchemy import select, text
 
 from app.core.database import async_session_maker
+from app.core.config import settings
+from app.models.transaction_email_recipients import TransactionEmailRecipient
+from app.services.mailjet_service import MailjetEmailService
 from app.services.notifiers import EmailNotifier, NotificationMessage
 from app.services.paylink_ledger_service import PaylinkLedgerService
 
@@ -130,6 +135,22 @@ async def _persist_assignment_notification(
             )
 
 
+async def _list_assignment_email_recipients(agent_email: str | None) -> list[str]:
+    recipients: set[str] = set()
+    if agent_email:
+        recipients.add(agent_email.strip().lower())
+
+    async with async_session_maker() as db:
+        rows = await db.scalars(
+            select(TransactionEmailRecipient.email).where(TransactionEmailRecipient.active.is_(True))
+        )
+        for email in rows:
+            if email:
+                recipients.add(str(email).strip().lower())
+
+    return sorted(recipients)
+
+
 async def _send_assignment_email(
     *,
     email: str | None,
@@ -145,42 +166,75 @@ async def _send_assignment_email(
     recipient_phone: str | None,
     payout_method: str | None,
 ) -> None:
-    if not email:
+    recipients = await _list_assignment_email_recipients(email)
+    if not recipients:
         return
+
+    dashboard_url = f"{settings.FRONTEND_URL.rstrip('/')}/dashboard/admin"
+    amount_usd_label = f"{usdc_amount} USD" if usdc_amount is not None and usdc_amount > 0 else "Depot USD detecte"
+
     try:
-        notifier = EmailNotifier()
-        await notifier.notify(
-            recipient=email,
-            message=NotificationMessage(
-                subject="Nouvelle affectation payout",
-                body_text=(
+        mailer = MailjetEmailService()
+        for recipient in recipients:
+            await run_in_threadpool(
+                mailer.send_email,
+                recipient,
+                "Nouvelle affectation payout escrow",
+                "external_transfer_request_agent.html",
+                text=(
                     f"Nouvelle affectation payout de {amount_bif} BIF "
                     f"(order {order_id}, assignment {assignment_id}, agent {agent_id})."
                 ),
-                body_html=_build_assignment_email_html(
-                    order_id=order_id,
-                    assignment_id=assignment_id,
-                    agent_id=agent_id,
-                    amount_bif=amount_bif,
-                    usdc_amount=usdc_amount,
-                    client_name=client_name,
-                    client_email=client_email,
-                    client_phone=client_phone,
-                    recipient_name=recipient_name,
-                    recipient_phone=recipient_phone,
-                    payout_method=payout_method,
-                ),
-            ),
-        )
+                client_name=client_name or "Client PayLink",
+                client_email=client_email or "-",
+                client_phone=client_phone or "-",
+                amount=amount_usd_label,
+                currency="USD",
+                payout_amount=f"{amount_bif} BIF",
+                receiver_name=recipient_name or "-",
+                receiver_phone=recipient_phone or "-",
+                partner_name=f"Escrow PayLink ({payout_method or 'PAYOUT'})",
+                country="Burundi",
+                transfer_id=order_id,
+                dashboard_url=dashboard_url,
+                year=datetime.utcnow().year,
+            )
     except Exception:
-        logger.exception(
-            "Failed to send payout assignment email "
-            "(order_id=%s, assignment_id=%s, agent_id=%s, email=%s)",
-            order_id,
-            assignment_id,
-            agent_id,
-            email,
-        )
+        if email:
+            try:
+                notifier = EmailNotifier()
+                await notifier.notify(
+                    recipient=email,
+                    message=NotificationMessage(
+                        subject="Nouvelle affectation payout",
+                        body_text=(
+                            f"Nouvelle affectation payout de {amount_bif} BIF "
+                            f"(order {order_id}, assignment {assignment_id}, agent {agent_id})."
+                        ),
+                        body_html=_build_assignment_email_html(
+                            order_id=order_id,
+                            assignment_id=assignment_id,
+                            agent_id=agent_id,
+                            amount_bif=amount_bif,
+                            usdc_amount=usdc_amount,
+                            client_name=client_name,
+                            client_email=client_email,
+                            client_phone=client_phone,
+                            recipient_name=recipient_name,
+                            recipient_phone=recipient_phone,
+                            payout_method=payout_method,
+                        ),
+                    ),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to send payout assignment email "
+                    "(order_id=%s, assignment_id=%s, agent_id=%s, email=%s)",
+                    order_id,
+                    assignment_id,
+                    agent_id,
+                    email,
+                )
 
 
 async def assign_agent_and_notify(order_id: str, amount_bif: float | Decimal) -> dict:
