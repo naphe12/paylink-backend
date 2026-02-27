@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 import json
+import logging
 from decimal import Decimal
 
 from sqlalchemy import select, text
@@ -18,7 +19,10 @@ from app.services.aml_service import run_aml
 from app.services.audit_service import audit_log
 from app.services.risk_decision_log import log_risk_decision
 from app.services.escrow_tracking_ws import broadcast_tracking_update
+from app.services.payout_orchestrator import assign_agent_and_notify
 from app.services.wallet_service import credit_user_usdc
+
+logger = logging.getLogger(__name__)
 
 
 async def _ensure_webhook_log_table(db: AsyncSession) -> None:
@@ -224,6 +228,11 @@ async def process_usdc_webhook(
             subject=subject,
             message=message,
         )
+    if response_status == "FUNDED":
+        try:
+            await assign_agent_and_notify(str(order.id), Decimal(str(order.bif_target or 0)))
+        except Exception:
+            logger.exception("Failed to assign agent after funded webhook for order_id=%s", order.id)
 
     await _log_webhook_event(
         db,

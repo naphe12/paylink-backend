@@ -1,14 +1,17 @@
+from datetime import datetime, timezone
 from decimal import Decimal
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.database import get_db
-from app.dependencies.auth import get_current_user
+from app.dependencies.auth import get_current_admin, get_current_user
 from app.dependencies.kill_switch import require_not_killed
-from app.models.p2p_enums import OfferSide, PaymentMethod, TokenCode
+from app.models.p2p_enums import OfferSide, PaymentMethod, TokenCode, TradeStatus
 from app.models.p2p_offer import P2POffer
 from app.models.users import Users
 from app.models.p2p_trade import P2PTrade
@@ -21,10 +24,15 @@ from app.services.p2p_matching_engine import P2PMatchingEngine
 from app.services.p2p_mm_quote import P2PMMQuote
 from app.services.liquidity_guard import LiquidityGuard
 from app.services.audit import audit
+from app.services.p2p_trade_state import set_trade_status
 from app.services.p2p_trade_service import P2PTradeService
 from app.services.p2p_dispute_service import P2PDisputeService
 
 router = APIRouter(prefix="/p2p", tags=["P2P"])
+
+
+class SandboxCryptoLockedIn(BaseModel):
+    escrow_tx_hash: str | None = None
 
 @router.get("/offers", response_model=list[OfferOut])
 async def list_offers(token: str | None = None, side: str | None = None, db: AsyncSession = Depends(get_db)):
@@ -184,6 +192,42 @@ async def market_order(
         return trade
     except PermissionError as e:
         raise HTTPException(403, str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/trades/{trade_id}/sandbox/crypto-locked", response_model=TradeOut)
+async def sandbox_crypto_locked(
+    trade_id: str,
+    data: SandboxCryptoLockedIn | None = None,
+    db: AsyncSession = Depends(get_db),
+    _: Users = Depends(get_current_admin),
+):
+    try:
+        trade = await db.scalar(select(P2PTrade).where(P2PTrade.trade_id == trade_id))
+        if not trade:
+            raise HTTPException(404, "Trade not found")
+
+        if trade.status == TradeStatus.CRYPTO_LOCKED:
+            return trade
+        if trade.status != TradeStatus.AWAITING_CRYPTO:
+            raise HTTPException(400, f"Trade not in AWAITING_CRYPTO (current={trade.status.value})")
+
+        trade.escrow_tx_hash = (data.escrow_tx_hash if data and data.escrow_tx_hash else f"0xsandbox{uuid4().hex}")
+        trade.escrow_locked_at = datetime.now(timezone.utc)
+        await set_trade_status(
+            db,
+            trade,
+            TradeStatus.CRYPTO_LOCKED,
+            actor_user_id=None,
+            actor_role="ADMIN",
+            note="Sandbox forced crypto lock",
+        )
+        await db.commit()
+        await db.refresh(trade)
+        return trade
     except HTTPException:
         raise
     except Exception as e:
