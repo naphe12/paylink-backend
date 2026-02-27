@@ -171,7 +171,9 @@ async def _send_assignment_email(
         return
 
     dashboard_url = f"{settings.FRONTEND_URL.rstrip('/')}/dashboard/admin"
-    amount_usd_label = f"{usdc_amount} USD" if usdc_amount is not None and usdc_amount > 0 else "Depot USD detecte"
+    amount_usd_label = (
+        f"{usdc_amount}" if usdc_amount is not None and usdc_amount > 0 else "Depot crypto detecte"
+    )
 
     try:
         mailer = MailjetEmailService()
@@ -189,7 +191,7 @@ async def _send_assignment_email(
                 client_email=client_email or "-",
                 client_phone=client_phone or "-",
                 amount=amount_usd_label,
-                currency="USD",
+                currency="USDC",
                 payout_amount=f"{amount_bif} BIF",
                 receiver_name=recipient_name or "-",
                 receiver_phone=recipient_phone or "-",
