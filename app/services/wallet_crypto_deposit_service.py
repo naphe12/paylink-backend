@@ -329,7 +329,7 @@ async def _find_matching_request(
                   AND network = :network
                   AND lower(paylink_deposit_address) = :deposit_address
                   AND status = 'PENDING'
-                ORDER BY created_at ASC
+                ORDER BY created_at DESC
                 """
             ),
             {
