@@ -96,7 +96,7 @@ async def wallet_crypto_history(
           j.journal_id,
           j.description,
           j.metadata,
-          j.created_at,
+          j.occurred_at,
           e.direction,
           e.amount,
           e.currency_code
@@ -112,10 +112,10 @@ async def wallet_crypto_history(
         "limit": int(limit),
     }
     if from_date is not None:
-        query += " AND j.created_at >= :from_date"
+        query += " AND j.occurred_at >= :from_date"
         params["from_date"] = from_date
     if to_date is not None:
-        query += " AND j.created_at <= :to_date"
+        query += " AND j.occurred_at <= :to_date"
         params["to_date"] = to_date
     if search:
         query += """
@@ -127,7 +127,7 @@ async def wallet_crypto_history(
         """
         params["pattern"] = f"%{search.strip()}%"
 
-    query += " ORDER BY j.created_at DESC LIMIT :limit"
+    query += " ORDER BY j.occurred_at DESC LIMIT :limit"
     rows = (await db.execute(text(query), params)).mappings().all()
     running_balance = await get_crypto_balance(user_id, normalized_token, db=db)
 
@@ -144,7 +144,7 @@ async def wallet_crypto_history(
                 "amount": signed_amount,
                 "direction": "credit" if signed_amount >= 0 else "debit",
                 "balance_after": float(running_balance),
-                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                "created_at": row["occurred_at"].isoformat() if row["occurred_at"] else None,
                 "reference": metadata.get("ref") or "-",
                 "operation_type": metadata.get("event") or row["description"] or "CRYPTO_WALLET",
                 "description": row["description"] or "",
