@@ -3,9 +3,11 @@ from __future__ import annotations
 import hashlib
 import hmac
 from decimal import Decimal
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -23,6 +25,8 @@ from app.services.wallet_crypto_deposit_service import (
     process_wallet_crypto_webhook,
 )
 from app.services.wallet_service import (
+    _crypto_wallet_account_code,
+    get_crypto_balance,
     ensure_usdc_wallet_account,
     ensure_usdt_wallet_account,
     get_usdc_balance,
@@ -70,6 +74,86 @@ async def wallet_crypto_balances(
             "USDT": float(usdt_balance),
         }
     }
+
+
+@router.get("/history")
+async def wallet_crypto_history(
+    token_symbol: str = Query(..., min_length=4, max_length=4),
+    from_date: datetime | None = Query(None),
+    to_date: datetime | None = Query(None),
+    limit: int = Query(20, ge=1, le=200),
+    search: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user_db),
+):
+    normalized_token = normalize_wallet_token(token_symbol)
+    user_id = str(current_user.user_id)
+    await (ensure_usdc_wallet_account(user_id, db=db) if normalized_token == "USDC" else ensure_usdt_wallet_account(user_id, db=db))
+    account_code = _crypto_wallet_account_code(user_id, normalized_token)
+
+    query = """
+        SELECT
+          j.journal_id,
+          j.description,
+          j.metadata,
+          j.created_at,
+          e.direction,
+          e.amount,
+          e.currency_code
+        FROM paylink.ledger_journal j
+        JOIN paylink.ledger_entries e ON e.journal_id = j.journal_id
+        JOIN paylink.ledger_accounts a ON a.account_id = e.account_id
+        WHERE a.code = :account_code
+          AND e.currency_code = :currency
+    """
+    params = {
+        "account_code": account_code,
+        "currency": normalized_token,
+        "limit": int(limit),
+    }
+    if from_date is not None:
+        query += " AND j.created_at >= :from_date"
+        params["from_date"] = from_date
+    if to_date is not None:
+        query += " AND j.created_at <= :to_date"
+        params["to_date"] = to_date
+    if search:
+        query += """
+          AND (
+            COALESCE(j.description, '') ILIKE :pattern
+            OR COALESCE(j.metadata->>'ref', '') ILIKE :pattern
+            OR COALESCE(j.metadata->>'event', '') ILIKE :pattern
+          )
+        """
+        params["pattern"] = f"%{search.strip()}%"
+
+    query += " ORDER BY j.created_at DESC LIMIT :limit"
+    rows = (await db.execute(text(query), params)).mappings().all()
+    running_balance = await get_crypto_balance(user_id, normalized_token, db=db)
+
+    entries = []
+    for row in rows:
+        direction_flag = str(row["direction"] or "").lower()
+        signed_amount = float(row["amount"]) * (1 if direction_flag.startswith("debit") else -1)
+        metadata = row["metadata"] or {}
+        if isinstance(metadata, str):
+            metadata = {}
+        entries.append(
+            {
+                "transaction_id": str(row["journal_id"]),
+                "amount": signed_amount,
+                "direction": "credit" if signed_amount >= 0 else "debit",
+                "balance_after": float(running_balance),
+                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                "reference": metadata.get("ref") or "-",
+                "operation_type": metadata.get("event") or row["description"] or "CRYPTO_WALLET",
+                "description": row["description"] or "",
+                "currency_code": row["currency_code"],
+            }
+        )
+        running_balance = Decimal(str(running_balance)) - Decimal(str(signed_amount))
+
+    return entries
 
 
 @router.get("/deposit-instructions")
