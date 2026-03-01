@@ -39,33 +39,46 @@ class PolygonPollingWatcher:
     def __init__(self):
         # --- ENV ---
         self.rpc_url = os.getenv("AMOY_RPC_URL", "https://rpc-amoy.polygon.technology")
-        self.token_address = os.getenv("USDC_TOKEN_ADDRESS")
-        self.webhook_url = os.getenv("PAYLINK_WEBHOOK_URL")
+        self.escrow_webhook_url = os.getenv("PAYLINK_WEBHOOK_URL")
+        self.wallet_webhook_url = os.getenv("PAYLINK_WALLET_WEBHOOK_URL")
 
         self.poll_interval = float(os.getenv("WATCHER_POLL_INTERVAL", "2"))
         self.confirmations_required = int(os.getenv("WATCHER_CONFIRMATIONS", "3"))
-
-        # For USDC decimals: pass 1000000 (1e6)
-        self.decimals_factor = Decimal(os.getenv("USDC_DECIMALS", "1000000"))
 
         # Where to start if no state:
         # - "latest" means start at current chain head
         # - or set WATCHER_START_BLOCK=123456
         self.start_block_env = os.getenv("WATCHER_START_BLOCK", "latest")
 
-        if not self.token_address:
-            raise RuntimeError("Missing env USDC_TOKEN_ADDRESS")
-        if not self.webhook_url:
-            raise RuntimeError("Missing env PAYLINK_WEBHOOK_URL")
+        self.token_configs = []
+        for symbol in ("USDC", "USDT"):
+            token_address = os.getenv(f"{symbol}_TOKEN_ADDRESS")
+            if not token_address:
+                continue
+            self.token_configs.append(
+                {
+                    "symbol": symbol,
+                    "address": token_address,
+                    "decimals_factor": Decimal(os.getenv(f"{symbol}_DECIMALS", "1000000")),
+                }
+            )
+        if not self.token_configs:
+            raise RuntimeError("Missing env USDC_TOKEN_ADDRESS or USDT_TOKEN_ADDRESS")
+        if not self.escrow_webhook_url and not self.wallet_webhook_url:
+            raise RuntimeError("Missing env PAYLINK_WEBHOOK_URL and PAYLINK_WALLET_WEBHOOK_URL")
 
         # --- Web3 ---
         self.w3 = Web3(Web3.HTTPProvider(self.rpc_url, request_kwargs={"timeout": 30}))
 
-        self.contract = self.w3.eth.contract(
-            address=Web3.to_checksum_address(self.token_address),
-            abi=USDC_ABI,
-        )
-        self.p2p = P2PWatcher(self.rpc_url, self.token_address)
+        self.contracts = {
+            cfg["symbol"]: self.w3.eth.contract(
+                address=Web3.to_checksum_address(cfg["address"]),
+                abi=USDC_ABI,
+            )
+            for cfg in self.token_configs
+        }
+        usdc_cfg = next((cfg for cfg in self.token_configs if cfg["symbol"] == "USDC"), None)
+        self.p2p = P2PWatcher(self.rpc_url, usdc_cfg["address"]) if usdc_cfg else None
 
         # Event signature topic must be 0x-prefixed for eth_getLogs
         self.transfer_topic = Web3.to_hex(Web3.keccak(text="Transfer(address,address,uint256)"))
@@ -76,8 +89,9 @@ class PolygonPollingWatcher:
     async def run(self):
         print("[watcher] started")
         print("[watcher] rpc:", self.rpc_url)
-        print("[watcher] token:", self.token_address)
-        print("[watcher] webhook:", self.webhook_url)
+        print("[watcher] tokens:", [cfg["symbol"] for cfg in self.token_configs])
+        print("[watcher] escrow webhook:", self.escrow_webhook_url)
+        print("[watcher] wallet webhook:", self.wallet_webhook_url)
         print("[watcher] confirmations_required:", self.confirmations_required)
         print("[watcher] poll_interval:", self.poll_interval)
 
@@ -115,28 +129,32 @@ class PolygonPollingWatcher:
         batch_size = int(os.getenv("WATCHER_BATCH_SIZE", "1500"))
         to_block = min(self._from_block + batch_size - 1, safe_to_block)
 
-        logs = self.w3.eth.get_logs(
-            {
-                "fromBlock": self._from_block,
-                "toBlock": to_block,
-                "address": Web3.to_checksum_address(self.token_address),
-                "topics": [self.transfer_topic],
-            }
-        )
+        for token_cfg in self.token_configs:
+            logs = self.w3.eth.get_logs(
+                {
+                    "fromBlock": self._from_block,
+                    "toBlock": to_block,
+                    "address": Web3.to_checksum_address(token_cfg["address"]),
+                    "topics": [self.transfer_topic],
+                }
+            )
 
-        if logs:
-            print(f"[watcher] logs found: {len(logs)} (blocks {self._from_block}..{to_block})")
+            if logs:
+                print(
+                    f"[watcher] {token_cfg['symbol']} logs found: {len(logs)} "
+                    f"(blocks {self._from_block}..{to_block})"
+                )
 
-        for log in logs:
-            await self._handle_transfer_log(log, latest_block=latest)
+            for log in logs:
+                await self._handle_transfer_log(log, latest_block=latest, token_cfg=token_cfg)
 
         # Move forward
         self._from_block = to_block + 1
 
-    async def _handle_transfer_log(self, log, latest_block: int):
+    async def _handle_transfer_log(self, log, latest_block: int, token_cfg: dict):
         # Decode with contract event
         try:
-            evt = self.contract.events.Transfer().process_log(log)
+            evt = self.contracts[token_cfg["symbol"]].events.Transfer().process_log(log)
         except Exception as exc:
             print("[watcher] failed to decode log:", repr(exc))
             return
@@ -145,7 +163,7 @@ class PolygonPollingWatcher:
         to_addr = Web3.to_checksum_address(evt["args"]["to"])
         value_raw = int(evt["args"]["value"])
 
-        amount = (Decimal(value_raw) / self.decimals_factor).quantize(Decimal("0.000001"))
+        amount = (Decimal(value_raw) / token_cfg["decimals_factor"]).quantize(Decimal("0.000001"))
         tx_hash = evt["transactionHash"].hex()
         block_number = int(evt["blockNumber"])
         log_index = int(evt["logIndex"])
@@ -170,7 +188,8 @@ class PolygonPollingWatcher:
         payload = {
             "network": "POLYGON",
             "chain_id": int(os.getenv("CHAIN_ID", "80002")),
-            "token_address": self.token_address,
+            "token_symbol": token_cfg["symbol"],
+            "token_address": token_cfg["address"],
             "tx_hash": tx_hash,
             "log_index": log_index,  # important for idempotency
             "from_address": from_addr,
@@ -185,20 +204,30 @@ class PolygonPollingWatcher:
 
         async with async_session_maker() as db:
             is_escrow_deposit = await self._is_escrow_deposit_address(to_addr, db=db)
+            wallet_target = await self._is_paylink_wallet_deposit_address(
+                to_addr,
+                token_cfg["symbol"],
+                db=db,
+            )
 
             # ESCROW
-            if is_escrow_deposit:
+            if is_escrow_deposit and self.escrow_webhook_url:
                 await self._send_webhook(payload)
 
+            # WALLET CRYPTO
+            if wallet_target and self.wallet_webhook_url:
+                await self._send_wallet_webhook(payload)
+
             # P2P
-            await self.p2p.process_transfer(
-                db=db,
-                tx_hash=tx_hash,
-                to_address=to_addr,
-                amount=amount,
-                block_number=block_number,
-                block_timestamp=block_timestamp,
-            )
+            if token_cfg["symbol"] == "USDC" and self.p2p is not None:
+                await self.p2p.process_transfer(
+                    db=db,
+                    tx_hash=tx_hash,
+                    to_address=to_addr,
+                    amount=amount,
+                    block_number=block_number,
+                    block_timestamp=block_timestamp,
+                )
 
     async def _is_escrow_deposit_address(self, address: str, db=None) -> bool:
         # DB check: escrow.orders has deposit_address and status CREATED
@@ -221,6 +250,12 @@ class PolygonPollingWatcher:
             res = await session.execute(query, params)
             return res.first() is not None
 
+    async def _is_paylink_wallet_deposit_address(self, address: str, token_symbol: str, db=None) -> bool:
+        env_address = os.getenv(f"PAYLINK_{str(token_symbol).upper()}_DEPOSIT_ADDRESS")
+        if not env_address:
+            return False
+        return address.lower() == str(env_address).lower()
+
     async def _send_webhook(self, payload: dict) -> None:
         raw_body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         signature = compute_signature(raw_body)
@@ -238,7 +273,7 @@ class PolygonPollingWatcher:
             last_exc = None
             for attempt in range(1, retries + 1):
                 try:
-                    r = await client.post(self.webhook_url, content=raw_body, headers=headers)
+                    r = await client.post(self.escrow_webhook_url, content=raw_body, headers=headers)
                     r.raise_for_status()
                     print("[watcher] webhook OK:", r.status_code)
                     return
@@ -248,4 +283,29 @@ class PolygonPollingWatcher:
                     await asyncio.sleep(backoff * attempt)
 
             # after retries
+            raise last_exc
+
+    async def _send_wallet_webhook(self, payload: dict) -> None:
+        raw_body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        signature = compute_signature(raw_body)
+        headers = {
+            "Content-Type": "application/json",
+            "X-Paylink-Signature": signature,
+        }
+        retries = int(os.getenv("WATCHER_WEBHOOK_RETRIES", "3"))
+        backoff = float(os.getenv("WATCHER_WEBHOOK_BACKOFF", "1.5"))
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            last_exc = None
+            for attempt in range(1, retries + 1):
+                try:
+                    r = await client.post(self.wallet_webhook_url, content=raw_body, headers=headers)
+                    r.raise_for_status()
+                    print("[watcher] wallet webhook OK:", r.status_code)
+                    return
+                except Exception as exc:
+                    last_exc = exc
+                    print(f"[watcher] wallet webhook FAIL attempt {attempt}/{retries}:", repr(exc))
+                    await asyncio.sleep(backoff * attempt)
+
             raise last_exc

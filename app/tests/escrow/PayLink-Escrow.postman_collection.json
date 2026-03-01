@@ -1,0 +1,374 @@
+{
+  "info": {
+    "_postman_id": "3a89a566-f8c9-4a3d-8d11-4db956cf5d6e",
+    "name": "PayLink Escrow",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Collection de test du module escrow (auth, ordre, sandbox, webhook)."
+  },
+  "item": [
+    {
+      "name": "Auth - Login",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {
+              "key": "username",
+              "value": "{{username}}",
+              "type": "text"
+            },
+            {
+              "key": "password",
+              "value": "{{password}}",
+              "type": "text"
+            }
+          ]
+        },
+        "url": "{{base_url}}/auth/login"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const json = pm.response.json();",
+              "pm.collectionVariables.set('token', json.access_token || '');",
+              "pm.test('access_token present', function () { pm.expect(json.access_token).to.be.a('string').and.not.empty; });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Escrow - Create Sandbox Order",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-SANDBOX",
+            "value": "true"
+          },
+          {
+            "key": "X-SANDBOX-SCENARIO",
+            "value": "{{sandbox_scenario}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"amount_usdc\": {{amount_usdc}},\n  \"recipient_name\": \"Test Beneficiaire\",\n  \"recipient_phone\": \"+25770000001\",\n  \"deposit_network\": \"POLYGON\",\n  \"deposit_required_confirmations\": 1\n}"
+        },
+        "url": "{{base_url}}/escrow/orders"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const json = pm.response.json();",
+              "pm.collectionVariables.set('order_id', json.id || '');",
+              "pm.test('order id present', function () { pm.expect(json.id).to.be.a('string').and.not.empty; });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Escrow - Get Order",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": "{{base_url}}/escrow/orders/{{order_id}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const json = pm.response.json();",
+              "pm.collectionVariables.set('deposit_address', json.deposit_address || '');",
+              "pm.test('deposit_address present', function () { pm.expect(json.deposit_address).to.be.a('string').and.not.empty; });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Escrow Sandbox - FUND",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": "{{base_url}}/escrow/orders/{{order_id}}/sandbox/FUND"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Escrow Sandbox - SWAP",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": "{{base_url}}/escrow/orders/{{order_id}}/sandbox/SWAP"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Escrow Sandbox - PAYOUT_PENDING",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": "{{base_url}}/escrow/orders/{{order_id}}/sandbox/PAYOUT_PENDING"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Escrow Sandbox - PAYOUT",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": "{{base_url}}/escrow/orders/{{order_id}}/sandbox/PAYOUT"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Escrow - Retry Order",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": "{{base_url}}/escrow/orders/{{order_id}}/retry"
+      }
+    },
+    {
+      "name": "Webhook USDC - Invalid Signature",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-Paylink-Signature",
+            "value": "invalid-signature"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"network\": \"POLYGON\",\n  \"tx_hash\": \"{{tx_hash}}\",\n  \"log_index\": 0,\n  \"from_address\": \"{{from_address}}\",\n  \"to_address\": \"{{deposit_address}}\",\n  \"amount\": \"{{amount_usdc}}\",\n  \"confirmations\": 3\n}"
+        },
+        "url": "{{base_url}}/escrow/webhooks/usdc"
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "function randomHex(n) {",
+              "  const chars = '0123456789abcdef';",
+              "  let out = '';",
+              "  for (let i = 0; i < n; i++) out += chars[Math.floor(Math.random() * chars.length)];",
+              "  return out;",
+              "}",
+              "pm.collectionVariables.set('tx_hash', '0x' + randomHex(64));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 401 expected', function () { pm.expect(pm.response.code).to.eql(401); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Webhook USDC - Valid Signature",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-Paylink-Signature",
+            "value": "{{webhook_signature}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"network\": \"POLYGON\",\n  \"tx_hash\": \"{{tx_hash}}\",\n  \"log_index\": 1,\n  \"from_address\": \"{{from_address}}\",\n  \"to_address\": \"{{deposit_address}}\",\n  \"amount\": \"{{amount_usdc}}\",\n  \"confirmations\": 3\n}"
+        },
+        "url": "{{base_url}}/escrow/webhooks/usdc"
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const raw = pm.variables.replaceIn(pm.request.body.raw || '');",
+              "const secret = pm.collectionVariables.get('webhook_secret') || '';",
+              "if (!secret) {",
+              "  console.warn('webhook_secret is empty');",
+              "}",
+              "const sig = CryptoJS.HmacSHA256(raw, secret).toString(CryptoJS.enc.Hex);",
+              "pm.collectionVariables.set('webhook_signature', sig);"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const json = pm.response.json();",
+              "pm.test('status returned', function () {",
+              "  pm.expect(['OK', 'DUPLICATE', 'QUEUED_RETRY']).to.include(json.status);",
+              "});"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "username",
+      "value": "user@example.com"
+    },
+    {
+      "key": "password",
+      "value": "ChangeMe123!"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "order_id",
+      "value": ""
+    },
+    {
+      "key": "deposit_address",
+      "value": "0x0000000000000000000000000000000000000000"
+    },
+    {
+      "key": "amount_usdc",
+      "value": "10"
+    },
+    {
+      "key": "sandbox_scenario",
+      "value": "CONFIRMATION_DELAY"
+    },
+    {
+      "key": "from_address",
+      "value": "0x1111111111111111111111111111111111111111"
+    },
+    {
+      "key": "tx_hash",
+      "value": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "key": "webhook_secret",
+      "value": ""
+    },
+    {
+      "key": "webhook_signature",
+      "value": ""
+    }
+  ]
+}

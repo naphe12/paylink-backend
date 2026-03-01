@@ -11,15 +11,29 @@ from app.core.database import async_session_maker
 from app.services.paylink_ledger_service import PaylinkLedgerService
 
 USDC_CURRENCY = "USDC"
+USDT_CURRENCY = "USDT"
 BIF_CURRENCY = "BIF"
 USDC_WALLET_SOURCE_ACCOUNT = "ESCROW_USDC_LIABILITY"
+USDT_WALLET_SOURCE_ACCOUNT = "TREASURY_USDT"
 FX_POOL_USDC_ACCOUNT = "FX_POOL_USDC"
 FX_POOL_BIF_ACCOUNT = "FX_POOL_BIF"
 DEFAULT_USDC_BIF_RATE = Decimal("2800")
+SUPPORTED_CRYPTO_CURRENCIES = {USDC_CURRENCY, USDT_CURRENCY}
 
 
 def _wallet_account_code(user_id: str) -> str:
-    return f"USER_{user_id}_USDC"
+    return _crypto_wallet_account_code(user_id, USDC_CURRENCY)
+
+
+def _usdt_wallet_account_code(user_id: str) -> str:
+    return _crypto_wallet_account_code(user_id, USDT_CURRENCY)
+
+
+def _crypto_wallet_account_code(user_id: str, currency: str) -> str:
+    normalized_currency = str(currency or "").upper()
+    if normalized_currency not in SUPPORTED_CRYPTO_CURRENCIES:
+        raise ValueError(f"Unsupported crypto currency: {currency}")
+    return f"USER_{user_id}_{normalized_currency}"
 
 
 def _bif_wallet_account_code(user_id: str) -> str:
@@ -38,7 +52,16 @@ async def _resolve_account_id(db: AsyncSession, account_code: str):
 
 
 async def _get_or_create_wallet_account_code(db: AsyncSession, user_id: str) -> str:
-    account_code = _wallet_account_code(user_id)
+    return await _get_or_create_crypto_wallet_account_code(db, user_id, USDC_CURRENCY)
+
+
+async def _get_or_create_crypto_wallet_account_code(
+    db: AsyncSession,
+    user_id: str,
+    currency: str,
+) -> str:
+    normalized_currency = str(currency or "").upper()
+    account_code = _crypto_wallet_account_code(user_id, normalized_currency)
     exists = await db.execute(
         text(
             """
@@ -62,11 +85,11 @@ async def _get_or_create_wallet_account_code(db: AsyncSession, user_id: str) -> 
         ),
         {
             "code": account_code,
-            "name": f"Wallet USDC User {user_id}",
-            "currency": USDC_CURRENCY,
+            "name": f"Wallet {normalized_currency} User {user_id}",
+            "currency": normalized_currency,
             "metadata": json.dumps(
                 {
-                    "wallet_type": "USER_USDC",
+                    "wallet_type": f"USER_{normalized_currency}",
                     "user_id": str(user_id),
                 }
             ),
@@ -147,21 +170,53 @@ async def ensure_bif_wallet_account(user_id: str, db: AsyncSession | None = None
         return code
 
 
+async def ensure_crypto_wallet_account(
+    user_id: str,
+    currency: str,
+    db: AsyncSession | None = None,
+) -> str:
+    normalized_currency = str(currency or "").upper()
+    if db is not None:
+        return await _get_or_create_crypto_wallet_account_code(db, str(user_id), normalized_currency)
+
+    async with async_session_maker() as session:
+        code = await _get_or_create_crypto_wallet_account_code(session, str(user_id), normalized_currency)
+        await session.commit()
+        return code
+
+
+async def ensure_usdt_wallet_account(user_id: str, db: AsyncSession | None = None) -> str:
+    return await ensure_crypto_wallet_account(user_id, USDT_CURRENCY, db=db)
+
+
 async def get_usdc_balance(user_id: str, db: AsyncSession | None = None) -> Decimal:
-    account_code = _wallet_account_code(str(user_id))
+    return await get_crypto_balance(user_id, USDC_CURRENCY, db=db)
+
+
+async def get_crypto_balance(
+    user_id: str,
+    currency: str,
+    db: AsyncSession | None = None,
+) -> Decimal:
+    normalized_currency = str(currency or "").upper()
+    account_code = _crypto_wallet_account_code(str(user_id), normalized_currency)
     if db is not None:
         return await PaylinkLedgerService.get_balance(
             db,
             account_code=account_code,
-            currency=USDC_CURRENCY,
+            currency=normalized_currency,
         )
 
     async with async_session_maker() as session:
         return await PaylinkLedgerService.get_balance(
             session,
             account_code=account_code,
-            currency=USDC_CURRENCY,
+            currency=normalized_currency,
         )
+
+
+async def get_usdt_balance(user_id: str, db: AsyncSession | None = None) -> Decimal:
+    return await get_crypto_balance(user_id, USDT_CURRENCY, db=db)
 
 
 async def _journal_exists_by_ref(db: AsyncSession, ref: str) -> bool:
@@ -236,15 +291,62 @@ async def credit_user_usdc(
     description: str = "Crypto deposit credited to user USDC wallet",
     db: AsyncSession | None = None,
 ) -> str:
+    return await credit_user_crypto(
+        user_id,
+        amount,
+        currency=USDC_CURRENCY,
+        source_account_code=source_account_code,
+        ref=ref,
+        description=description,
+        db=db,
+    )
+
+
+async def credit_user_usdt(
+    user_id: str,
+    amount: Decimal,
+    *,
+    source_account_code: str = USDT_WALLET_SOURCE_ACCOUNT,
+    ref: str | None = None,
+    description: str = "Crypto deposit credited to user USDT wallet",
+    db: AsyncSession | None = None,
+) -> str:
+    return await credit_user_crypto(
+        user_id,
+        amount,
+        currency=USDT_CURRENCY,
+        source_account_code=source_account_code,
+        ref=ref,
+        description=description,
+        db=db,
+    )
+
+
+async def credit_user_crypto(
+    user_id: str,
+    amount: Decimal,
+    *,
+    currency: str,
+    source_account_code: str,
+    ref: str | None = None,
+    description: str | None = None,
+    db: AsyncSession | None = None,
+) -> str:
     normalized_user_id = str(user_id)
     normalized_amount = Decimal(str(amount))
+    normalized_currency = str(currency or "").upper()
     if normalized_amount <= 0:
         raise ValueError("Amount must be > 0")
 
-    effective_ref = ref or f"USDC_CREDIT:{normalized_user_id}:{normalized_amount.normalize()}"
+    effective_ref = ref or f"{normalized_currency}_CREDIT:{normalized_user_id}:{normalized_amount.normalize()}"
+    effective_description = description or f"Crypto deposit credited to user {normalized_currency} wallet"
 
     async def _run(session: AsyncSession) -> str:
-        wallet_code = await _get_or_create_wallet_account_code(session, normalized_user_id)
+        wallet_code = await _get_or_create_crypto_wallet_account_code(
+            session,
+            normalized_user_id,
+            normalized_currency,
+        )
         if await _journal_exists_by_ref(session, effective_ref):
             return wallet_code
         await _post_transfer_journal(
@@ -252,12 +354,13 @@ async def credit_user_usdc(
             debit_account_code=source_account_code,
             credit_account_code=wallet_code,
             amount=normalized_amount,
-            currency=USDC_CURRENCY,
-            description=description,
+            currency=normalized_currency,
+            description=effective_description,
             metadata={
-                "event": "USDC_WALLET_CREDIT",
+                "event": f"{normalized_currency}_WALLET_CREDIT",
                 "ref": effective_ref,
                 "user_id": normalized_user_id,
+                "currency": normalized_currency,
             },
         )
         return wallet_code
@@ -280,18 +383,65 @@ async def debit_user_usdc(
     description: str = "User USDC wallet debit",
     db: AsyncSession | None = None,
 ) -> str:
+    return await debit_user_crypto(
+        user_id,
+        amount,
+        currency=USDC_CURRENCY,
+        destination_account_code=destination_account_code,
+        ref=ref,
+        description=description,
+        db=db,
+    )
+
+
+async def debit_user_usdt(
+    user_id: str,
+    amount: Decimal,
+    *,
+    destination_account_code: str,
+    ref: str | None = None,
+    description: str = "User USDT wallet debit",
+    db: AsyncSession | None = None,
+) -> str:
+    return await debit_user_crypto(
+        user_id,
+        amount,
+        currency=USDT_CURRENCY,
+        destination_account_code=destination_account_code,
+        ref=ref,
+        description=description,
+        db=db,
+    )
+
+
+async def debit_user_crypto(
+    user_id: str,
+    amount: Decimal,
+    *,
+    currency: str,
+    destination_account_code: str,
+    ref: str | None = None,
+    description: str | None = None,
+    db: AsyncSession | None = None,
+) -> str:
     normalized_user_id = str(user_id)
     normalized_amount = Decimal(str(amount))
+    normalized_currency = str(currency or "").upper()
     if normalized_amount <= 0:
         raise ValueError("Amount must be > 0")
 
-    effective_ref = ref or f"USDC_DEBIT:{normalized_user_id}:{normalized_amount.normalize()}"
+    effective_ref = ref or f"{normalized_currency}_DEBIT:{normalized_user_id}:{normalized_amount.normalize()}"
+    effective_description = description or f"User {normalized_currency} wallet debit"
 
     async def _run(session: AsyncSession) -> str:
-        wallet_code = await _get_or_create_wallet_account_code(session, normalized_user_id)
+        wallet_code = await _get_or_create_crypto_wallet_account_code(
+            session,
+            normalized_user_id,
+            normalized_currency,
+        )
         if await _journal_exists_by_ref(session, effective_ref):
             return wallet_code
-        balance = await get_usdc_balance(normalized_user_id, db=session)
+        balance = await get_crypto_balance(normalized_user_id, normalized_currency, db=session)
         if balance < normalized_amount:
             raise ValueError("Insufficient balance")
         await _post_transfer_journal(
@@ -299,12 +449,13 @@ async def debit_user_usdc(
             debit_account_code=wallet_code,
             credit_account_code=destination_account_code,
             amount=normalized_amount,
-            currency=USDC_CURRENCY,
-            description=description,
+            currency=normalized_currency,
+            description=effective_description,
             metadata={
-                "event": "USDC_WALLET_DEBIT",
+                "event": f"{normalized_currency}_WALLET_DEBIT",
                 "ref": effective_ref,
                 "user_id": normalized_user_id,
+                "currency": normalized_currency,
             },
         )
         return wallet_code

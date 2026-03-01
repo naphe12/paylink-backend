@@ -72,6 +72,7 @@ from app.routers.ref import country, exchange
 from app.routers.tontines.tontines import router as tontine_router
 from app.routers.wallet import payments as wallet_payments
 from app.routers.wallet import transactions, wallet
+from app.routers.wallet.crypto_wallet import router as crypto_wallet_router
 from app.routers.wallet.usdc_wallet import router as usdc_wallet_router
 from app.routers.wallet.transfer import router as transfer_router
 from app.routers.ws import router as ws_router
@@ -161,6 +162,7 @@ app.include_router(auth.router, prefix="/auth", tags=["Auth"])
 app.include_router(change_password_router)
 app.include_router(wallet.router, prefix="/wallet", tags=["Wallet"])
 app.include_router(usdc_wallet_router)
+app.include_router(crypto_wallet_router)
 app.include_router(country.router, prefix="/api/countries", tags=["Countries"])
 app.include_router(exchange.router)
 app.include_router(notif_ws.router)
