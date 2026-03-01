@@ -149,7 +149,8 @@ async def create_wallet_deposit_request(
                   CAST(:metadata AS jsonb)
                 )
                 RETURNING request_id, user_id, token_symbol, network, paylink_deposit_address,
-                          expected_amount, status, expires_at, created_at
+                          expected_amount, status, expires_at, tx_hash, log_index,
+                          matched_amount, created_at, updated_at
                 """
             ),
             {
