@@ -351,8 +351,8 @@ async def credit_user_crypto(
             return wallet_code
         await _post_transfer_journal(
             session,
-            debit_account_code=source_account_code,
-            credit_account_code=wallet_code,
+            debit_account_code=wallet_code,
+            credit_account_code=source_account_code,
             amount=normalized_amount,
             currency=normalized_currency,
             description=effective_description,
@@ -446,8 +446,8 @@ async def debit_user_crypto(
             raise ValueError("Insufficient balance")
         await _post_transfer_journal(
             session,
-            debit_account_code=wallet_code,
-            credit_account_code=destination_account_code,
+            debit_account_code=destination_account_code,
+            credit_account_code=wallet_code,
             amount=normalized_amount,
             currency=normalized_currency,
             description=effective_description,
