@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_maker
+from app.services.fx_rate_service import resolve_stablecoin_bif_rate
 from app.services.paylink_ledger_service import PaylinkLedgerService
 
 USDC_CURRENCY = "USDC"
@@ -526,32 +527,12 @@ async def resolve_usdc_bif_rate(
     *,
     override_rate: Decimal | None = None,
 ) -> Decimal:
-    if override_rate is not None:
-        candidate = Decimal(str(override_rate))
-        if candidate <= 0:
-            raise ValueError("Rate must be > 0")
-        return candidate
-
-    res = await db.execute(
-        text(
-            """
-            SELECT rate
-            FROM paylink.fx_custom_rates
-            WHERE origin_currency = 'USDC'
-              AND destination_currency = 'BIF'
-              AND is_active = TRUE
-            ORDER BY updated_at DESC NULLS LAST
-            LIMIT 1
-            """
-        )
+    return await resolve_stablecoin_bif_rate(
+        db,
+        stablecoin="USDC",
+        override_rate=override_rate,
+        default_rate=DEFAULT_USDC_BIF_RATE,
     )
-    row = res.first()
-    if not row or row[0] is None:
-        return DEFAULT_USDC_BIF_RATE
-    rate = Decimal(str(row[0]))
-    if rate <= 0:
-        return DEFAULT_USDC_BIF_RATE
-    return rate
 
 
 async def convert_usdc_to_bif(

@@ -22,6 +22,7 @@ from app.services.escrow_tracking_ws import (
 )
 from app.services.wallet_service import credit_user_usdc
 from app.services.payout_orchestrator import assign_agent_and_notify
+from app.services.fx_rate_service import resolve_stablecoin_bif_rate
 import math
 
 from app.models.escrow_enums import EscrowOrderStatus
@@ -110,7 +111,25 @@ async def create_escrow(
             if amount_usdc <= 0:
                 raise HTTPException(status_code=400, detail="Le montant USDC doit etre superieur a 0")
 
-            rate_bif_usdt = Decimal(str(order_payload.get("rate_bif_usdt", "2900")))
+            raw_conversion_rate = order_payload.get("conversion_rate_usdc_usdt", "1")
+            try:
+                conversion_rate_usdc_usdt = Decimal(str(raw_conversion_rate))
+            except (InvalidOperation, TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="Taux USDC/USDT invalide")
+            if conversion_rate_usdc_usdt <= 0:
+                raise HTTPException(status_code=400, detail="Le taux USDC/USDT doit etre superieur a 0")
+
+            try:
+                rate_bif_usdt = await resolve_stablecoin_bif_rate(
+                    db,
+                    stablecoin="USDT",
+                    override_rate=order_payload.get("rate_bif_usdt"),
+                    default_rate=Decimal("2900"),
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+
+            usdt_target = (amount_usdc * conversion_rate_usdc_usdt).quantize(Decimal("0.00000001"))
             payout_name = str(order_payload.get("recipient_name") or "").strip()
             payout_phone = str(order_payload.get("recipient_phone") or "").strip()
             if not payout_name or not payout_phone:
@@ -122,10 +141,10 @@ async def create_escrow(
             order_payload = {
                 "user_id": user_uuid,
                 "usdc_expected": amount_usdc,
-                "usdt_target": amount_usdc,
-                "conversion_rate_usdc_usdt": Decimal("1"),
+                "usdt_target": usdt_target,
+                "conversion_rate_usdc_usdt": conversion_rate_usdc_usdt,
                 "rate_bif_usdt": rate_bif_usdt,
-                "bif_target": (amount_usdc * rate_bif_usdt).quantize(Decimal("0.01")),
+                "bif_target": (usdt_target * rate_bif_usdt).quantize(Decimal("0.01")),
                 "deposit_network": order_payload.get("deposit_network", "POLYGON"),
                 "deposit_address": order_payload.get("deposit_address") or synthetic_address,
                 "deposit_required_confirmations": int(order_payload.get("deposit_required_confirmations", 1)),
