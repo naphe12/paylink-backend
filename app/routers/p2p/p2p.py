@@ -17,7 +17,7 @@ from app.models.users import Users
 from app.models.p2p_trade import P2PTrade
 from app.models.p2p_trade_history import P2PTradeStatusHistory
 
-from app.schemas.p2p_offer import OfferCreate, OfferOut
+from app.schemas.p2p_offer import OfferCreate, OfferOut, OfferUpdate
 from app.schemas.p2p_trade import TradeCreate, TradeOut, FiatSentIn, DisputeOpenIn
 from app.services.p2p_offer_service import P2POfferService
 from app.services.p2p_matching_engine import P2PMatchingEngine
@@ -38,6 +38,14 @@ class SandboxCryptoLockedIn(BaseModel):
 async def list_offers(token: str | None = None, side: str | None = None, db: AsyncSession = Depends(get_db)):
     # token/side can be validated stricter if you want
     return await P2POfferService.list_offers(db, token=token, side=side, active=True)
+
+@router.get("/offers/mine", response_model=list[OfferOut])
+async def list_my_offers(
+    active: bool | None = None,
+    db: AsyncSession = Depends(get_db),
+    me: Users = Depends(get_current_user),
+):
+    return await P2POfferService.list_user_offers(db, me.user_id, active=active)
 
 @router.post("/offers", response_model=OfferOut)
 async def create_offer(
@@ -62,6 +70,83 @@ async def create_trade(
         return await P2PTradeService.create_trade(db, me.user_id, data)
     except PermissionError as e:
         raise HTTPException(403, str(e))
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/offers/{offer_id}", response_model=OfferOut)
+async def get_offer(
+    offer_id: str,
+    db: AsyncSession = Depends(get_db),
+    me: Users = Depends(get_current_user),
+):
+    offer = await P2POfferService.get_offer(db, offer_id)
+    if not offer:
+        raise HTTPException(404, "Offer not found")
+    if me.role != "admin" and str(offer.user_id) != str(me.user_id):
+        raise HTTPException(403, "Forbidden")
+    return offer
+
+
+@router.patch("/offers/{offer_id}", response_model=OfferOut)
+async def update_offer(
+    offer_id: str,
+    data: OfferUpdate,
+    db: AsyncSession = Depends(get_db),
+    me: Users = Depends(get_current_user),
+    _: None = Depends(require_not_killed),
+):
+    try:
+        return await P2POfferService.update_offer(db, me.user_id, offer_id, data)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/offers/{offer_id}/deactivate", response_model=OfferOut)
+async def deactivate_offer(
+    offer_id: str,
+    db: AsyncSession = Depends(get_db),
+    me: Users = Depends(get_current_user),
+):
+    try:
+        return await P2POfferService.set_offer_active(db, me.user_id, offer_id, False)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/offers/{offer_id}/activate", response_model=OfferOut)
+async def activate_offer(
+    offer_id: str,
+    db: AsyncSession = Depends(get_db),
+    me: Users = Depends(get_current_user),
+):
+    try:
+        return await P2POfferService.set_offer_active(db, me.user_id, offer_id, True)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.delete("/offers/{offer_id}")
+async def delete_offer(
+    offer_id: str,
+    db: AsyncSession = Depends(get_db),
+    me: Users = Depends(get_current_user),
+):
+    try:
+        await P2POfferService.delete_offer(db, me.user_id, offer_id)
+        return {"status": "OK"}
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/trades/mine", response_model=list[TradeOut])
+async def list_my_trades(
+    status: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    me: Users = Depends(get_current_user),
+):
+    try:
+        return await P2PTradeService.list_user_trades(db, me.user_id, status=status)
     except Exception as e:
         raise HTTPException(400, str(e))
 

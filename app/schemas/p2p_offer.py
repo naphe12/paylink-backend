@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel, Field, field_validator
 from uuid import UUID
 from decimal import Decimal
@@ -24,6 +26,10 @@ class OfferCreate(BaseModel):
             return PaymentMethod.ECOCASH
         return v
 
+
+class OfferUpdate(OfferCreate):
+    pass
+
 class OfferOut(BaseModel):
     offer_id: UUID
     user_id: UUID
@@ -36,6 +42,8 @@ class OfferOut(BaseModel):
     payment_method: PaymentMethod
     terms: Optional[str] = None
     is_active: bool
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

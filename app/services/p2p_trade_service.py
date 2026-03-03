@@ -96,6 +96,42 @@ class P2PTradeService:
         return trade
 
     @staticmethod
+    async def list_user_trades(db: AsyncSession, user_id, status: str | None = None) -> list[P2PTrade]:
+        stmt = select(P2PTrade).where(
+            (P2PTrade.buyer_id == user_id) | (P2PTrade.seller_id == user_id)
+        )
+        if status == "open":
+            stmt = stmt.where(
+                P2PTrade.status.in_(
+                    (
+                        TradeStatus.CREATED,
+                        TradeStatus.AWAITING_CRYPTO,
+                        TradeStatus.CRYPTO_LOCKED,
+                        TradeStatus.AWAITING_FIAT,
+                        TradeStatus.FIAT_SENT,
+                        TradeStatus.FIAT_CONFIRMED,
+                        TradeStatus.DISPUTED,
+                    )
+                )
+            )
+        elif status == "closed":
+            stmt = stmt.where(
+                P2PTrade.status.in_(
+                    (
+                        TradeStatus.RELEASED,
+                        TradeStatus.CANCELLED,
+                        TradeStatus.EXPIRED,
+                        TradeStatus.RESOLVED,
+                    )
+                )
+            )
+        elif status:
+            stmt = stmt.where(P2PTrade.status == TradeStatus(status))
+
+        res = await db.execute(stmt.order_by(P2PTrade.created_at.desc()))
+        return list(res.scalars().all())
+
+    @staticmethod
     async def mark_fiat_sent(db: AsyncSession, trade_id, actor_user_id, data: FiatSentIn):
         trade = await db.scalar(select(P2PTrade).where(P2PTrade.trade_id == trade_id))
         if not trade:

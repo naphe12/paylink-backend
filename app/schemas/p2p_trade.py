@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 from uuid import UUID
 from decimal import Decimal
@@ -33,6 +35,11 @@ class TradeOut(BaseModel):
     payment_method: PaymentMethod
     risk_score: int
     flags: List[str]
+    fiat_sent_at: Optional[datetime] = None
+    fiat_confirmed_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

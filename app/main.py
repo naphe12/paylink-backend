@@ -78,6 +78,7 @@ from app.routers.wallet.transfer import router as transfer_router
 from app.routers.ws import router as ws_router
 from app.services.backoffice_risk import router as backoffice_risk_router
 from app.services.sandbox_transition_worker import run_sandbox_auto_transitions
+from app.services.p2p_expiration_worker import run_p2p_expiration_worker
 from app.services.tontine_rotation import process_tontine_rotations
 from app.websocket_manager import admin_ws_join, admin_ws_leave
 from app.workers.alerts_worker import deliver_alerts
@@ -122,6 +123,16 @@ async def alerts_worker():
             except Exception as exc:
                 logger.error(f"Alerts worker error: {exc}")
             await asyncio.sleep(60)
+
+
+async def p2p_expiration_worker():
+    async for db in get_db():
+        while True:
+            try:
+                await run_p2p_expiration_worker(db)
+            except Exception as exc:
+                logger.error(f"P2P expiration worker error: {exc}")
+            await asyncio.sleep(30)
 
 
 configured_origins = [o.strip() for o in str(settings.ALLOWED_ORIGINS or "").split(",") if o.strip()]
@@ -256,6 +267,7 @@ async def startup_event():
     app.state.started_at_ts = time.time()
     background_tasks.append(asyncio.create_task(webhook_retry_worker()))
     background_tasks.append(asyncio.create_task(alerts_worker()))
+    background_tasks.append(asyncio.create_task(p2p_expiration_worker()))
     if settings.APP_ENV != "prod" and settings.SANDBOX_ENABLED:
         background_tasks.append(asyncio.create_task(sandbox_transition_worker()))
     app.state.background_tasks = background_tasks
