@@ -77,8 +77,7 @@ class PolygonPollingWatcher:
             )
             for cfg in self.token_configs
         }
-        usdc_cfg = next((cfg for cfg in self.token_configs if cfg["symbol"] == "USDC"), None)
-        self.p2p = P2PWatcher(self.rpc_url, usdc_cfg["address"]) if usdc_cfg else None
+        self.p2p = P2PWatcher(self.rpc_url)
 
         # Event signature topic must be 0x-prefixed for eth_getLogs
         self.transfer_topic = Web3.to_hex(Web3.keccak(text="Transfer(address,address,uint256)"))
@@ -219,11 +218,13 @@ class PolygonPollingWatcher:
                 await self._send_wallet_webhook(payload)
 
             # P2P
-            if token_cfg["symbol"] == "USDC" and self.p2p is not None:
+            if self.p2p is not None:
                 await self.p2p.process_transfer(
                     db=db,
                     tx_hash=tx_hash,
+                    log_index=log_index,
                     to_address=to_addr,
+                    token_symbol=token_cfg["symbol"],
                     amount=amount,
                     block_number=block_number,
                     block_timestamp=block_timestamp,

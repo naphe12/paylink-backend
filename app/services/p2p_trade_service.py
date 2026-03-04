@@ -75,6 +75,7 @@ class P2PTradeService:
         offer.available_amount = (Decimal(offer.available_amount) - Decimal(data.token_amount))
 
         db.add(trade)
+        await db.flush()
         await P2PEscrowAllocator.allocate_address(db, trade)
         await set_trade_status(db, trade, initial_status, actor_user_id=buyer_id, actor_role="CLIENT", note="Trade created")
         await P2PRiskService.apply(db, trade)

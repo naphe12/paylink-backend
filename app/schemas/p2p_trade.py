@@ -30,7 +30,10 @@ class TradeOut(BaseModel):
 
     escrow_network: Optional[str] = None
     escrow_deposit_addr: Optional[str] = None
+    escrow_deposit_ref: Optional[str] = None
+    escrow_provider: Optional[str] = None
     escrow_tx_hash: Optional[str] = None
+    escrow_lock_log_index: Optional[int] = None
 
     payment_method: PaymentMethod
     risk_score: int

@@ -20,57 +20,11 @@ from app.services.audit_service import audit_log
 from app.services.risk_decision_log import log_risk_decision
 from app.services.escrow_tracking_ws import broadcast_tracking_update
 from app.services.payout_orchestrator import assign_agent_and_notify
+from app.services.p2p_chain_webhook_service import process_p2p_chain_deposit_webhook
+from app.services.webhook_log_service import log_webhook
 from app.services.wallet_service import credit_user_usdc
 
 logger = logging.getLogger(__name__)
-
-
-async def _ensure_webhook_log_table(db: AsyncSession) -> None:
-    await db.execute(
-        text(
-            """
-            CREATE TABLE IF NOT EXISTS escrow.webhook_logs (
-              id bigserial PRIMARY KEY,
-              event_type text NOT NULL,
-              tx_hash text,
-              status text NOT NULL,
-              attempts int NOT NULL DEFAULT 0,
-              payload jsonb NOT NULL,
-              error text,
-              created_at timestamptz NOT NULL DEFAULT now()
-            )
-            """
-        )
-    )
-
-
-async def _log_webhook_event(
-    db: AsyncSession,
-    *,
-    event_type: str,
-    tx_hash: str | None,
-    status: str,
-    attempts: int,
-    payload: dict,
-    error: str | None = None,
-) -> None:
-    await _ensure_webhook_log_table(db)
-    await db.execute(
-        text(
-            """
-            INSERT INTO escrow.webhook_logs (event_type, tx_hash, status, attempts, payload, error)
-            VALUES (:event_type, :tx_hash, :status, :attempts, CAST(:payload AS jsonb), :error)
-            """
-        ),
-        {
-            "event_type": event_type,
-            "tx_hash": tx_hash,
-            "status": status,
-            "attempts": attempts,
-            "payload": json.dumps(payload),
-            "error": error,
-        },
-    )
 
 
 async def process_usdc_webhook(
@@ -108,13 +62,13 @@ async def process_usdc_webhook(
         await db.flush()
     except IntegrityError:
         await db.rollback()
-        await _log_webhook_event(
+        await log_webhook(
             db,
             event_type="USDC_DEPOSIT",
-            tx_hash=payload.tx_hash,
             status="IGNORED_DUPLICATE",
-            attempts=0,
             payload=payload.model_dump(mode="json"),
+            tx_hash=payload.tx_hash,
+            attempts=0,
         )
         await db.commit()
         return {"status": "IGNORED_DUPLICATE"}
@@ -234,13 +188,13 @@ async def process_usdc_webhook(
         except Exception:
             logger.exception("Failed to assign agent after funded webhook for order_id=%s", order.id)
 
-    await _log_webhook_event(
+    await log_webhook(
         db,
         event_type="USDC_DEPOSIT",
-        tx_hash=payload.tx_hash,
         status="SUCCESS",
-        attempts=0,
         payload=payload.model_dump(mode="json"),
+        tx_hash=payload.tx_hash,
+        attempts=0,
     )
     await db.commit()
 
@@ -262,7 +216,6 @@ async def enqueue_webhook_retry(
     ip: str | None = None,
     user_agent: str | None = None,
 ) -> None:
-    await _ensure_webhook_log_table(db)
     await db.execute(
         text(
             """
@@ -291,13 +244,13 @@ async def enqueue_webhook_retry(
             "last_error": last_error,
         },
     )
-    await _log_webhook_event(
+    await log_webhook(
         db,
         event_type=event_type,
-        tx_hash=payload.get("tx_hash"),
         status="FAILED",
-        attempts=0,
         payload=payload,
+        tx_hash=payload.get("tx_hash"),
+        attempts=0,
         error=last_error,
     )
     await audit_log(
@@ -358,20 +311,25 @@ async def retry_failed_webhooks(db: AsyncSession) -> None:
         retry_id = row_map["id"]
         retry_payload = row_map["payload"]
         try:
-            payload = ChainDepositWebhook(**retry_payload)
-            if (row_map.get("event_type") or "USDC_DEPOSIT") == "USDC_DEPOSIT":
+            event_type = row_map.get("event_type") or "USDC_DEPOSIT"
+            if event_type == "USDC_DEPOSIT":
+                payload = ChainDepositWebhook(**retry_payload)
                 await process_usdc_webhook(db, payload)
+            elif event_type == "P2P_CHAIN_DEPOSIT":
+                await process_p2p_chain_deposit_webhook(db, dict(retry_payload or {}))
+            else:
+                raise ValueError(f"Unsupported webhook retry event_type={event_type}")
             await db.execute(
                 text("DELETE FROM escrow.webhook_retries WHERE id = :id"),
                 {"id": retry_id},
             )
-            await _log_webhook_event(
+            await log_webhook(
                 db,
-                event_type=row_map.get("event_type") or "USDC_DEPOSIT",
-                tx_hash=retry_payload.get("tx_hash"),
+                event_type=event_type,
                 status="SUCCESS_RETRY",
-                attempts=int(row_map.get("attempts") or 0) + 1,
                 payload=retry_payload,
+                tx_hash=retry_payload.get("tx_hash"),
+                attempts=int(row_map.get("attempts") or 0) + 1,
             )
         except Exception as exc:
             await db.execute(
@@ -386,13 +344,13 @@ async def retry_failed_webhooks(db: AsyncSession) -> None:
                 ),
                 {"id": retry_id, "err": str(exc)},
             )
-            await _log_webhook_event(
+            await log_webhook(
                 db,
                 event_type=row_map.get("event_type") or "USDC_DEPOSIT",
-                tx_hash=retry_payload.get("tx_hash"),
                 status="FAILED_RETRY",
-                attempts=int(row_map.get("attempts") or 0) + 1,
                 payload=retry_payload,
+                tx_hash=retry_payload.get("tx_hash"),
+                attempts=int(row_map.get("attempts") or 0) + 1,
                 error=str(exc),
             )
 

@@ -2,29 +2,6 @@ import json
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
-async def _ensure_webhook_logs_schema(db: AsyncSession) -> None:
-    # Keep compatibility with older deployments that created a narrower table shape.
-    await db.execute(text("""
-        CREATE TABLE IF NOT EXISTS escrow.webhook_logs (
-          id bigserial PRIMARY KEY,
-          event_type text NOT NULL,
-          tx_hash text,
-          status text NOT NULL,
-          attempts int NOT NULL DEFAULT 1,
-          payload jsonb NOT NULL,
-          error text,
-          created_at timestamptz NOT NULL DEFAULT now()
-        )
-    """))
-    await db.execute(text("""
-        ALTER TABLE escrow.webhook_logs
-        ADD COLUMN IF NOT EXISTS order_id uuid
-    """))
-    await db.execute(text("""
-        ALTER TABLE escrow.webhook_logs
-        ADD COLUMN IF NOT EXISTS network text
-    """))
-
 async def log_webhook(
     db: AsyncSession,
     *,
@@ -37,7 +14,6 @@ async def log_webhook(
     attempts: int = 1,
     error: str | None = None,
 ):
-    await _ensure_webhook_logs_schema(db)
     await db.execute(text("""
         INSERT INTO escrow.webhook_logs
           (event_type, status, payload, tx_hash, order_id, network, attempts, error)

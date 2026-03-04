@@ -1,13 +1,63 @@
+import csv
+import io
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, text
 
+from app.config import settings
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin  # you already have it
 from app.models.users import Users
 from app.models.p2p_trade import P2PTrade
+from app.services.p2p_chain_deposit_service import (
+    list_chain_deposits,
+    get_chain_deposit_stats,
+    assign_chain_deposit_to_trade,
+    auto_assign_chain_deposit,
+    get_chain_deposit_timeline,
+)
 
 router = APIRouter(prefix="/admin/p2p", tags=["Admin P2P"])
+
+
+@router.get("/deposits/settings")
+async def admin_chain_deposit_settings(
+    me: Users = Depends(get_current_admin),
+):
+    return {
+        "auto_assign_min_score": int(settings.P2P_CHAIN_AUTO_ASSIGN_MIN_SCORE or 90),
+    }
+
+
+@router.get("/deposits/stats")
+async def admin_chain_deposit_stats(
+    db: AsyncSession = Depends(get_db),
+    me: Users = Depends(get_current_admin),
+):
+    return await get_chain_deposit_stats(db)
+
+
+@router.get("/deposits/providers")
+async def admin_chain_deposit_providers(
+    db: AsyncSession = Depends(get_db),
+    me: Users = Depends(get_current_admin),
+):
+    rows = (
+        await db.execute(
+            text(
+                """
+                SELECT DISTINCT TRIM(COALESCE(metadata->>'provider', '')) AS provider
+                FROM p2p.chain_deposits
+                WHERE TRIM(COALESCE(metadata->>'provider', '')) <> ''
+                ORDER BY provider ASC
+                """
+            )
+        )
+    ).fetchall()
+    return [str(row[0]) for row in rows if row and row[0]]
 
 @router.get("/trades")
 async def admin_list_trades(
@@ -32,7 +82,10 @@ async def admin_list_trades(
               t.payment_method::text AS payment_method,
               t.risk_score,
               t.flags,
+              t.escrow_deposit_ref,
+              t.escrow_provider,
               t.escrow_tx_hash,
+              t.escrow_lock_log_index,
               t.fiat_sent_at,
               t.fiat_confirmed_at,
               t.buyer_id,
@@ -73,7 +126,10 @@ async def admin_list_trades(
             "payment_method": row["payment_method"],
             "risk_score": int(row["risk_score"]) if row["risk_score"] is not None else 0,
             "flags": list(row["flags"] or []),
+            "escrow_deposit_ref": row["escrow_deposit_ref"],
+            "escrow_provider": row["escrow_provider"],
             "escrow_tx_hash": row["escrow_tx_hash"],
+            "escrow_lock_log_index": row["escrow_lock_log_index"],
             "fiat_sent_at": row["fiat_sent_at"],
             "fiat_confirmed_at": row["fiat_confirmed_at"],
             "buyer_user_id": str(row["buyer_id"]) if row["buyer_id"] else None,
@@ -119,7 +175,10 @@ async def admin_trade_detail(
               t.flags,
               t.escrow_network,
               t.escrow_deposit_addr,
+              t.escrow_deposit_ref,
+              t.escrow_provider,
               t.escrow_tx_hash,
+              t.escrow_lock_log_index,
               t.escrow_locked_at,
               t.fiat_sent_at,
               t.fiat_confirmed_at,
@@ -166,7 +225,10 @@ async def admin_trade_detail(
         "flags": list(data["flags"] or []),
         "escrow_network": data["escrow_network"],
         "escrow_deposit_addr": data["escrow_deposit_addr"],
+        "escrow_deposit_ref": data["escrow_deposit_ref"],
+        "escrow_provider": data["escrow_provider"],
         "escrow_tx_hash": data["escrow_tx_hash"],
+        "escrow_lock_log_index": data["escrow_lock_log_index"],
         "escrow_locked_at": data["escrow_locked_at"],
         "fiat_sent_at": data["fiat_sent_at"],
         "fiat_confirmed_at": data["fiat_confirmed_at"],
@@ -361,3 +423,197 @@ async def risk_dashboard(
         "high_risk_trades": high_risk,
         "average_risk": float(avg or 0),
     }
+
+
+@router.get("/deposits")
+async def admin_list_chain_deposits(
+    status: str | None = None,
+    query: str | None = None,
+    token: str | None = None,
+    source: str | None = None,
+    provider: str | None = None,
+    assignment_mode: str | None = None,
+    sort_by: str | None = None,
+    score_min: int | None = None,
+    db: AsyncSession = Depends(get_db),
+    me: Users = Depends(get_current_admin),
+):
+    return await list_chain_deposits(
+        db,
+        status=status,
+        query_text=query,
+        token=token,
+        source=source,
+        provider=provider,
+        assignment_mode=assignment_mode,
+        sort_by=sort_by,
+        score_min=score_min,
+    )
+
+
+@router.get("/deposits/export")
+async def admin_export_chain_deposits(
+    status: str | None = None,
+    query: str | None = None,
+    token: str | None = None,
+    source: str | None = None,
+    provider: str | None = None,
+    assignment_mode: str | None = None,
+    sort_by: str | None = None,
+    score_min: int | None = None,
+    format: str = "json",
+    db: AsyncSession = Depends(get_db),
+    me: Users = Depends(get_current_admin),
+):
+    items = await list_chain_deposits(
+        db,
+        status=status,
+        query_text=query,
+        token=token,
+        source=source,
+        provider=provider,
+        assignment_mode=assignment_mode,
+        sort_by=sort_by,
+        score_min=score_min,
+    )
+    normalized_format = str(format or "json").strip().lower()
+    filename_suffix = str(status or "all").strip().lower() or "all"
+    if query:
+        filename_suffix += "_filtered"
+    if token:
+        filename_suffix += f"_{str(token).lower()}"
+    if source:
+        filename_suffix += f"_{str(source).lower()}"
+    if provider:
+        filename_suffix += f"_{str(provider).lower()}"
+    if assignment_mode:
+        filename_suffix += f"_{str(assignment_mode).lower()}"
+    if score_min:
+        filename_suffix += f"_score{int(score_min)}"
+
+    if normalized_format == "json":
+        return Response(
+            content=json.dumps(items, default=str, ensure_ascii=False, indent=2),
+            media_type="application/json",
+            headers={
+                "Content-Disposition": f"attachment; filename=p2p_chain_deposits_{filename_suffix}.json"
+            },
+        )
+
+    if normalized_format != "csv":
+        raise HTTPException(status_code=400, detail="Unsupported format")
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "deposit_id",
+            "status",
+            "resolution",
+            "network",
+            "token",
+            "amount",
+            "tx_hash",
+            "log_index",
+            "to_address",
+            "from_address",
+            "escrow_deposit_ref",
+            "trade_id",
+            "trade_status",
+            "matched_at",
+            "matched_by",
+            "block_number",
+            "confirmations",
+            "chain_id",
+            "source",
+            "source_ref",
+            "provider",
+            "provider_event_id",
+            "suggestion_count",
+            "suggested_trade_ids",
+            "created_at",
+            "updated_at",
+        ]
+    )
+    for item in items:
+        writer.writerow(
+            [
+                item.get("deposit_id"),
+                item.get("status"),
+                item.get("resolution"),
+                item.get("network"),
+                item.get("token"),
+                item.get("amount"),
+                item.get("tx_hash"),
+                item.get("log_index"),
+                item.get("to_address"),
+                item.get("from_address"),
+                item.get("escrow_deposit_ref"),
+                item.get("trade_id"),
+                item.get("trade_status"),
+                item.get("matched_at"),
+                item.get("matched_by"),
+                item.get("block_number"),
+                item.get("confirmations"),
+                item.get("chain_id"),
+                item.get("source"),
+                item.get("source_ref"),
+                item.get("provider"),
+                item.get("provider_event_id"),
+                item.get("suggestion_count"),
+                "|".join([str(s.get("trade_id")) for s in list(item.get("suggested_trades") or [])]),
+                item.get("created_at"),
+                item.get("updated_at"),
+            ]
+        )
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=p2p_chain_deposits_{filename_suffix}.csv"},
+    )
+
+
+@router.get("/deposits/{deposit_id}/timeline")
+async def admin_chain_deposit_timeline(
+    deposit_id: str,
+    db: AsyncSession = Depends(get_db),
+    me: Users = Depends(get_current_admin),
+):
+    try:
+        return await get_chain_deposit_timeline(db, deposit_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/deposits/{deposit_id}/assign")
+async def admin_assign_chain_deposit(
+    deposit_id: str,
+    trade_id: str,
+    db: AsyncSession = Depends(get_db),
+    me: Users = Depends(get_current_admin),
+):
+    try:
+        return await assign_chain_deposit_to_trade(
+            db,
+            deposit_id=deposit_id,
+            trade_id=trade_id,
+            actor_user_id=str(me.user_id),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/deposits/{deposit_id}/auto-assign")
+async def admin_auto_assign_chain_deposit(
+    deposit_id: str,
+    db: AsyncSession = Depends(get_db),
+    me: Users = Depends(get_current_admin),
+):
+    try:
+        return await auto_assign_chain_deposit(
+            db,
+            deposit_id=deposit_id,
+            actor_user_id=str(me.user_id),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))

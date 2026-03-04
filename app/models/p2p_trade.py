@@ -26,7 +26,10 @@ class P2PTrade(Base):
 
     escrow_network = Column(Text)
     escrow_deposit_addr = Column(Text)
+    escrow_deposit_ref = Column(Text)
+    escrow_provider = Column(Text)
     escrow_tx_hash = Column(Text)              # unique index in DB
+    escrow_lock_log_index = Column(Integer)
     escrow_locked_at = Column(TIMESTAMP(timezone=True))
 
     payment_method = Column(Enum(PaymentMethod, name="payment_method", schema="p2p"), nullable=False)

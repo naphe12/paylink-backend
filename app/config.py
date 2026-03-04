@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     P2P_MM_MAX_DAILY_USD: float = 2000.0
     P2P_MM_SPREAD_BPS: int = 80  # 0.80%
     SYSTEM_TREASURY_USER_ID: str = ""  # user_id d'un compte admin/treasury
+    P2P_ESCROW_ADDRESS_PROVIDER: str = "simulated"  # simulated|configured
+    P2P_ESCROW_NETWORK: str = "POLYGON"
+    P2P_CHAIN_AUTO_ASSIGN_MIN_SCORE: int = 90
     ML_SCORING_ENABLED: bool = False
     ML_MODEL_PATH: str = "models/risk_model.pkl"
 

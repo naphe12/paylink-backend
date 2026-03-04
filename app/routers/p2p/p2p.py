@@ -1,9 +1,11 @@
+import hashlib
+import hmac
 from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,15 +26,41 @@ from app.services.p2p_matching_engine import P2PMatchingEngine
 from app.services.p2p_mm_quote import P2PMMQuote
 from app.services.liquidity_guard import LiquidityGuard
 from app.services.audit import audit
+from app.services.p2p_chain_webhook_service import process_p2p_chain_deposit_webhook
 from app.services.p2p_trade_state import set_trade_status
 from app.services.p2p_trade_service import P2PTradeService
 from app.services.p2p_dispute_service import P2PDisputeService
+from app.security.rate_limit import rate_limit
+from app.services.webhook_log_service import log_webhook
 
 router = APIRouter(prefix="/p2p", tags=["P2P"])
 
 
 class SandboxCryptoLockedIn(BaseModel):
     escrow_tx_hash: str | None = None
+
+
+class P2PChainDepositWebhookIn(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    network: str
+    tx_hash: str
+    log_index: int = 0
+    from_address: str | None = None
+    to_address: str
+    amount: Decimal
+    confirmations: int = 0
+    token_symbol: str | None = None
+    token_address: str | None = None
+    amount_raw: str | None = None
+    block_number: int | None = None
+    block_timestamp: int | None = None
+    chain_id: int | None = None
+    escrow_deposit_ref: str | None = None
+    provider: str | None = None
+    provider_event_id: str | None = None
+    source: str | None = None
+    source_ref: str | None = None
 
 @router.get("/offers", response_model=list[OfferOut])
 async def list_offers(token: str | None = None, side: str | None = None, db: AsyncSession = Depends(get_db)):
@@ -72,6 +100,58 @@ async def create_trade(
         raise HTTPException(403, str(e))
     except Exception as e:
         raise HTTPException(400, str(e))
+
+
+@router.post("/webhooks/chain-deposit")
+async def p2p_chain_deposit_webhook(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    ip = request.client.host if request.client else "unknown"
+    await rate_limit(request, key=f"ip:{ip}:p2p_chain_webhook", limit=60, window_seconds=60)
+
+    raw_body = await request.body()
+    signature = request.headers.get("X-Paylink-Signature")
+    secret = settings.HMAC_SECRET or settings.ESCROW_WEBHOOK_SECRET
+    if not secret:
+        raise HTTPException(status_code=500, detail="Webhook secret not configured")
+
+    expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature or "", expected):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+
+    payload = P2PChainDepositWebhookIn.model_validate(await request.json())
+    payload_data = payload.model_dump(mode="json", exclude_none=True)
+
+    try:
+        result = await process_p2p_chain_deposit_webhook(db, payload_data)
+        result_status = str((result or {}).get("status") or "SUCCESS").upper()
+        await log_webhook(
+            db,
+            event_type="P2P_CHAIN_DEPOSIT",
+            status=result_status,
+            payload=payload_data,
+            tx_hash=payload.tx_hash,
+            network=payload.network,
+        )
+        await db.commit()
+        return result
+    except Exception as exc:
+        await db.rollback()
+        try:
+            await log_webhook(
+                db,
+                event_type="P2P_CHAIN_DEPOSIT",
+                status="FAILED",
+                payload=payload_data,
+                tx_hash=payload.tx_hash,
+                network=payload.network,
+                error=str(exc),
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/offers/{offer_id}", response_model=OfferOut)
