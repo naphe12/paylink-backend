@@ -1,4 +1,5 @@
 import decimal
+import logging
 import uuid
 from datetime import datetime
 from datetime import timedelta
@@ -42,6 +43,7 @@ from app.core.security import create_access_token
 
 router = APIRouter(prefix="/wallet/transfer", tags=["External Transfer"])
 AGENT_EMAIL = "adolphe.nahimana@yahoo.fr"
+logger = logging.getLogger(__name__)
 
 DESTINATION_CURRENCY_MAP = {
     "burundi": "BIF",
@@ -340,9 +342,9 @@ async def external_transfer(
     await db.commit()
     await db.refresh(transfer)
 
+    close_link = None
     if requires_admin:
         backend_base = str(getattr(settings, "BACKEND_URL", "") or "").strip()
-        close_link = None
         if backend_base:
             agent_user = await db.scalar(
                 select(Users).where(Users.email == AGENT_EMAIL)
@@ -358,23 +360,34 @@ async def external_transfer(
                 )
                 close_link = f"{backend_base.rstrip('/')}/agent/external/{transfer.transfer_id}/close-by-link?token={close_token}"
 
-        await run_in_threadpool(
-            send_email,
-            AGENT_EMAIL,
-            f"Nouvelle demande de transfert #{transfer.reference_code}",
-            "external_transfer_request_agent.html",
-            client_name=current_user.full_name,
-            client_email=current_user.email,
-            amount=amount,
-            currency=origin_currency,
-            payout_amount=f"{local_amount} {destination_currency}",
-            used_credit=f"{credit_used} {origin_currency}",
-            recipient_name=data.recipient_name,
-            recipient_phone=data.recipient_phone,
-            partner="Lumicash",
-            country="Burundi",
-            close_link=close_link,
-        )
+        try:
+            await run_in_threadpool(
+                send_email,
+                AGENT_EMAIL,
+                f"Nouvelle demande de transfert #{transfer.reference_code}",
+                "external_transfer_request_agent.html",
+                client_name=current_user.full_name,
+                client_email=current_user.email,
+                client_phone=current_user.phone_e164 or "",
+                amount=amount,
+                currency=origin_currency,
+                payout_amount=f"{local_amount} {destination_currency}",
+                used_credit=f"{credit_used} {origin_currency}",
+                receiver_name=data.recipient_name,
+                receiver_phone=data.recipient_phone,
+                partner_name=data.partner_name,
+                country=data.country_destination,
+                transfer_id=transfer.reference_code,
+                dashboard_url=f"{settings.FRONTEND_URL}/dashboard/admin",
+                close_link=close_link,
+                year=datetime.utcnow().year,
+            )
+        except Exception as exc:
+            logger.exception(
+                "Agent notification email failed for external transfer %s: %s",
+                transfer.transfer_id,
+                exc,
+            )
 
         chat_ids = (await db.execute(select(TelegramUser.chat_id))).scalars().all()
         telegram_message = (
@@ -391,27 +404,34 @@ async def external_transfer(
             except Exception:
                 continue
 
-    await send_transaction_emails(
-        db,
-        initiator=current_user,
-        subject=f"Nouvelle demande de transfert {transfer.reference_code}",
-        template="external_transfer_request_agent.html",
-        client_name=current_user.full_name,
-        client_email=current_user.email,
-        client_phone=current_user.phone_e164 or "",
-        amount=amount,
-        currency=origin_currency,
-        payout_amount=f"{local_amount} {destination_currency}",
-        credit_available=f"{credit_available_after}",
-        receiver_name=data.recipient_name,
-        receiver_phone=data.recipient_phone,
-        partner_name=data.partner_name,
-        country=data.country_destination,
-        transfer_id=transfer.reference_code,
-        dashboard_url=f"{settings.FRONTEND_URL}/dashboard/admin",
-        close_link=close_link if requires_admin else None,
-        year=datetime.utcnow().year,
-    )
+    try:
+        await send_transaction_emails(
+            db,
+            initiator=current_user,
+            subject=f"Nouvelle demande de transfert {transfer.reference_code}",
+            template="external_transfer_request_agent.html",
+            client_name=current_user.full_name,
+            client_email=current_user.email,
+            client_phone=current_user.phone_e164 or "",
+            amount=amount,
+            currency=origin_currency,
+            payout_amount=f"{local_amount} {destination_currency}",
+            credit_available=f"{credit_available_after}",
+            receiver_name=data.recipient_name,
+            receiver_phone=data.recipient_phone,
+            partner_name=data.partner_name,
+            country=data.country_destination,
+            transfer_id=transfer.reference_code,
+            dashboard_url=f"{settings.FRONTEND_URL}/dashboard/admin",
+            close_link=close_link if requires_admin else None,
+            year=datetime.utcnow().year,
+        )
+    except Exception as exc:
+        logger.exception(
+            "Transaction notifications failed for external transfer %s: %s",
+            transfer.transfer_id,
+            exc,
+        )
 
     # Envoyer un reçu PDF au client (émetteur)
     if current_user.email:
@@ -433,7 +453,8 @@ async def external_transfer(
             "country": data.country_destination,
         }
         receipt_bytes = build_external_transfer_receipt(receipt_payload)
-        await send_transaction_emails(
+        try:
+            await send_transaction_emails(
             db,
             initiator=current_user,
             subject=f"Reçu PayLink {transfer.reference_code}",
@@ -453,7 +474,13 @@ async def external_transfer(
             attachments=[
                 {"name": f"recu-{transfer.reference_code}.pdf", "content": receipt_bytes}
             ],
-        )
+            )
+        except Exception as exc:
+            logger.exception(
+                "Receipt email failed for external transfer %s: %s",
+                transfer.transfer_id,
+                exc,
+            )
 
     return transfer
 
