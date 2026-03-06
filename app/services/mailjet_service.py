@@ -16,12 +16,23 @@ class MailjetEmailService:
     soit un contenu HTML direct (body_html), soit un texte brut (text).
     """
 
-    def __init__(self):
+    def __init__(self, preferred_provider: str | None = None):
         self.brevo_api_key = (settings.BREVO_API_KEY or "").strip()
         self.mailjet_api_key = (settings.MAILJET_API_KEY or "").strip()
         self.mailjet_secret_key = (settings.MAILJET_SECRET_KEY or "").strip()
+        preferred = str(preferred_provider or "").strip().lower()
 
-        if self.brevo_api_key:
+        if preferred == "mailjet":
+            if self.mailjet_api_key and self.mailjet_secret_key:
+                self.provider = "mailjet"
+            else:
+                raise ValueError("MAILJET_API_KEY and MAILJET_SECRET_KEY are required for preferred_provider=mailjet")
+        elif preferred == "brevo":
+            if self.brevo_api_key:
+                self.provider = "brevo"
+            else:
+                raise ValueError("BREVO_API_KEY is required for preferred_provider=brevo")
+        elif self.brevo_api_key:
             self.provider = "brevo"
         elif self.mailjet_api_key and self.mailjet_secret_key:
             self.provider = "mailjet"
