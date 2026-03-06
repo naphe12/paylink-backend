@@ -15,7 +15,8 @@ from app.services.mailjet_service import MailjetEmailService
 
 
 def _build_agent_confirm_link(trade_id: str, token: str) -> str:
-    base = str(getattr(core_settings, "FRONTEND_URL", "http://localhost:5173") or "http://localhost:5173").rstrip("/")
+    backend_base = str(getattr(core_settings, "BACKEND_URL", "") or "").strip()
+    base = (backend_base or str(getattr(core_settings, "FRONTEND_URL", "http://localhost:5173") or "http://localhost:5173")).rstrip("/")
     return f"{base}/api/p2p/trades/{trade_id}/fiat-sent-by-agent?token={quote_plus(token)}"
 
 
