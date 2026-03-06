@@ -3,11 +3,12 @@ from decimal import Decimal
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.security import decode_access_token
 from app.dependencies.auth import (
     get_current_agent,
     get_current_user,  # ou une version spéciale pour les agents
@@ -75,6 +76,149 @@ async def _ensure_transfer_transaction(
     db.add(new_tx)
     await db.flush()
     return new_tx
+
+
+async def _close_external_transfer_core(
+    db: AsyncSession,
+    transfer_id: str,
+    acting_agent_user: Users,
+    payload: dict | None = None,
+):
+    agent_row = await _require_agent(db, acting_agent_user)
+    agent_id = agent_row.agent_id
+    transfer = await db.scalar(
+        select(ExternalTransfers).where(ExternalTransfers.transfer_id == transfer_id)
+    )
+    if not transfer:
+        raise HTTPException(status_code=404, detail="Transfert introuvable ou deja clos.")
+    if str(transfer.status or "").lower() == "completed":
+        wallet = await db.scalar(
+            select(Wallets).where(
+                Wallets.user_id == acting_agent_user.user_id,
+                Wallets.type == "agent",
+            )
+        )
+        return {
+            "message": "Transfert deja cloture",
+            "balance": float(wallet.available) if wallet else None,
+            "amount_debited": None,
+            "currency": wallet.currency_code if wallet else None,
+        }
+    if transfer.status != "approved":
+        raise HTTPException(status_code=400, detail=f"Transfert non cloturable (status={transfer.status})")
+
+    wallet = await db.scalar(
+        select(Wallets).where(
+            Wallets.user_id == acting_agent_user.user_id,
+            Wallets.type == "agent",
+        )
+    )
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Portefeuille agent introuvable.")
+
+    wallet_ccy = str(wallet.currency_code or "").upper()
+    transfer_ccy = str(transfer.currency or "").upper()
+    if wallet_ccy == transfer_ccy and transfer.local_amount is not None:
+        amount_to_debit = Decimal(transfer.local_amount)
+    else:
+        amount_to_debit = Decimal(transfer.amount or 0)
+
+    if amount_to_debit <= Decimal("0"):
+        raise HTTPException(status_code=400, detail="Montant invalide.")
+
+    if wallet.available < amount_to_debit:
+        raise HTTPException(
+            status_code=400,
+            detail="Solde agent insuffisant pour couvrir le transfert.",
+        )
+
+    wallet.available -= amount_to_debit
+    transfer.status = "completed"
+    transfer.processed_at = datetime.utcnow()
+    transfer.processed_by = acting_agent_user.user_id
+
+    txn = await db.scalar(
+        select(Transactions).where(Transactions.related_entity_id == transfer.transfer_id)
+    )
+    txn = await _ensure_transfer_transaction(db, transfer, txn)
+    txn.status = "completed"
+    txn.updated_at = datetime.utcnow()
+
+    wallet_tx = WalletTransactions(
+        wallet_id=wallet.wallet_id,
+        user_id=acting_agent_user.user_id,
+        operation_type="external_transfer_close",
+        direction="debit",
+        amount=amount_to_debit,
+        currency_code=wallet.currency_code,
+        balance_after=wallet.available,
+        reference=str(transfer.transfer_id),
+        description=f"Cloture transfert {transfer.reference_code or transfer.transfer_id}",
+    )
+    db.add(wallet_tx)
+
+    agent_tx = AgentTransactions(
+        agent_id=agent_id,
+        client_user_id=transfer.user_id,
+        direction="external_transfer",
+        tx_type="external_transfer",
+        amount=amount_to_debit,
+        commission=Decimal("0"),
+        status="completed",
+        related_tx=transfer.transfer_id,
+    )
+    db.add(agent_tx)
+
+    await db.flush()
+
+    metadata_payload = (payload or {}).get("metadata") or (payload or {}).get("product_metadata")
+    metadata = (transfer.metadata_ or {}).copy()
+    metadata.update(
+        {
+            "operation": "external_transfer_close",
+            "transfer_id": str(transfer.transfer_id),
+            "transaction_id": str(txn.tx_id) if txn else None,
+            "agent_wallet_id": str(wallet.wallet_id),
+            "agent_user_id": str(acting_agent_user.user_id),
+            "wallet_transaction_id": str(wallet_tx.transaction_id),
+            "agent_transaction_id": str(agent_tx.transaction_id),
+            "amount_debited": str(amount_to_debit),
+            "currency": wallet.currency_code,
+            "reference_code": transfer.reference_code,
+            "closed_via": "agent_link" if (payload or {}).get("_source") == "agent_link" else "agent_console",
+        }
+    )
+    if metadata_payload and isinstance(metadata_payload, dict):
+        metadata.update(metadata_payload)
+    transfer.metadata_ = _jsonify_metadata({k: v for k, v in metadata.items() if v is not None})
+
+    await db.commit()
+
+    user = await db.scalar(select(Users).where(Users.user_id == transfer.user_id))
+    if user:
+        body = f"""
+        Bonjour {user.full_name},
+
+        Votre transfert {transfer.reference_code} a ete complete par un agent.
+        Montant envoye : {transfer.amount} {transfer.currency}
+        Beneficiaire : {transfer.recipient_name} ({transfer.recipient_phone})
+
+        Merci d'utiliser PayLink.
+        """
+        await send_transaction_emails(
+            db,
+            initiator=user,
+            subject=f"Transfert {transfer.reference_code} complete",
+            template=None,
+            body=body,
+        )
+
+    return {
+        "message": "Transfert cloture",
+        "balance": float(wallet.available),
+        "amount_debited": float(amount_to_debit),
+        "currency": wallet.currency_code,
+    }
 
 
 @router.patch("/{transfer_id}/status")
@@ -229,116 +373,43 @@ async def close_external_transfer(
     db: AsyncSession = Depends(get_db),
     current_agent: Users = Depends(get_current_agent),
 ):
-    agent_row = await _require_agent(db, current_agent)
-    agent_id = agent_row.agent_id
-    transfer = await db.scalar(
-        select(ExternalTransfers).where(ExternalTransfers.transfer_id == transfer_id)
+    return await _close_external_transfer_core(
+        db=db,
+        transfer_id=transfer_id,
+        acting_agent_user=current_agent,
+        payload=payload,
     )
-    if not transfer or transfer.status != "approved":
-        raise HTTPException(status_code=404, detail="Transfert introuvable ou deja clos.")
 
-    wallet = await db.scalar(
-        select(Wallets).where(
-            Wallets.user_id == current_agent.user_id,
-            Wallets.type == "agent",
-        )
+
+@router.get("/{transfer_id}/close-by-link")
+async def close_external_transfer_by_link(
+    transfer_id: str,
+    token: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
+    payload = decode_access_token(token)
+    if payload.get("action") != "external_transfer_close_by_agent_link":
+        raise HTTPException(status_code=403, detail="Token invalide pour cette action")
+
+    if str(payload.get("transfer_id") or "") != str(transfer_id):
+        raise HTTPException(status_code=403, detail="Token transfer mismatch")
+
+    agent_user_id = str(payload.get("sub") or "").strip()
+    if not agent_user_id:
+        raise HTTPException(status_code=403, detail="Token agent invalide")
+
+    acting_agent_user = await db.scalar(select(Users).where(Users.user_id == agent_user_id))
+    if not acting_agent_user:
+        raise HTTPException(status_code=404, detail="Agent introuvable")
+    if str(getattr(acting_agent_user, "role", "")).lower() not in {"agent", "admin"}:
+        raise HTTPException(status_code=403, detail="Acces reserve aux agents")
+
+    return await _close_external_transfer_core(
+        db=db,
+        transfer_id=transfer_id,
+        acting_agent_user=acting_agent_user,
+        payload={"_source": "agent_link"},
     )
-    if not wallet:
-        raise HTTPException(status_code=404, detail="Portefeuille agent introuvable.")
-
-    amount_to_debit = Decimal(transfer.local_amount or transfer.amount or 0)
-    if amount_to_debit <= Decimal("0"):
-        raise HTTPException(status_code=400, detail="Montant invalide.")
-
-    if wallet.available < amount_to_debit:
-        raise HTTPException(
-            status_code=400,
-            detail="Solde agent insuffisant pour couvrir le transfert.",
-        )
-
-    wallet.available -= amount_to_debit
-    transfer.status = "completed"
-    transfer.processed_at = datetime.utcnow()
-    transfer.processed_by = current_agent.user_id
-
-    txn = await db.scalar(
-        select(Transactions).where(Transactions.related_entity_id == transfer.transfer_id)
-    )
-    txn = await _ensure_transfer_transaction(db, transfer, txn)
-    txn.status = "completed"
-    txn.updated_at = datetime.utcnow()
-
-    wallet_tx = WalletTransactions(
-        wallet_id=wallet.wallet_id,
-        user_id=current_agent.user_id,
-        operation_type="external_transfer_close",
-        direction="debit",
-        amount=amount_to_debit,
-        currency_code=wallet.currency_code,
-        balance_after=wallet.available,
-        reference=str(transfer.transfer_id),
-        description=f"Cloture transfert {transfer.reference_code or transfer.transfer_id}",
-    )
-    db.add(wallet_tx)
-
-    agent_tx = AgentTransactions(
-        agent_id=agent_id,
-        client_user_id=transfer.user_id,
-        direction="external_transfer",
-        tx_type="external_transfer",
-        amount=amount_to_debit,
-        commission=Decimal("0"),
-        status="completed",
-        related_tx=transfer.transfer_id,
-    )
-    db.add(agent_tx)
-
-    await db.flush()
-
-    metadata_payload = (payload or {}).get("metadata") or (payload or {}).get("product_metadata")
-    metadata = (transfer.metadata_ or {}).copy()
-    metadata.update(
-        {
-            "operation": "external_transfer_close",
-            "transfer_id": str(transfer.transfer_id),
-            "transaction_id": str(txn.tx_id) if txn else None,
-            "agent_wallet_id": str(wallet.wallet_id),
-            "agent_user_id": str(current_agent.user_id),
-            "wallet_transaction_id": str(wallet_tx.transaction_id),
-            "agent_transaction_id": str(agent_tx.transaction_id),
-            "amount_debited": str(amount_to_debit),
-            "currency": wallet.currency_code,
-            "reference_code": transfer.reference_code,
-        }
-    )
-    if metadata_payload and isinstance(metadata_payload, dict):
-        metadata.update(metadata_payload)
-    transfer.metadata_ = _jsonify_metadata({k: v for k, v in metadata.items() if v is not None})
-
-    await db.commit()
-
-    user = await db.scalar(select(Users).where(Users.user_id == transfer.user_id))
-    if user:
-        body = f"""
-        Bonjour {user.full_name},
-
-        Votre transfert {transfer.reference_code} a ete complete par un agent.
-        Montant envoye : {transfer.amount} {transfer.currency}
-        Beneficiaire : {transfer.recipient_name} ({transfer.recipient_phone})
-
-        Merci d'utiliser PayLink.
-        """
-        await send_transaction_emails(
-            db,
-            initiator=user,
-            subject=f"Transfert {transfer.reference_code} complete",
-            template=None,
-            body=body,
-        )
-    return {
-        "message": "Transfert cloture",
-        "balance": float(wallet.available),
-    }
 
 
 @router.get("/users")

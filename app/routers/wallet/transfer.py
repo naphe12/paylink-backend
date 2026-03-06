@@ -1,6 +1,7 @@
 import decimal
 import uuid
 from datetime import datetime
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
@@ -37,6 +38,7 @@ from app.services.pdf_utils import build_external_transfer_receipt
 from app.models.general_settings import GeneralSettings
 from app.models.fx_custom_rates import FxCustomRates
 from app.models.fxconversions import FxConversions
+from app.core.security import create_access_token
 
 router = APIRouter(prefix="/wallet/transfer", tags=["External Transfer"])
 AGENT_EMAIL = "adolphe.nahimana@yahoo.fr"
@@ -339,6 +341,23 @@ async def external_transfer(
     await db.refresh(transfer)
 
     if requires_admin:
+        backend_base = str(getattr(settings, "BACKEND_URL", "") or "").strip()
+        close_link = None
+        if backend_base:
+            agent_user = await db.scalar(
+                select(Users).where(Users.email == AGENT_EMAIL)
+            )
+            if agent_user:
+                close_token = create_access_token(
+                    data={
+                        "sub": str(agent_user.user_id),
+                        "action": "external_transfer_close_by_agent_link",
+                        "transfer_id": str(transfer.transfer_id),
+                    },
+                    expires_delta=timedelta(hours=48),
+                )
+                close_link = f"{backend_base.rstrip('/')}/agent/external/{transfer.transfer_id}/close-by-link?token={close_token}"
+
         await run_in_threadpool(
             send_email,
             AGENT_EMAIL,
@@ -354,6 +373,7 @@ async def external_transfer(
             recipient_phone=data.recipient_phone,
             partner="Lumicash",
             country="Burundi",
+            close_link=close_link,
         )
 
         chat_ids = (await db.execute(select(TelegramUser.chat_id))).scalars().all()
@@ -389,6 +409,7 @@ async def external_transfer(
         country=data.country_destination,
         transfer_id=transfer.reference_code,
         dashboard_url=f"{settings.FRONTEND_URL}/dashboard/admin",
+        close_link=close_link if requires_admin else None,
         year=datetime.utcnow().year,
     )
 

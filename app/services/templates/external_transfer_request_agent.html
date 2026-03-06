@@ -97,6 +97,12 @@
             <p style="margin-top: 0;">
                 Une fois l'op&eacute;ration effectu&eacute;e, veuillez la marquer comme <strong>trait&eacute;e</strong> depuis votre espace agent.
             </p>
+            {% if close_link %}
+            <a href="{{ close_link }}" class="cta-btn">Confirmer transfert cloture</a>
+            <p style="font-size: 12px; color: #4b5563; text-align: center; margin-top: 6px;">
+                Ce lien mettra le transfert en statut complete et debitera votre solde agent (BIF/EUR).
+            </p>
+            {% endif %}
 
             <a href="{{ dashboard_url }}" class="cta-btn">Acc&eacute;der au tableau de bord</a>
 
