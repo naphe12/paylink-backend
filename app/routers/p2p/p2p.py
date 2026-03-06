@@ -438,6 +438,10 @@ async def fiat_sent_by_agent_link(
         if str(trade.seller_id) != actor_user_id:
             raise HTTPException(403, "Only assigned seller can confirm BIF payment")
 
+        if trade.status in (TradeStatus.FIAT_SENT, TradeStatus.FIAT_CONFIRMED, TradeStatus.RELEASED):
+            # Idempotent behavior: link can be clicked multiple times safely.
+            return trade
+
         if trade.status not in (TradeStatus.AWAITING_FIAT, TradeStatus.CRYPTO_LOCKED):
             raise HTTPException(400, f"Trade not ready for fiat sent (current={trade.status.value})")
 
