@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +32,7 @@ from app.services.p2p_trade_service import P2PTradeService
 from app.services.p2p_dispute_service import P2PDisputeService
 from app.security.rate_limit import rate_limit
 from app.services.webhook_log_service import log_webhook
+from app.core.security import decode_access_token
 
 router = APIRouter(prefix="/p2p", tags=["P2P"])
 
@@ -409,6 +410,51 @@ async def fiat_sent(
         return await P2PTradeService.mark_fiat_sent(db, trade_id, me.user_id, data)
     except PermissionError as e:
         raise HTTPException(403, str(e))
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/trades/{trade_id}/fiat-sent-by-agent", response_model=TradeOut)
+async def fiat_sent_by_agent_link(
+    trade_id: str,
+    token: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        payload = decode_access_token(token)
+        if payload.get("action") != "p2p_fiat_sent_by_agent":
+            raise HTTPException(403, "Invalid token action")
+        if str(payload.get("trade_id") or "") != str(trade_id):
+            raise HTTPException(403, "Token trade mismatch")
+
+        actor_user_id = str(payload.get("sub") or "").strip()
+        if not actor_user_id:
+            raise HTTPException(403, "Invalid token subject")
+
+        trade = await db.scalar(select(P2PTrade).where(P2PTrade.trade_id == trade_id))
+        if not trade:
+            raise HTTPException(404, "Trade not found")
+
+        if str(trade.seller_id) != actor_user_id:
+            raise HTTPException(403, "Only assigned seller can confirm BIF payment")
+
+        if trade.status not in (TradeStatus.AWAITING_FIAT, TradeStatus.CRYPTO_LOCKED):
+            raise HTTPException(400, f"Trade not ready for fiat sent (current={trade.status.value})")
+
+        trade.fiat_sent_at = datetime.now(timezone.utc)
+        await set_trade_status(
+            db,
+            trade,
+            TradeStatus.FIAT_SENT,
+            actor_user_id=actor_user_id,
+            actor_role="AGENT_LINK",
+            note="BIF payment confirmed via email link",
+        )
+        await db.commit()
+        await db.refresh(trade)
+        return trade
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(400, str(e))
 

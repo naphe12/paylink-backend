@@ -1,8 +1,8 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 from app.models.p2p_trade import P2PTrade
 from app.models.p2p_trade_history import P2PTradeStatusHistory
 from app.models.p2p_enums import TradeStatus
+from app.services.p2p_agent_email_service import notify_agent_fiat_confirmation_needed
 
 async def set_trade_status(
     db: AsyncSession,
@@ -23,3 +23,6 @@ async def set_trade_status(
         actor_role=actor_role,
         note=note,
     ))
+
+    if to_status == TradeStatus.CRYPTO_LOCKED:
+        await notify_agent_fiat_confirmation_needed(db, trade)
