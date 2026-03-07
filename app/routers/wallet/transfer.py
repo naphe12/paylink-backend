@@ -229,7 +229,26 @@ async def external_transfer(
         )
 
     bonus_earned = amount * decimal.Decimal("50")
+    transfer_id = uuid.uuid4()
+    reference_code = f"EXT-{uuid.uuid4().hex[:8].upper()}"
+    wallet.bonus_balance = decimal.Decimal(wallet.bonus_balance or 0) + bonus_earned
+
+    txn_status = "pending"
+
+    txn = Transactions(
+        initiated_by=current_user.user_id,
+        channel="external_transfer",
+        amount=amount,
+        currency_code=origin_currency,
+        related_entity_id=transfer_id,
+        status=txn_status,
+        sender_wallet=wallet.wallet_id,
+    )
+    db.add(txn)
+    await db.flush()
+
     transfer = ExternalTransfers(
+        transfer_id=transfer_id,
         user_id=current_user.user_id,
         partner_name=data.partner_name,
         country_destination=data.country_destination,
@@ -243,26 +262,9 @@ async def external_transfer(
         status="pending" if requires_admin else "approved",
         processed_by=None,
         processed_at=None,
-        reference_code=f"EXT-{uuid.uuid4().hex[:8].upper()}",
+        reference_code=reference_code,
     )
     db.add(transfer)
-
-    wallet = await db.scalar(select(Wallets).where(Wallets.user_id == current_user.user_id))
-    wallet.bonus_balance += bonus_earned
-
-    txn_status = "pending"
-
-    txn = Transactions(
-        initiated_by=current_user.user_id,
-        channel="external_transfer",
-        amount=amount,
-        currency_code=origin_currency,
-        related_entity_id=transfer.transfer_id,
-        status=txn_status,
-        sender_wallet=wallet.wallet_id,
-    )
-    db.add(txn)
-    await db.flush()
 
     sender_account = await ledger.ensure_wallet_account(wallet)
     try:
