@@ -358,22 +358,24 @@ async def external_transfer(
     await db.refresh(transfer)
 
     close_link = None
+    agent_user = await db.scalar(select(Users).where(Users.email == AGENT_EMAIL))
+    backend_base = str(
+        getattr(settings, "BACKEND_URL", "")
+        or getattr(settings, "FRONTEND_URL", "")
+        or ""
+    ).strip()
+    if agent_user and backend_base:
+        close_token = create_access_token(
+            data={
+                "sub": str(agent_user.user_id),
+                "action": "external_transfer_close_by_agent_link",
+                "transfer_id": str(transfer.transfer_id),
+            },
+            expires_delta=timedelta(hours=48),
+        )
+        close_link = f"{backend_base.rstrip('/')}/agent/external/{transfer.transfer_id}/close-by-link?token={close_token}"
+
     if requires_admin:
-        backend_base = str(getattr(settings, "BACKEND_URL", "") or "").strip()
-        if backend_base:
-            agent_user = await db.scalar(
-                select(Users).where(Users.email == AGENT_EMAIL)
-            )
-            if agent_user:
-                close_token = create_access_token(
-                    data={
-                        "sub": str(agent_user.user_id),
-                        "action": "external_transfer_close_by_agent_link",
-                        "transfer_id": str(transfer.transfer_id),
-                    },
-                    expires_delta=timedelta(hours=48),
-                )
-                close_link = f"{backend_base.rstrip('/')}/agent/external/{transfer.transfer_id}/close-by-link?token={close_token}"
 
         try:
             await run_in_threadpool(
@@ -438,7 +440,7 @@ async def external_transfer(
             country=data.country_destination,
             transfer_id=transfer.reference_code,
             dashboard_url=f"{settings.FRONTEND_URL}/dashboard/admin",
-            close_link=close_link if requires_admin else None,
+            close_link=close_link,
             year=datetime.utcnow().year,
         )
     except Exception as exc:
