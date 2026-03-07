@@ -265,7 +265,13 @@ async def external_transfer(
     await db.flush()
 
     sender_account = await ledger.ensure_wallet_account(wallet)
-    cash_out_account = await ledger.get_account_by_code(settings.LEDGER_ACCOUNT_CASH_OUT)
+    try:
+        cash_out_account = await ledger.get_account_by_code(settings.LEDGER_ACCOUNT_CASH_OUT)
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Configuration ledger invalide: {exc}",
+        ) from exc
     entries = []
     metadata = {
         "operation": "external_transfer",
@@ -290,7 +296,13 @@ async def external_transfer(
             )
         )
     if credit_used > 0:
-        credit_account = await ledger.get_account_by_code(settings.LEDGER_ACCOUNT_CREDIT_LINE)
+        try:
+            credit_account = await ledger.get_account_by_code(settings.LEDGER_ACCOUNT_CREDIT_LINE)
+        except LookupError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Configuration ledger invalide: {exc}",
+            ) from exc
         entries.append(
             LedgerLine(
                 account=credit_account,
