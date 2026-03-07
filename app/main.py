@@ -2,8 +2,9 @@ import asyncio
 import logging
 import time
 
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute, APIWebSocketRoute
 
 import app.schemas
@@ -245,6 +246,27 @@ from app.routers.p2p.admin_arbitrage import router as admin_arbitrage_router
 app.include_router(p2p_router, prefix="/api")
 app.include_router(admin_p2p_router, prefix="/api")
 app.include_router(admin_arbitrage_router, prefix="/api")
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    request_id = request.headers.get("x-request-id") or request.headers.get("X-Request-Id")
+    logger.exception(
+        "Unhandled exception path=%s method=%s request_id=%s error=%s",
+        request.url.path,
+        request.method,
+        request_id,
+        exc,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal Server Error",
+            "error": str(exc),
+            "path": request.url.path,
+            "request_id": request_id,
+        },
+    )
 
 
 @app.websocket("/ws/admin")
