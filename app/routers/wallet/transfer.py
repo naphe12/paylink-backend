@@ -406,20 +406,26 @@ async def external_transfer(
                 exc,
             )
 
-        chat_ids = (await db.execute(select(TelegramUser.chat_id))).scalars().all()
-        telegram_message = (
-            "Nouvelle demande de transfert externe\n"
-            f"Client: {current_user.full_name} ({current_user.email})\n"
-            f"Montant: {amount} {origin_currency}\n"
-            f"Destinataire: {data.recipient_name} ({data.recipient_phone})\n"
-            f"Partenaire: {data.partner_name}\n"
-            f"Reference: {transfer.reference_code}"
-        )
-        for chat_id in chat_ids:
-            try:
-                await send_telegram_message(int(chat_id), telegram_message)
-            except Exception:
-                continue
+    chat_ids = (await db.execute(select(TelegramUser.chat_id))).scalars().all()
+    telegram_message = (
+        "Nouveau transfert externe\n"
+        f"Client: {current_user.full_name} ({current_user.email})\n"
+        f"Montant: {amount} {origin_currency}\n"
+        f"Destinataire: {data.recipient_name} ({data.recipient_phone})\n"
+        f"Partenaire: {data.partner_name}\n"
+        f"Reference: {transfer.reference_code}\n"
+        f"Statut: {transfer.status}"
+    )
+    for chat_id in chat_ids:
+        try:
+            await send_telegram_message(int(chat_id), telegram_message)
+        except Exception as exc:
+            logger.exception(
+                "Telegram notification failed for transfer %s to chat_id=%s: %s",
+                transfer.transfer_id,
+                chat_id,
+                exc,
+            )
 
     try:
         await send_transaction_emails(
