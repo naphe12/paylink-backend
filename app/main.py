@@ -139,12 +139,16 @@ configured_origins = [o.strip() for o in str(settings.ALLOWED_ORIGINS or "").spl
 if configured_origins:
     origins = configured_origins
 elif settings.APP_ENV == "prod":
-    origins = ["https://paylink-frontend-production.up.railway.app"]
+    origins = [
+        "https://paylink-frontend-production.up.railway.app",
+        "https://web-production-448ce.up.railway.app",
+    ]
 else:
     origins = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "https://paylink-frontend-production.up.railway.app",
+        "https://web-production-448ce.up.railway.app",
     ]
 
 app.add_middleware(
