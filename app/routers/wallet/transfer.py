@@ -236,6 +236,7 @@ async def external_transfer(
     txn_status = "pending"
 
     txn = Transactions(
+        tx_id=transfer_id,
         initiated_by=current_user.user_id,
         channel="external_transfer",
         amount=amount,
