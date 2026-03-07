@@ -26,12 +26,22 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return self.r
 
     async def dispatch(self, request: Request, call_next: Callable):
+        # Always let CORS preflight pass through.
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
         r = await self._get_redis()
         if not r:
             return await call_next(request)  # no Redis => no rate-limit
 
         # key: ip + path group + minute window
-        ip = request.client.host if request.client else "unknown"
+        forwarded_for = request.headers.get("x-forwarded-for", "")
+        real_ip = request.headers.get("x-real-ip", "")
+        ip = (
+            (forwarded_for.split(",")[0].strip() if forwarded_for else "")
+            or real_ip
+            or (request.client.host if request.client else "unknown")
+        )
         path = request.url.path
 
         # groups (simple)
