@@ -135,25 +135,23 @@ async def p2p_expiration_worker():
             await asyncio.sleep(30)
 
 
-configured_origins = [o.strip() for o in str(settings.ALLOWED_ORIGINS or "").split(",") if o.strip()]
-if configured_origins:
-    origins = configured_origins
-elif settings.APP_ENV == "prod":
-    origins = [
-        "https://paylink-frontend-production.up.railway.app",
-        "https://web-production-448ce.up.railway.app",
-    ]
-else:
-    origins = [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "https://paylink-frontend-production.up.railway.app",
-        "https://web-production-448ce.up.railway.app",
-    ]
+default_origins = {
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://paylink-frontend-production.up.railway.app",
+    "https://web-production-448ce.up.railway.app",
+}
+configured_origins = {
+    o.strip().rstrip("/")
+    for o in str(settings.ALLOWED_ORIGINS or "").split(",")
+    if o and o.strip()
+}
+origins = sorted(default_origins | configured_origins)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=r"https://.*\.up\.railway\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
