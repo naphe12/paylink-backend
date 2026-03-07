@@ -401,8 +401,6 @@ async def close_external_transfer_by_link(
     acting_agent_user = await db.scalar(select(Users).where(Users.user_id == agent_user_id))
     if not acting_agent_user:
         raise HTTPException(status_code=404, detail="Agent introuvable")
-    if str(getattr(acting_agent_user, "role", "")).lower() not in {"agent", "admin"}:
-        raise HTTPException(status_code=403, detail="Acces reserve aux agents")
 
     return await _close_external_transfer_core(
         db=db,
