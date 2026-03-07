@@ -148,15 +148,6 @@ configured_origins = {
 }
 origins = sorted(default_origins | configured_origins)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_origin_regex=r"https://.*\.up\.railway\.app",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 app.add_middleware(LoggerMiddleware)
 app.add_middleware(RequestIdMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
@@ -169,6 +160,14 @@ app.state.rate_limits = {
     "admin": settings.RL_ADMIN_PER_MIN,
 }
 app.add_middleware(RateLimitMiddleware, redis_url=settings.REDIS_URL)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_origin_regex=r"https://.*\.up\.railway\.app",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 app.include_router(auth.router, prefix="/auth", tags=["Auth"])
