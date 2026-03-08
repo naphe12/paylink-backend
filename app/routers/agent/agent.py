@@ -8,7 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import insert, update, select, func
+from sqlalchemy import insert, update, select, func, or_
 from app.core.database import get_db
 from app.core.security import agent_required, get_current_user
 from app.models.agent_transactions import AgentTransactions
@@ -40,6 +40,12 @@ async def _require_agent(db: AsyncSession, user: Users) -> Agents:
 class AgentCashPayload(BaseModel):
     client_user_id: str
     amount: Decimal = Field(gt=0)
+
+
+class AgentCashDepositCreate(BaseModel):
+    user_id: UUID
+    amount: Decimal = Field(gt=0)
+    note: str | None = None
 
 
 class AgentQrScanRequest(BaseModel):
@@ -109,6 +115,93 @@ async def agent_cashout(body: AgentCashPayload,
     ))
     await db.commit()
     return {"message":"✅ Cash-out effectué","commission":str(commission),"risk_score":score}
+
+
+@router.get("/cash/users")
+async def agent_cash_users(
+    q: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    current_agent: Users = Depends(get_current_agent),
+):
+    # Ensure caller has an agent profile.
+    await _require_agent(db, current_agent)
+    stmt = select(Users).order_by(Users.created_at.desc()).limit(limit)
+    if q and q.strip():
+        pattern = f"%{q.strip()}%"
+        stmt = (
+            select(Users)
+            .where(
+                or_(
+                    Users.full_name.ilike(pattern),
+                    Users.email.ilike(pattern),
+                    Users.phone_e164.ilike(pattern),
+                )
+            )
+            .order_by(Users.created_at.desc())
+            .limit(limit)
+        )
+    rows = (await db.execute(stmt)).scalars().all()
+    return [
+        {
+            "user_id": str(u.user_id),
+            "full_name": u.full_name,
+            "email": u.email,
+            "phone_e164": u.phone_e164,
+        }
+        for u in rows
+    ]
+
+
+@router.post("/cash/deposit")
+async def agent_cash_deposit_direct(
+    payload: AgentCashDepositCreate,
+    db: AsyncSession = Depends(get_db),
+    current_agent: Users = Depends(get_current_agent),
+):
+    agent_row = await _require_agent(db, current_agent)
+    user = await db.scalar(select(Users).where(Users.user_id == payload.user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+
+    wallet = await db.scalar(
+        select(Wallets).where(
+            Wallets.user_id == payload.user_id,
+            Wallets.type == "consumer",
+        )
+    )
+    if not wallet:
+        wallet = await db.scalar(select(Wallets).where(Wallets.user_id == payload.user_id))
+    if not wallet:
+        wallet = Wallets(
+            user_id=payload.user_id,
+            type="consumer",
+            currency_code="EUR",
+            available=Decimal("0"),
+            pending=Decimal("0"),
+        )
+        db.add(wallet)
+        await db.flush()
+
+    wallet.available = Decimal(wallet.available or 0) + payload.amount
+
+    await db.execute(insert(AgentTransactions).values(
+        agent_id=agent_row.agent_id,
+        client_user_id=user.user_id,
+        direction="cashin",
+        tx_type="cashin",
+        amount=float(payload.amount),
+        commission=0,
+        status="completed",
+    ))
+    await db.commit()
+    return {
+        "message": "Depot cash effectue",
+        "user_id": str(user.user_id),
+        "amount": float(payload.amount),
+        "currency": wallet.currency_code,
+        "new_balance": float(wallet.available),
+    }
 
 @router.get("/dashboard")
 async def agent_dashboard(

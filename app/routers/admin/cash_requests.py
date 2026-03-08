@@ -3,6 +3,7 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +26,19 @@ from app.services.ledger import LedgerLine, LedgerService
 from app.services.wallet_history import log_wallet_movement
 
 router = APIRouter(prefix="/admin/cash-requests", tags=["Admin Cash Requests"])
+
+
+class AdminCashDepositCreate(BaseModel):
+    user_id: UUID
+    amount: decimal.Decimal = Field(gt=decimal.Decimal("0"))
+    note: str | None = None
+
+
+class AdminCashUserRead(BaseModel):
+    user_id: UUID
+    full_name: str | None = None
+    email: str | None = None
+    phone_e164: str | None = None
 
 
 async def _serialize_request(
@@ -65,6 +79,119 @@ async def list_cash_requests(
 
     requests = (await db.execute(stmt)).scalars().all()
     return [await _serialize_request(db, req) for req in requests]
+
+
+@router.get("/users", response_model=list[AdminCashUserRead])
+async def list_cash_users(
+    q: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    stmt = select(Users).order_by(Users.created_at.desc()).limit(limit)
+    if q and q.strip():
+        pattern = f"%{q.strip()}%"
+        stmt = (
+            select(Users)
+            .where(
+                (Users.full_name.ilike(pattern))
+                | (Users.email.ilike(pattern))
+                | (Users.phone_e164.ilike(pattern))
+            )
+            .order_by(Users.created_at.desc())
+            .limit(limit)
+        )
+    users = (await db.execute(stmt)).scalars().all()
+    return [
+        AdminCashUserRead(
+            user_id=u.user_id,
+            full_name=u.full_name,
+            email=u.email,
+            phone_e164=u.phone_e164,
+        )
+        for u in users
+    ]
+
+
+@router.post("/deposit")
+async def admin_cash_deposit_direct(
+    payload: AdminCashDepositCreate,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    user = await db.get(Users, payload.user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+
+    wallet = await db.scalar(
+        select(Wallets).where(
+            Wallets.user_id == payload.user_id,
+            Wallets.type == "consumer",
+        )
+    )
+    if not wallet:
+        wallet = await db.scalar(select(Wallets).where(Wallets.user_id == payload.user_id))
+    if not wallet:
+        wallet = Wallets(
+            user_id=payload.user_id,
+            type="consumer",
+            currency_code="EUR",
+            available=decimal.Decimal("0"),
+            pending=decimal.Decimal("0"),
+        )
+        db.add(wallet)
+        await db.flush()
+
+    ledger = LedgerService(db)
+    amount = decimal.Decimal(payload.amount)
+    wallet.available = decimal.Decimal(wallet.available or 0) + amount
+    movement = await log_wallet_movement(
+        db,
+        wallet=wallet,
+        user_id=user.user_id,
+        amount=amount,
+        direction="credit",
+        operation_type="cash_deposit_admin_direct",
+        reference=str(admin.user_id),
+        description=f"Depot cash direct admin ({payload.note or 'sans note'})",
+    )
+    wallet_account = await ledger.ensure_wallet_account(wallet)
+    cash_in = await ledger.get_account_by_code(settings.LEDGER_ACCOUNT_CASH_IN)
+    await ledger.post_journal(
+        tx_id=None,
+        description="Depot cash direct admin",
+        metadata={
+            "operation": "cash_deposit_admin_direct",
+            "target_user_id": str(user.user_id),
+            "wallet_id": str(wallet.wallet_id),
+            "processed_by": str(admin.user_id),
+            "note": payload.note,
+            "movement_id": str(movement.transaction_id) if movement else None,
+        },
+        entries=[
+            LedgerLine(
+                account=cash_in,
+                direction="debit",
+                amount=amount,
+                currency_code=wallet.currency_code,
+            ),
+            LedgerLine(
+                account=wallet_account,
+                direction="credit",
+                amount=amount,
+                currency_code=wallet.currency_code,
+            ),
+        ],
+    )
+    await db.commit()
+    return {
+        "message": "Depot cash effectue",
+        "user_id": str(user.user_id),
+        "wallet_id": str(wallet.wallet_id),
+        "amount": float(amount),
+        "currency": wallet.currency_code,
+        "new_balance": float(wallet.available),
+    }
 
 
 @router.post("/{request_id}/approve", response_model=WalletCashRequestAdminRead)
