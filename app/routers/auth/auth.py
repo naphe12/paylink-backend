@@ -12,6 +12,7 @@ from fastapi import (
     Form,
     Request,
 )
+from fastapi.concurrency import run_in_threadpool
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from pydantic import BaseModel, EmailStr
@@ -27,6 +28,7 @@ from app.models.users import Users
 from app.models.wallets import Wallets
 from app.schemas.users import UsersCreate, UsersRead
 from app.services.mailer import send_email
+from app.services.mailjet_service import MailjetEmailService
 
 router = APIRouter()
 
@@ -203,7 +205,6 @@ class ForgotPasswordRequest(BaseModel):
 @router.post("/forgot-password")
 async def forgot_password(
     body: ForgotPasswordRequest,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     user = await db.scalar(select(Users).where(Users.email == body.email))
@@ -217,24 +218,33 @@ async def forgot_password(
     )
 
     reset_link = f"{settings.FRONTEND_URL}/auth/reset-password?token={reset_token}"
-    subject = "Réinitialisation de votre mot de passe PayLink"
-    body_text = f"""
-    Bonjour {user.full_name or ''},
-
-    Pour réinitialiser votre mot de passe, cliquez sur le lien suivant :
-    {reset_link}
-
-    Ce lien est valable pendant 1 heure.
-    """
-
-    background_tasks.add_task(
-        send_email,
-        to=user.email,
-        subject=subject,
-        body_html=body_text.replace("\n", "<br>"),
+    subject = "Reinitialisation de votre mot de passe PayLink"
+    plain_text = (
+        f"Bonjour {user.full_name or ''},\n\n"
+        "Pour reinitialiser votre mot de passe, cliquez sur le lien suivant :\n"
+        f"{reset_link}\n\n"
+        "Ce lien est valable pendant 1 heure."
     )
-    return {"message": "Un email de réinitialisation a été envoyé."}
 
+    try:
+        mailer = MailjetEmailService()
+        await run_in_threadpool(
+            mailer.send_email,
+            user.email,
+            subject,
+            "forgot_password.html",
+            user_name=user.full_name or "Client",
+            reset_link=reset_link,
+            expiry_hours=1,
+            year=datetime.utcnow().year,
+            text=plain_text,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Echec envoi email de reinitialisation: {exc}",
+        ) from exc
+    return {"message": "Un email de reinitialisation a ete envoye."}
 
 class ResetPasswordRequest(BaseModel):
     token: str
@@ -295,3 +305,6 @@ async def reset_password(
     await db.commit()
 
     return {"message": "Mot de passe réinitialisé avec succès"}
+
+
+
