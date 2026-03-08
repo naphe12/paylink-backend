@@ -72,6 +72,17 @@ class Settings(BaseSettings):
     SLACK_WEBHOOK_URL: str | None = None
     AML_AUTO_FREEZE_THRESHOLD: int = 90
     AML_AUTO_FREEZE_ENABLED: bool = True
+    LEDGER_HEALTH_CHECK_ENABLED: bool = True
+    LEDGER_HEALTH_CHECK_INTERVAL_SECONDS: int = 120
+    LEDGER_HEALTH_ALERT_DELTA: int = 1
+    LEDGER_DAILY_CHECK_ENABLED: bool = True
+    LEDGER_DAILY_CHECK_UTC_HOUR: int = 7
+    LEDGER_DAILY_ALERT_ON_OK: bool = False
+    TELEGRAM_NOTIFY_CHAT_IDS: str = ""
+    IDEMPOTENCY_CLEANUP_ENABLED: bool = True
+    IDEMPOTENCY_CLEANUP_INTERVAL_SECONDS: int = 1800
+    IDEMPOTENCY_RETENTION_HOURS: int = 72
+    REQUEST_METRICS_ENABLED: bool = True
 
     # -------------------------------------------------
     # EMAIL SMTP

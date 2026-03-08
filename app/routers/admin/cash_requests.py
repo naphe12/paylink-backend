@@ -2,7 +2,7 @@ import decimal
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Header
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +22,12 @@ from app.schemas.wallet_cash_requests import (
     WalletCashRequestAdminRead,
     WalletCashRequestRead,
 )
+from app.services.idempotency_service import (
+    acquire_idempotency,
+    compute_request_hash,
+    store_idempotency_response,
+)
+from app.services.cash_request_rules import transition_cash_request_status
 from app.services.ledger import LedgerLine, LedgerService
 from app.services.wallet_history import log_wallet_movement
 
@@ -118,7 +124,36 @@ async def admin_cash_deposit_direct(
     payload: AdminCashDepositCreate,
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
+    scoped_idempotency_key = None
+    if idempotency_key and idempotency_key.strip():
+        raw_key = idempotency_key.strip()
+        payload_hash = compute_request_hash(
+            {
+                "user_id": str(payload.user_id),
+                "amount": str(payload.amount),
+                "note": payload.note,
+                "actor": str(admin.user_id),
+                "operation": "admin_cash_deposit_direct",
+            }
+        )
+        scoped_idempotency_key = f"admin_cash_deposit_direct:{admin.user_id}:{raw_key}"
+        idem = await acquire_idempotency(
+            db,
+            key=scoped_idempotency_key,
+            request_hash=payload_hash,
+        )
+        if idem.conflict:
+            raise HTTPException(
+                status_code=409,
+                detail="Idempotency-Key deja utilisee avec un payload different.",
+            )
+        if idem.replay_payload is not None:
+            return idem.replay_payload
+        if idem.in_progress:
+            raise HTTPException(status_code=409, detail="Requete dupliquee en cours de traitement.")
+
     user = await db.get(Users, payload.user_id)
     if not user:
         raise HTTPException(status_code=404, detail="Utilisateur introuvable")
@@ -183,8 +218,7 @@ async def admin_cash_deposit_direct(
             ),
         ],
     )
-    await db.commit()
-    return {
+    response_payload = {
         "message": "Depot cash effectue",
         "user_id": str(user.user_id),
         "wallet_id": str(wallet.wallet_id),
@@ -192,6 +226,15 @@ async def admin_cash_deposit_direct(
         "currency": wallet.currency_code,
         "new_balance": float(wallet.available),
     }
+    if scoped_idempotency_key:
+        await store_idempotency_response(
+            db,
+            key=scoped_idempotency_key,
+            status_code=200,
+            payload=response_payload,
+        )
+    await db.commit()
+    return response_payload
 
 
 @router.post("/{request_id}/approve", response_model=WalletCashRequestAdminRead)
@@ -200,12 +243,39 @@ async def approve_cash_request(
     payload: WalletCashDecision,
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
+    scoped_idempotency_key = None
+    if idempotency_key and idempotency_key.strip():
+        raw_key = idempotency_key.strip()
+        payload_hash = compute_request_hash(
+            {
+                "action": "approve_cash_request",
+                "request_id": str(request_id),
+                "note": payload.note,
+                "actor": str(admin.user_id),
+            }
+        )
+        scoped_idempotency_key = f"cash_request_approve:{admin.user_id}:{request_id}:{raw_key}"
+        idem = await acquire_idempotency(
+            db,
+            key=scoped_idempotency_key,
+            request_hash=payload_hash,
+        )
+        if idem.conflict:
+            raise HTTPException(
+                status_code=409,
+                detail="Idempotency-Key deja utilisee avec un payload different.",
+            )
+        if idem.replay_payload is not None:
+            return idem.replay_payload
+        if idem.in_progress:
+            raise HTTPException(status_code=409, detail="Requete dupliquee en cours de traitement.")
+
     request = await db.get(WalletCashRequests, request_id)
     if not request:
         raise HTTPException(status_code=404, detail="Demande introuvable")
-    if request.status != WalletCashRequestStatus.PENDING:
-        raise HTTPException(status_code=400, detail="Demande déjà traitée")
+    transition_cash_request_status(request, WalletCashRequestStatus.APPROVED)
 
     wallet = await db.get(Wallets, request.wallet_id)
     if not wallet:
@@ -294,13 +364,21 @@ async def approve_cash_request(
             ],
         )
 
-    request.status = WalletCashRequestStatus.APPROVED
     request.admin_note = payload.note
     request.processed_by = admin.user_id
     request.processed_at = datetime.utcnow()
     await db.commit()
     await db.refresh(request)
-    return await _serialize_request(db, request)
+    response_payload = (await _serialize_request(db, request)).model_dump(mode="json")
+    if scoped_idempotency_key:
+        await store_idempotency_response(
+            db,
+            key=scoped_idempotency_key,
+            status_code=200,
+            payload=response_payload,
+        )
+        await db.commit()
+    return response_payload
 
 
 @router.post("/{request_id}/reject", response_model=WalletCashRequestAdminRead)
@@ -309,17 +387,51 @@ async def reject_cash_request(
     payload: WalletCashDecision,
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
+    scoped_idempotency_key = None
+    if idempotency_key and idempotency_key.strip():
+        raw_key = idempotency_key.strip()
+        payload_hash = compute_request_hash(
+            {
+                "action": "reject_cash_request",
+                "request_id": str(request_id),
+                "note": payload.note,
+                "actor": str(admin.user_id),
+            }
+        )
+        scoped_idempotency_key = f"cash_request_reject:{admin.user_id}:{request_id}:{raw_key}"
+        idem = await acquire_idempotency(
+            db,
+            key=scoped_idempotency_key,
+            request_hash=payload_hash,
+        )
+        if idem.conflict:
+            raise HTTPException(
+                status_code=409,
+                detail="Idempotency-Key deja utilisee avec un payload different.",
+            )
+        if idem.replay_payload is not None:
+            return idem.replay_payload
+        if idem.in_progress:
+            raise HTTPException(status_code=409, detail="Requete dupliquee en cours de traitement.")
+
     request = await db.get(WalletCashRequests, request_id)
     if not request:
         raise HTTPException(status_code=404, detail="Demande introuvable")
-    if request.status != WalletCashRequestStatus.PENDING:
-        raise HTTPException(status_code=400, detail="Demande déjà traitée")
-
-    request.status = WalletCashRequestStatus.REJECTED
+    transition_cash_request_status(request, WalletCashRequestStatus.REJECTED)
     request.admin_note = payload.note
     request.processed_by = admin.user_id
     request.processed_at = datetime.utcnow()
     await db.commit()
     await db.refresh(request)
-    return await _serialize_request(db, request)
+    response_payload = (await _serialize_request(db, request)).model_dump(mode="json")
+    if scoped_idempotency_key:
+        await store_idempotency_response(
+            db,
+            key=scoped_idempotency_key,
+            status_code=200,
+            payload=response_payload,
+        )
+        await db.commit()
+    return response_payload

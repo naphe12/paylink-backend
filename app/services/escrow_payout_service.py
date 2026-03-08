@@ -25,6 +25,7 @@ from app.services.payout.payout_router import PayoutRouter
 from app.services.payout.providers.lumicash import LumicashProvider
 from app.services.payout.providers.providerb import ProviderBProvider
 from app.services.payout.providers.providerc import ProviderCProvider
+from app.services.escrow_order_rules import transition_escrow_order_status
 
 class EscrowPayoutService:
     @staticmethod
@@ -194,7 +195,7 @@ class EscrowPayoutService:
         order.bif_paid = order.bif_target
         order.paid_out_at = datetime.now(timezone.utc)
         await on_payout_confirmed(db, order)
-        order.status = EscrowOrderStatus.PAID_OUT
+        transition_escrow_order_status(order, EscrowOrderStatus.PAID_OUT)
 
         await audit_log(
             db,
@@ -288,7 +289,7 @@ class EscrowPayoutService:
 
         order.bif_paid = order.bif_target
         order.paid_out_at = datetime.now(timezone.utc)
-        order.status = EscrowOrderStatus.PAID_OUT
+        transition_escrow_order_status(order, EscrowOrderStatus.PAID_OUT)
 
         db.add(EscrowEvent(
             order_id=order.id,

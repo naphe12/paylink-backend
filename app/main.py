@@ -1,11 +1,15 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
+import inspect
 import logging
 import time
 
-from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute, APIWebSocketRoute
+from sqlalchemy import text
 
 import app.schemas
 from app.api.ws_security import router as ws_security_router
@@ -78,12 +82,21 @@ from app.routers.wallet.usdc_wallet import router as usdc_wallet_router
 from app.routers.wallet.transfer import router as transfer_router
 from app.routers.ws import router as ws_router
 from app.services.backoffice_risk import router as backoffice_risk_router
+from app.services.idempotency_service import ensure_idempotency_schema
 from app.services.sandbox_transition_worker import run_sandbox_auto_transitions
 from app.services.p2p_expiration_worker import run_p2p_expiration_worker
 from app.services.tontine_rotation import process_tontine_rotations
 from app.websocket_manager import admin_ws_join, admin_ws_leave
 from app.workers.alerts_worker import deliver_alerts
 from services.escrow_webhook_retry_worker import run_escrow_webhook_retry_worker
+try:
+    from app.services.slack_service import send_slack as send_slack_message
+except Exception:
+    send_slack_message = None
+try:
+    from app.services.telegram import send_message as send_telegram_message
+except Exception:
+    send_telegram_message = None
 
 logging.getLogger("websockets.client").setLevel(logging.WARNING)
 logging.getLogger("websockets.server").setLevel(logging.WARNING)
@@ -134,6 +147,226 @@ async def p2p_expiration_worker():
             except Exception as exc:
                 logger.error(f"P2P expiration worker error: {exc}")
             await asyncio.sleep(30)
+
+
+async def _count_unbalanced_journals(db) -> int:
+    res = await db.execute(
+        text(
+            """
+            SELECT COUNT(*)::int
+            FROM (
+              SELECT journal_id
+              FROM paylink.ledger_entries
+              GROUP BY journal_id
+              HAVING
+                SUM(CASE WHEN LOWER(direction::text)='debit' THEN amount ELSE 0 END)
+                <>
+                SUM(CASE WHEN LOWER(direction::text)='credit' THEN amount ELSE 0 END)
+            ) t
+            """
+        )
+    )
+    return int(res.scalar_one() or 0)
+
+
+def _parse_telegram_notify_chat_ids() -> list[int]:
+    raw = str(getattr(settings, "TELEGRAM_NOTIFY_CHAT_IDS", "") or "").strip()
+    if not raw:
+        return []
+    result: list[int] = []
+    for item in raw.split(","):
+        token = item.strip()
+        if not token:
+            continue
+        try:
+            result.append(int(token))
+        except Exception:
+            continue
+    return result
+
+
+async def _send_ledger_alert(message: str) -> None:
+    if settings.SLACK_WEBHOOK_URL and send_slack_message:
+        try:
+            maybe = send_slack_message(message)
+            if inspect.isawaitable(maybe):
+                await maybe
+        except Exception as exc:
+            logger.error("Ledger alert slack notification failed: %s", exc)
+
+    chat_ids = _parse_telegram_notify_chat_ids()
+    if chat_ids and send_telegram_message:
+        for chat_id in chat_ids:
+            try:
+                await send_telegram_message(chat_id, message)
+            except Exception as exc:
+                logger.error(
+                    "Ledger alert telegram notification failed chat_id=%s: %s",
+                    chat_id,
+                    exc,
+                )
+
+
+async def ledger_health_worker():
+    last_count: int | None = None
+    last_alert_at = 0.0
+    interval_seconds = max(30, int(getattr(settings, "LEDGER_HEALTH_CHECK_INTERVAL_SECONDS", 120) or 120))
+    alert_delta = max(1, int(getattr(settings, "LEDGER_HEALTH_ALERT_DELTA", 1) or 1))
+    reminder_seconds = max(300, interval_seconds * 5)
+
+    async for db in get_db():
+        while True:
+            try:
+                count = await _count_unbalanced_journals(db)
+                now = time.time()
+
+                should_alert = False
+                reason = "noop"
+                if last_count is None:
+                    should_alert = count > 0
+                    reason = "startup_detected"
+                elif count == 0 and last_count > 0:
+                    should_alert = True
+                    reason = "recovered"
+                elif count > 0 and last_count == 0:
+                    should_alert = True
+                    reason = "new_issue"
+                elif count > 0 and abs(count - last_count) >= alert_delta:
+                    should_alert = True
+                    reason = "count_changed"
+                elif count > 0 and (now - last_alert_at) >= reminder_seconds:
+                    should_alert = True
+                    reason = "reminder"
+
+                if should_alert:
+                    status = "RECOVERED" if count == 0 else "UNBALANCED_JOURNALS"
+                    message = (
+                        f"[LEDGER][{status}] count={count} prev={last_count} "
+                        f"reason={reason} env={settings.APP_ENV}"
+                    )
+                    logger.warning(message)
+                    await _send_ledger_alert(message)
+                    last_alert_at = now
+
+                last_count = count
+            except Exception as exc:
+                logger.error("Ledger health worker error: %s", exc)
+            await asyncio.sleep(interval_seconds)
+
+
+async def ledger_daily_control_worker():
+    configured_hour = int(getattr(settings, "LEDGER_DAILY_CHECK_UTC_HOUR", 7) or 7)
+    hour_utc = max(0, min(23, configured_hour))
+    alert_on_ok = bool(getattr(settings, "LEDGER_DAILY_ALERT_ON_OK", False))
+
+    async for db in get_db():
+        while True:
+            now = datetime.now(timezone.utc)
+            next_run = now.replace(hour=hour_utc, minute=0, second=0, microsecond=0)
+            if next_run <= now:
+                next_run += timedelta(days=1)
+            sleep_seconds = max(1, int((next_run - now).total_seconds()))
+            await asyncio.sleep(sleep_seconds)
+
+            try:
+                count = await _count_unbalanced_journals(db)
+                status = "UNBALANCED_JOURNALS" if count > 0 else "OK"
+                message = (
+                    f"[LEDGER][DAILY_CHECK][{status}] count={count} "
+                    f"run_at={datetime.now(timezone.utc).isoformat()} env={settings.APP_ENV}"
+                )
+                if count > 0:
+                    logger.warning(message)
+                    await _send_ledger_alert(message)
+                elif alert_on_ok:
+                    logger.info(message)
+                    await _send_ledger_alert(message)
+                else:
+                    logger.info(message)
+            except Exception as exc:
+                logger.error("Ledger daily control worker error: %s", exc)
+
+
+async def idempotency_cleanup_worker():
+    interval_seconds = max(
+        60,
+        int(getattr(settings, "IDEMPOTENCY_CLEANUP_INTERVAL_SECONDS", 1800) or 1800),
+    )
+    retention_hours = max(
+        1,
+        int(getattr(settings, "IDEMPOTENCY_RETENTION_HOURS", 72) or 72),
+    )
+
+    async for db in get_db():
+        while True:
+            try:
+                res = await db.execute(
+                    text(
+                        """
+                        WITH deleted AS (
+                            DELETE FROM paylink.idempotency_keys
+                            WHERE created_at < (NOW() - make_interval(hours => :retention_hours))
+                            RETURNING 1
+                        )
+                        SELECT COUNT(*)::int FROM deleted
+                        """
+                    ),
+                    {"retention_hours": retention_hours},
+                )
+                deleted_count = int(res.scalar_one() or 0)
+                if deleted_count > 0:
+                    logger.info(
+                        "Idempotency cleanup removed %s key(s) older than %sh",
+                        deleted_count,
+                        retention_hours,
+                    )
+                await db.commit()
+            except Exception as exc:
+                await db.rollback()
+                logger.error("Idempotency cleanup worker error: %s", exc)
+            await asyncio.sleep(interval_seconds)
+
+
+async def ensure_request_metrics_schema(db) -> None:
+    await db.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS paylink.request_metrics (
+              id bigserial PRIMARY KEY,
+              created_at timestamptz NOT NULL DEFAULT now(),
+              method text NOT NULL,
+              path text NOT NULL,
+              status_code int NOT NULL,
+              duration_ms numeric(12, 3) NOT NULL,
+              request_id text NULL
+            )
+            """
+        )
+    )
+    await db.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS idx_request_metrics_created_at
+            ON paylink.request_metrics (created_at DESC)
+            """
+        )
+    )
+    await db.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS idx_request_metrics_status
+            ON paylink.request_metrics (status_code)
+            """
+        )
+    )
+    await db.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS idx_request_metrics_path
+            ON paylink.request_metrics (path)
+            """
+        )
+    )
 
 
 default_origins = {
@@ -248,9 +481,102 @@ app.include_router(admin_p2p_router, prefix="/api")
 app.include_router(admin_arbitrage_router, prefix="/api")
 
 
+def _get_request_id(request: Request) -> str | None:
+    return (
+        getattr(request.state, "request_id", None)
+        or request.headers.get("x-request-id")
+        or request.headers.get("X-Request-Id")
+    )
+
+
+@app.middleware("http")
+async def request_metrics_middleware(request: Request, call_next):
+    if not getattr(settings, "REQUEST_METRICS_ENABLED", True):
+        return await call_next(request)
+
+    # Skip noisy health/metrics routes to keep business signal clean.
+    skip_prefixes = ("/health", "/metrics", "/api/metrics", "/ws")
+    if request.url.path.startswith(skip_prefixes):
+        return await call_next(request)
+
+    started = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = round((time.perf_counter() - started) * 1000, 3)
+    request_id = _get_request_id(request)
+
+    try:
+        async for db in get_db():
+            await db.execute(
+                text(
+                    """
+                    INSERT INTO paylink.request_metrics
+                    (method, path, status_code, duration_ms, request_id)
+                    VALUES (:method, :path, :status_code, :duration_ms, :request_id)
+                    """
+                ),
+                {
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status_code": int(response.status_code or 0),
+                    "duration_ms": duration_ms,
+                    "request_id": request_id,
+                },
+            )
+            await db.commit()
+            break
+    except Exception as exc:
+        logger.warning("Request metrics insert failed path=%s err=%s", request.url.path, exc)
+
+    return response
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    request_id = _get_request_id(request)
+    logger.warning(
+        "HTTP exception path=%s method=%s status=%s request_id=%s detail=%s",
+        request.url.path,
+        request.method,
+        exc.status_code,
+        request_id,
+        exc.detail,
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "detail": exc.detail,
+            "path": request.url.path,
+            "method": request.method,
+            "request_id": request_id,
+        },
+        headers=getattr(exc, "headers", None),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    request_id = _get_request_id(request)
+    logger.warning(
+        "Validation exception path=%s method=%s request_id=%s errors=%s",
+        request.url.path,
+        request.method,
+        request_id,
+        exc.errors(),
+    )
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": exc.errors(),
+            "path": request.url.path,
+            "method": request.method,
+            "request_id": request_id,
+        },
+    )
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    request_id = request.headers.get("x-request-id") or request.headers.get("X-Request-Id")
+    request_id = _get_request_id(request)
     logger.exception(
         "Unhandled exception path=%s method=%s request_id=%s error=%s",
         request.url.path,
@@ -287,10 +613,22 @@ async def ws_admin(
 
 @app.on_event("startup")
 async def startup_event():
+    async for db in get_db():
+        await ensure_idempotency_schema(db)
+        await ensure_request_metrics_schema(db)
+        await db.commit()
+        break
+
     app.state.started_at_ts = time.time()
     background_tasks.append(asyncio.create_task(webhook_retry_worker()))
     background_tasks.append(asyncio.create_task(alerts_worker()))
     background_tasks.append(asyncio.create_task(p2p_expiration_worker()))
+    if settings.LEDGER_HEALTH_CHECK_ENABLED:
+        background_tasks.append(asyncio.create_task(ledger_health_worker()))
+    if settings.LEDGER_DAILY_CHECK_ENABLED:
+        background_tasks.append(asyncio.create_task(ledger_daily_control_worker()))
+    if settings.IDEMPOTENCY_CLEANUP_ENABLED:
+        background_tasks.append(asyncio.create_task(idempotency_cleanup_worker()))
     if settings.APP_ENV != "prod" and settings.SANDBOX_ENABLED:
         background_tasks.append(asyncio.create_task(sandbox_transition_worker()))
     app.state.background_tasks = background_tasks

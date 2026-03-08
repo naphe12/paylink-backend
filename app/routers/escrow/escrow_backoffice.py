@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 from datetime import datetime, timezone
@@ -15,6 +15,12 @@ from app.models.escrow_proof import EscrowProof
 from app.models.escrow_payout import EscrowPayout
 from app.models.escrow_enums import EscrowOrderStatus, EscrowActorType, EscrowProofType
 from app.services.escrow_tracking_ws import broadcast_tracking_update
+from app.services.idempotency_service import (
+    acquire_idempotency,
+    compute_request_hash,
+    store_idempotency_response,
+)
+from app.services.escrow_order_rules import transition_escrow_order_status
 from schemas.escrow_backoffice import MarkPayoutPendingRequest, ConfirmPaidOutRequest
 from services.escrow_ledger_hooks import on_payout_confirmed
 
@@ -269,6 +275,7 @@ async def mark_payout_pending(
     body: MarkPayoutPendingRequest,
     db: AsyncSession = Depends(get_db),
     user: Users = Depends(get_current_user_db),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     try:
         _require_backoffice_role(user)
@@ -278,16 +285,54 @@ async def mark_payout_pending(
             raise HTTPException(404, "Order not found")
         if order.status != EscrowOrderStatus.SWAPPED:
             raise HTTPException(400, f"Order must be SWAPPED, current={order.status}")
+        if idempotency_key and idempotency_key.strip():
+            actor_id = getattr(user, "id", None) or getattr(user, "user_id", None)
+            scoped_idempotency_key = f"backoffice_escrow_payout_pending:{order_id}:{str(actor_id)}:{idempotency_key.strip()}"
+            payload_hash = compute_request_hash(
+                {
+                    "action": "backoffice_escrow_payout_pending",
+                    "order_id": str(order_id),
+                    "actor_id": str(actor_id),
+                    "payout_reference": str(body.payout_reference or ""),
+                }
+            )
+            idem = await acquire_idempotency(
+                db,
+                key=scoped_idempotency_key,
+                request_hash=payload_hash,
+            )
+            if idem.conflict:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Idempotency-Key deja utilisee avec un payload different.",
+                )
+            if idem.replay_payload is not None:
+                return idem.replay_payload
+            if idem.in_progress:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Requete dupliquee en cours de traitement. Reessayez dans quelques secondes.",
+                )
 
-        order.status = EscrowOrderStatus.PAYOUT_PENDING
+        transition_escrow_order_status(order, EscrowOrderStatus.PAYOUT_PENDING)
         order.payout_initiated_at = datetime.now(timezone.utc)
         if body.payout_reference:
             order.payout_reference = body.payout_reference
 
         db.add(EscrowEvent(order_id=order.id, event_type="PAYOUT_PENDING_SET", payload={"ref": body.payout_reference}))
+        response_payload = {"status": "OK", "order_status": order.status}
+        if idempotency_key and idempotency_key.strip():
+            actor_id = getattr(user, "id", None) or getattr(user, "user_id", None)
+            scoped_idempotency_key = f"backoffice_escrow_payout_pending:{order_id}:{str(actor_id)}:{idempotency_key.strip()}"
+            await store_idempotency_response(
+                db,
+                key=scoped_idempotency_key,
+                status_code=200,
+                payload=response_payload,
+            )
         await db.commit()
         await broadcast_tracking_update(order)
-        return {"status": "OK", "order_status": order.status}
+        return response_payload
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -298,6 +343,7 @@ async def confirm_paid_out(
     request: Request,
     db: AsyncSession = Depends(get_db),
     user: Users = Depends(get_current_user_db),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     try:
         _require_backoffice_role(user)
@@ -307,6 +353,37 @@ async def confirm_paid_out(
             raise HTTPException(404, "Order not found")
         if order.status != EscrowOrderStatus.PAYOUT_PENDING:
             raise HTTPException(400, f"Order must be PAYOUT_PENDING, current={order.status}")
+        if idempotency_key and idempotency_key.strip():
+            actor_id = getattr(user, "id", None) or getattr(user, "user_id", None)
+            scoped_idempotency_key = f"backoffice_escrow_paid_out:{order_id}:{str(actor_id)}:{idempotency_key.strip()}"
+            payload_hash = compute_request_hash(
+                {
+                    "action": "backoffice_escrow_paid_out",
+                    "order_id": str(order_id),
+                    "actor_id": str(actor_id),
+                    "amount_bif": str(body.amount_bif),
+                    "payout_reference": str(body.payout_reference or ""),
+                    "proof_type": str(body.proof_type),
+                    "proof_ref": str(body.proof_ref or ""),
+                }
+            )
+            idem = await acquire_idempotency(
+                db,
+                key=scoped_idempotency_key,
+                request_hash=payload_hash,
+            )
+            if idem.conflict:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Idempotency-Key deja utilisee avec un payload different.",
+                )
+            if idem.replay_payload is not None:
+                return idem.replay_payload
+            if idem.in_progress:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Requete dupliquee en cours de traitement. Reessayez dans quelques secondes.",
+                )
         before = {"status": str(order.status), "bif_paid": float(order.bif_paid or 0)}
 
         owner = await db.scalar(select(Users).where(Users.user_id == order.user_id))
@@ -359,7 +436,7 @@ async def confirm_paid_out(
         order.bif_paid = body.amount_bif
         order.payout_reference = body.payout_reference
         order.paid_out_at = datetime.now(timezone.utc)
-        order.status = EscrowOrderStatus.PAID_OUT
+        transition_escrow_order_status(order, EscrowOrderStatus.PAID_OUT)
         await on_payout_confirmed(db, order)
         after = {"status": "PAID_OUT", "bif_paid": float(order.bif_paid or 0)}
         actor_id = getattr(user, "id", None) or getattr(user, "user_id", None)
@@ -377,9 +454,19 @@ async def confirm_paid_out(
         )
 
         db.add(EscrowEvent(order_id=order.id, event_type="PAID_OUT_CONFIRMED", payload={"amount_bif": str(body.amount_bif)}))
+        response_payload = {"status": "OK", "order_status": order.status}
+        if idempotency_key and idempotency_key.strip():
+            actor_id = getattr(user, "id", None) or getattr(user, "user_id", None)
+            scoped_idempotency_key = f"backoffice_escrow_paid_out:{order_id}:{str(actor_id)}:{idempotency_key.strip()}"
+            await store_idempotency_response(
+                db,
+                key=scoped_idempotency_key,
+                status_code=200,
+                payload=response_payload,
+            )
         await db.commit()
         await broadcast_tracking_update(order)
-        return {"status": "OK", "order_status": order.status}
+        return response_payload
     except HTTPException:
         raise
     except Exception as e:

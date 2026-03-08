@@ -3,6 +3,7 @@ from app.models.escrow_order import EscrowOrder
 from app.models.escrow_enums import EscrowOrderStatus
 from app.config import settings
 from app.services.escrow_tracking_ws import broadcast_tracking_update
+from app.services.escrow_order_rules import transition_escrow_order_status
 
 
 def _is_sandbox(order: EscrowOrder) -> bool:
@@ -47,19 +48,19 @@ async def run_sandbox_auto_transitions(db):
             continue
 
         if order.status == EscrowOrderStatus.CREATED:
-            order.status = EscrowOrderStatus.FUNDED
+            transition_escrow_order_status(order, EscrowOrderStatus.FUNDED)
             order.usdc_received = order.usdc_expected
             order.deposit_confirmations = order.deposit_required_confirmations
             changed = True
             changed_orders.append(order)
         elif order.status == EscrowOrderStatus.FUNDED:
-            order.status = EscrowOrderStatus.SWAPPED
+            transition_escrow_order_status(order, EscrowOrderStatus.SWAPPED)
             order.usdt_received = order.usdc_received or order.usdt_target
             changed = True
             changed_orders.append(order)
         elif order.status == EscrowOrderStatus.SWAPPED:
             order.bif_paid = order.bif_target
-            order.status = EscrowOrderStatus.PAID_OUT
+            transition_escrow_order_status(order, EscrowOrderStatus.PAID_OUT)
             changed = True
             changed_orders.append(order)
 

@@ -11,6 +11,7 @@ from app.services.risk_decision_log import log_risk_decision
 from app.services.audit_service import audit_log
 from app.services.escrow_tracking_ws import broadcast_tracking_update
 from app.services.wallet_service import credit_user_usdc
+from app.services.escrow_order_rules import transition_escrow_order_status
 
 class EscrowService:
 
@@ -78,7 +79,7 @@ class EscrowService:
         flags = [str(f) for f in list(order.flags or [])]
 
         if aml.decision == "BLOCK":
-            order.status = EscrowOrderStatus.CANCELLED
+            transition_escrow_order_status(order, EscrowOrderStatus.CANCELLED)
             if "BLOCKED:AML_CREATE" not in flags:
                 flags.append("BLOCKED:AML_CREATE")
             if "AML_REVIEW" not in flags:
@@ -145,7 +146,7 @@ class EscrowService:
         if order.status != EscrowOrderStatus.CREATED:
             raise ValueError("Invalid status transition")
         order.funded_at = datetime.now(timezone.utc)
-        order.status = EscrowOrderStatus.FUNDED
+        transition_escrow_order_status(order, EscrowOrderStatus.FUNDED)
         await credit_user_usdc(
             str(order.user_id),
             Decimal(str(order.usdc_received or order.usdc_expected or 0)),
@@ -161,7 +162,7 @@ class EscrowService:
         if order.status != EscrowOrderStatus.FUNDED:
             raise ValueError("Invalid status transition")
         order.swapped_at = datetime.now(timezone.utc)
-        order.status = EscrowOrderStatus.SWAPPED
+        transition_escrow_order_status(order, EscrowOrderStatus.SWAPPED)
         await db.commit()
         await broadcast_tracking_update(order)
 
@@ -170,7 +171,7 @@ class EscrowService:
         if order.status != EscrowOrderStatus.SWAPPED:
             raise ValueError("Invalid status transition")
         order.payout_initiated_at = datetime.now(timezone.utc)
-        order.status = EscrowOrderStatus.PAYOUT_PENDING
+        transition_escrow_order_status(order, EscrowOrderStatus.PAYOUT_PENDING)
         await db.commit()
         await broadcast_tracking_update(order)
 
@@ -179,6 +180,6 @@ class EscrowService:
         if order.status != EscrowOrderStatus.PAYOUT_PENDING:
             raise ValueError("Invalid status transition")
         order.paid_out_at = datetime.now(timezone.utc)
-        order.status = EscrowOrderStatus.PAID_OUT
+        transition_escrow_order_status(order, EscrowOrderStatus.PAID_OUT)
         await db.commit()
         await broadcast_tracking_update(order)

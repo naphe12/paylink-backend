@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.escrow_order import EscrowOrder
@@ -23,6 +23,12 @@ from app.services.escrow_tracking_ws import (
 from app.services.wallet_service import credit_user_usdc
 from app.services.payout_orchestrator import assign_agent_and_notify
 from app.services.fx_rate_service import resolve_stablecoin_bif_rate
+from app.services.idempotency_service import (
+    acquire_idempotency,
+    compute_request_hash,
+    store_idempotency_response,
+)
+from app.services.escrow_order_rules import transition_escrow_order_status
 import math
 
 from app.models.escrow_enums import EscrowOrderStatus
@@ -260,25 +266,25 @@ async def create_escrow(
                 flags.append(f"SANDBOX_SCENARIO:{sandbox_scenario}")
             order.flags = flags
             if sandbox_scenario == "CONFIRMATION_DELAY":
-                order.status = EscrowOrderStatus.CREATED
+                transition_escrow_order_status(order, EscrowOrderStatus.CREATED)
                 order.usdc_received = 0
                 order.deposit_confirmations = 0
             elif sandbox_scenario == "SWAP_FAILED":
-                order.status = EscrowOrderStatus.FAILED
+                transition_escrow_order_status(order, EscrowOrderStatus.FAILED)
                 order.usdc_received = order.usdc_expected
                 order.deposit_confirmations = order.deposit_required_confirmations
                 order.funded_at = datetime.now(timezone.utc)
             elif sandbox_scenario == "PAYOUT_BLOCKED":
-                order.status = EscrowOrderStatus.PAYOUT_PENDING
+                transition_escrow_order_status(order, EscrowOrderStatus.PAYOUT_PENDING)
                 order.usdc_received = order.usdc_expected
                 order.deposit_confirmations = order.deposit_required_confirmations
                 order.funded_at = datetime.now(timezone.utc)
             elif sandbox_scenario == "WEBHOOK_FAILED":
-                order.status = EscrowOrderStatus.CREATED
+                transition_escrow_order_status(order, EscrowOrderStatus.CREATED)
                 order.usdc_received = 0
                 order.deposit_confirmations = 0
             else:
-                order.status = EscrowOrderStatus.FUNDED
+                transition_escrow_order_status(order, EscrowOrderStatus.FUNDED)
                 order.usdc_received = order.usdc_expected
                 order.deposit_confirmations = order.deposit_required_confirmations
                 order.funded_at = datetime.now(timezone.utc)
@@ -375,6 +381,7 @@ async def mark_paid(
     request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user_db),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     try:
         _require_operator_role(current_user, allow_agent=False)
@@ -384,6 +391,33 @@ async def mark_paid(
                 status_code=400,
                 detail="Cette action est reservee au flux CRYPTO_TO_FIAT. Utilisez confirm-crypto-release.",
             )
+        if idempotency_key and idempotency_key.strip():
+            actor_id = getattr(current_user, "id", None) or getattr(current_user, "user_id", None)
+            scoped_idempotency_key = f"escrow_mark_paid:{order_id}:{str(actor_id)}:{idempotency_key.strip()}"
+            payload_hash = compute_request_hash(
+                {
+                    "action": "escrow_mark_paid",
+                    "order_id": str(order_id),
+                    "actor_id": str(actor_id),
+                }
+            )
+            idem = await acquire_idempotency(
+                db,
+                key=scoped_idempotency_key,
+                request_hash=payload_hash,
+            )
+            if idem.conflict:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Idempotency-Key deja utilisee avec un payload different.",
+                )
+            if idem.replay_payload is not None:
+                return idem.replay_payload
+            if idem.in_progress:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Requete dupliquee en cours de traitement. Reessayez dans quelques secondes.",
+                )
         before = {"status": str(o.status), "bif_paid": float(o.bif_paid or 0)}
         owner = await db.get(Users, o.user_id)
         if owner:
@@ -429,9 +463,19 @@ async def mark_paid(
             ip=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
+        response_payload = {"status": "PAID_OUT", "flow_type": _get_flow_type(o)}
+        if idempotency_key and idempotency_key.strip():
+            actor_id = getattr(current_user, "id", None) or getattr(current_user, "user_id", None)
+            scoped_idempotency_key = f"escrow_mark_paid:{order_id}:{str(actor_id)}:{idempotency_key.strip()}"
+            await store_idempotency_response(
+                db,
+                key=scoped_idempotency_key,
+                status_code=200,
+                payload=response_payload,
+            )
         await db.commit()
         await broadcast_tracking_update(o)
-        return {"status": "PAID_OUT"}
+        return response_payload
     except HTTPException:
         raise
     except Exception as e:
@@ -445,6 +489,7 @@ async def confirm_fiat_in(
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user_db),
     body: dict | None = None,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     try:
         _require_operator_role(current_user, allow_agent=True)
@@ -462,6 +507,35 @@ async def confirm_fiat_in(
         bif_received = Decimal(str(bif_received_raw if bif_received_raw is not None else o.bif_target or 0))
         if bif_received <= 0:
             raise HTTPException(status_code=400, detail="bif_received doit etre superieur a 0")
+        scoped_idempotency_key = None
+        if idempotency_key and idempotency_key.strip():
+            actor_id = getattr(current_user, "id", None) or getattr(current_user, "user_id", None)
+            scoped_idempotency_key = f"escrow_confirm_fiat_in:{order_id}:{str(actor_id)}:{idempotency_key.strip()}"
+            payload_hash = compute_request_hash(
+                {
+                    "action": "escrow_confirm_fiat_in",
+                    "order_id": str(order_id),
+                    "actor_id": str(actor_id),
+                    "bif_received": str(bif_received),
+                }
+            )
+            idem = await acquire_idempotency(
+                db,
+                key=scoped_idempotency_key,
+                request_hash=payload_hash,
+            )
+            if idem.conflict:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Idempotency-Key deja utilisee avec un payload different.",
+                )
+            if idem.replay_payload is not None:
+                return idem.replay_payload
+            if idem.in_progress:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Requete dupliquee en cours de traitement. Reessayez dans quelques secondes.",
+                )
 
         before = {"status": str(o.status), "bif_paid": float(o.bif_paid or 0)}
         o.bif_paid = bif_received
@@ -483,9 +557,17 @@ async def confirm_fiat_in(
             user_agent=request.headers.get("user-agent"),
         )
 
+        response_payload = {"status": "PAYOUT_PENDING", "flow_type": _get_flow_type(o)}
+        if scoped_idempotency_key:
+            await store_idempotency_response(
+                db,
+                key=scoped_idempotency_key,
+                status_code=200,
+                payload=response_payload,
+            )
         await db.commit()
         await broadcast_tracking_update(o)
-        return {"status": "PAYOUT_PENDING", "flow_type": _get_flow_type(o)}
+        return response_payload
     except HTTPException:
         raise
     except Exception as e:
@@ -498,6 +580,7 @@ async def confirm_crypto_release(
     request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user_db),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     try:
         _require_operator_role(current_user, allow_agent=True)
@@ -509,6 +592,34 @@ async def confirm_crypto_release(
                 status_code=400,
                 detail=f"Transition invalide: status attendu=PAYOUT_PENDING, actuel={_status_to_str(o.status)}",
             )
+        scoped_idempotency_key = None
+        if idempotency_key and idempotency_key.strip():
+            actor_id = getattr(current_user, "id", None) or getattr(current_user, "user_id", None)
+            scoped_idempotency_key = f"escrow_confirm_crypto_release:{order_id}:{str(actor_id)}:{idempotency_key.strip()}"
+            payload_hash = compute_request_hash(
+                {
+                    "action": "escrow_confirm_crypto_release",
+                    "order_id": str(order_id),
+                    "actor_id": str(actor_id),
+                }
+            )
+            idem = await acquire_idempotency(
+                db,
+                key=scoped_idempotency_key,
+                request_hash=payload_hash,
+            )
+            if idem.conflict:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Idempotency-Key deja utilisee avec un payload different.",
+                )
+            if idem.replay_payload is not None:
+                return idem.replay_payload
+            if idem.in_progress:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Requete dupliquee en cours de traitement. Reessayez dans quelques secondes.",
+                )
 
         before = {"status": str(o.status), "bif_paid": float(o.bif_paid or 0)}
         if not o.bif_paid:
@@ -531,9 +642,17 @@ async def confirm_crypto_release(
             user_agent=request.headers.get("user-agent"),
         )
 
+        response_payload = {"status": "PAID_OUT", "flow_type": _get_flow_type(o)}
+        if scoped_idempotency_key:
+            await store_idempotency_response(
+                db,
+                key=scoped_idempotency_key,
+                status_code=200,
+                payload=response_payload,
+            )
         await db.commit()
         await broadcast_tracking_update(o)
-        return {"status": "PAID_OUT", "flow_type": _get_flow_type(o)}
+        return response_payload
     except HTTPException:
         raise
     except Exception as e:

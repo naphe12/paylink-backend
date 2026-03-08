@@ -23,6 +23,7 @@ from app.services.payout_orchestrator import assign_agent_and_notify
 from app.services.p2p_chain_webhook_service import process_p2p_chain_deposit_webhook
 from app.services.webhook_log_service import log_webhook
 from app.services.wallet_service import credit_user_usdc
+from app.services.escrow_order_rules import transition_escrow_order_status
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +117,7 @@ async def process_usdc_webhook(
             flags.append("BLOCKED:FUNDED")
             if aml.decision == "BLOCK":
                 flags.append("BLOCKED:AML_FUNDED")
-            order.status = EscrowOrderStatus.CANCELLED
+            transition_escrow_order_status(order, EscrowOrderStatus.CANCELLED)
             if "AML_REVIEW" not in flags:
                 flags.append("AML_REVIEW")
             response_status = "BLOCKED"
@@ -128,7 +129,7 @@ async def process_usdc_webhook(
                     flags.append("AML_REVIEW")
             response_status = "MANUAL_REVIEW"
         else:
-            order.status = EscrowOrderStatus.FUNDED
+            transition_escrow_order_status(order, EscrowOrderStatus.FUNDED)
             response_status = "FUNDED"
             await on_funded(db, order)
             await credit_user_usdc(

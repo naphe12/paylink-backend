@@ -68,8 +68,24 @@ class LedgerService:
         if len(entries) < 2:
             raise ValueError("Une écriture doit contenir au moins deux lignes.")
 
-        total_debit = sum(line.amount for line in entries if line.direction == "debit")
-        total_credit = sum(line.amount for line in entries if line.direction == "credit")
+        currencies = {str(line.currency_code or "").upper() for line in entries}
+        if len(currencies) != 1:
+            raise ValueError("Une ecriture comptable doit utiliser une seule devise.")
+
+        for idx, line in enumerate(entries):
+            if line.direction not in ("debit", "credit"):
+                raise ValueError(f"Ligne {idx + 1}: direction invalide '{line.direction}'.")
+            if line.amount is None or Decimal(line.amount) <= Decimal("0"):
+                raise ValueError(f"Ligne {idx + 1}: montant invalide (doit etre > 0).")
+            account_currency = str(getattr(line.account, "currency_code", "") or "").upper()
+            line_currency = str(line.currency_code or "").upper()
+            if account_currency and line_currency and account_currency != line_currency:
+                raise ValueError(
+                    f"Ligne {idx + 1}: devise incoherente compte={account_currency}, ligne={line_currency}."
+                )
+
+        total_debit = sum(Decimal(line.amount) for line in entries if line.direction == "debit")
+        total_credit = sum(Decimal(line.amount) for line in entries if line.direction == "credit")
         if total_debit != total_credit:
             raise ValueError("Débit et crédit ne sont pas équilibrés.")
 

@@ -3,6 +3,7 @@ from app.models.p2p_trade import P2PTrade
 from app.models.p2p_trade_history import P2PTradeStatusHistory
 from app.models.p2p_enums import TradeStatus
 from app.services.p2p_agent_email_service import notify_agent_fiat_confirmation_needed
+from app.services.p2p_trade_rules import validate_trade_transition
 
 async def set_trade_status(
     db: AsyncSession,
@@ -13,6 +14,7 @@ async def set_trade_status(
     note: str | None = None,
 ):
     from_status = trade.status
+    validate_trade_transition(from_status, to_status)
     trade.status = to_status
 
     db.add(P2PTradeStatusHistory(

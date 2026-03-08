@@ -22,6 +22,10 @@ from app.models.wallets import Wallets
 from app.services.transaction_notifications import send_transaction_emails
 from app.models.agents import Agents
 from app.schemas.external_transfers import ExternalBeneficiaryRead
+from app.services.external_transfer_rules import (
+    normalize_external_transfer_status,
+    transition_external_transfer_status,
+)
 
 router = APIRouter(prefix="/agent/external", tags=["Agent External Transfers"])
 
@@ -91,7 +95,8 @@ async def _close_external_transfer_core(
     )
     if not transfer:
         raise HTTPException(status_code=404, detail="Transfert introuvable ou deja clos.")
-    if str(transfer.status or "").lower() == "completed":
+    current_status = normalize_external_transfer_status(transfer.status)
+    if current_status in {"completed", "succeeded"}:
         wallet = await db.scalar(
             select(Wallets).where(
                 Wallets.user_id == acting_agent_user.user_id,
@@ -104,7 +109,7 @@ async def _close_external_transfer_core(
             "amount_debited": None,
             "currency": wallet.currency_code if wallet else None,
         }
-    if transfer.status != "approved":
+    if current_status != "approved":
         raise HTTPException(status_code=400, detail=f"Transfert non cloturable (status={transfer.status})")
 
     wallet = await db.scalar(
@@ -133,7 +138,7 @@ async def _close_external_transfer_core(
         )
 
     wallet.available -= amount_to_debit
-    transfer.status = "completed"
+    transition_external_transfer_status(transfer, "completed")
     transfer.processed_at = datetime.utcnow()
     transfer.processed_by = acting_agent_user.user_id
 
@@ -236,10 +241,10 @@ async def update_external_transfer_status(
     - met a jour la transaction liee
     """
 
-    raw_status = (payload.get("status") or "").lower()
-    if raw_status not in ["succeeded", "success", "failed"]:
+    raw_status = normalize_external_transfer_status(payload.get("status"))
+    if raw_status not in ["succeeded", "failed"]:
         raise HTTPException(status_code=400, detail="Statut invalide (succeeded/failed uniquement)")
-    new_status = "succeeded" if raw_status in ["succeeded", "success"] else "failed"
+    new_status = raw_status
 
     transfer = await db.scalar(select(ExternalTransfers).where(ExternalTransfers.transfer_id == transfer_id))
     if not transfer:
@@ -249,7 +254,10 @@ async def update_external_transfer_status(
     if not user:
         raise HTTPException(status_code=404, detail="Utilisateur lie introuvable")
 
-    transfer.status = new_status
+    try:
+        transition_external_transfer_status(transfer, new_status)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     transfer.processed_by = current_user.user_id
     transfer.processed_at = datetime.utcnow()
 

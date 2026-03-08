@@ -2,7 +2,7 @@
 import decimal
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Header
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 from sqlalchemy import cast, select, String, or_, desc, func
@@ -39,6 +39,11 @@ from app.services.ledger import LedgerLine, LedgerService
 from app.services.limits import reset_limits_if_needed
 from app.services.risk_engine import calculate_risk_score
 from app.services.wallet_history import log_wallet_movement
+from app.services.idempotency_service import (
+    acquire_idempotency,
+    compute_request_hash,
+    store_idempotency_response,
+)
 from app.models.credit_lines import CreditLines
 from app.models.credit_line_events import CreditLineEvents
 from app.models.tontinemembers import TontineMembers
@@ -189,6 +194,7 @@ async def request_cash_deposit(
     payload: WalletCashDepositCreate,
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     wallet = await db.scalar(select(Wallets).where(Wallets.user_id == current_user.user_id))
     if not wallet:
@@ -197,6 +203,35 @@ async def request_cash_deposit(
     amount = decimal.Decimal(payload.amount)
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Montant invalide")
+
+    if idempotency_key and idempotency_key.strip():
+        raw_key = idempotency_key.strip()
+        payload_hash = compute_request_hash(
+            {
+                "amount": str(amount),
+                "note": payload.note,
+                "type": "deposit",
+                "user_id": str(current_user.user_id),
+            }
+        )
+        scoped_idempotency_key = f"wallet_cash_deposit:{current_user.user_id}:{raw_key}"
+        idem = await acquire_idempotency(
+            db,
+            key=scoped_idempotency_key,
+            request_hash=payload_hash,
+        )
+        if idem.conflict:
+            raise HTTPException(
+                status_code=409,
+                detail="Idempotency-Key deja utilisee avec un payload different.",
+            )
+        if idem.replay_payload is not None:
+            return idem.replay_payload
+        if idem.in_progress:
+            raise HTTPException(
+                status_code=409,
+                detail="Requete dupliquee en cours de traitement.",
+            )
 
     request = WalletCashRequests(
         user_id=current_user.user_id,
@@ -210,8 +245,18 @@ async def request_cash_deposit(
         note=payload.note,
     )
     db.add(request)
-    await db.commit()
+    await db.flush()
     await db.refresh(request)
+    if idempotency_key and idempotency_key.strip():
+        scoped_idempotency_key = f"wallet_cash_deposit:{current_user.user_id}:{idempotency_key.strip()}"
+        payload_out = WalletCashRequestRead.model_validate(request).model_dump(mode="json")
+        await store_idempotency_response(
+            db,
+            key=scoped_idempotency_key,
+            status_code=200,
+            payload=payload_out,
+        )
+    await db.commit()
     return request
 
 
@@ -249,6 +294,7 @@ async def request_cash_withdraw(
     payload: WalletCashWithdrawCreate,
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     wallet = await db.scalar(select(Wallets).where(Wallets.user_id == current_user.user_id))
     if not wallet:
@@ -264,6 +310,37 @@ async def request_cash_withdraw(
     if wallet_balance < total:
         raise HTTPException(status_code=400, detail="Solde insuffisant pour ce retrait")
 
+    if idempotency_key and idempotency_key.strip():
+        raw_key = idempotency_key.strip()
+        payload_hash = compute_request_hash(
+            {
+                "amount": str(amount),
+                "mobile_number": payload.mobile_number,
+                "provider_name": payload.provider_name,
+                "note": payload.note,
+                "type": "withdraw",
+                "user_id": str(current_user.user_id),
+            }
+        )
+        scoped_idempotency_key = f"wallet_cash_withdraw:{current_user.user_id}:{raw_key}"
+        idem = await acquire_idempotency(
+            db,
+            key=scoped_idempotency_key,
+            request_hash=payload_hash,
+        )
+        if idem.conflict:
+            raise HTTPException(
+                status_code=409,
+                detail="Idempotency-Key deja utilisee avec un payload different.",
+            )
+        if idem.replay_payload is not None:
+            return idem.replay_payload
+        if idem.in_progress:
+            raise HTTPException(
+                status_code=409,
+                detail="Requete dupliquee en cours de traitement.",
+            )
+
     request = WalletCashRequests(
         user_id=current_user.user_id,
         wallet_id=wallet.wallet_id,
@@ -278,8 +355,18 @@ async def request_cash_withdraw(
         note=payload.note,
     )
     db.add(request)
-    await db.commit()
+    await db.flush()
     await db.refresh(request)
+    if idempotency_key and idempotency_key.strip():
+        scoped_idempotency_key = f"wallet_cash_withdraw:{current_user.user_id}:{idempotency_key.strip()}"
+        payload_out = WalletCashRequestRead.model_validate(request).model_dump(mode="json")
+        await store_idempotency_response(
+            db,
+            key=scoped_idempotency_key,
+            status_code=200,
+            payload=payload_out,
+        )
+    await db.commit()
     return request
 
 

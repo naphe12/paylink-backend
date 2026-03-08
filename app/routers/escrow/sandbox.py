@@ -17,6 +17,7 @@ from app.services.escrow_ledger_hooks import (
     post_funded_usdc_deposit_journal,
     post_swap_usdc_to_usdt_journal,
 )
+from app.services.escrow_order_rules import transition_escrow_order_status
 
 router = APIRouter(prefix="/api/escrow/sandbox", tags=["Escrow Sandbox"])
 
@@ -92,7 +93,7 @@ async def sandbox_fund(
 
     order.usdc_received = order.usdc_expected
     order.deposit_confirmations = order.deposit_required_confirmations
-    order.status = EscrowOrderStatus.FUNDED
+    transition_escrow_order_status(order, EscrowOrderStatus.FUNDED)
     _set_sandbox_step(order, 1)
 
     await post_funded_usdc_deposit_journal(db, order)
@@ -134,7 +135,7 @@ async def sandbox_swap(
 
     order.usdt_received = order.usdc_received or order.usdt_target
     order.conversion_fee_usdt = (order.usdt_received * Decimal("0.01")).quantize(Decimal("0.00000001"))
-    order.status = EscrowOrderStatus.SWAPPED
+    transition_escrow_order_status(order, EscrowOrderStatus.SWAPPED)
     _set_sandbox_step(order, 2)
 
     await post_swap_usdc_to_usdt_journal(db, order)
@@ -165,13 +166,13 @@ async def sandbox_payout(
         raise HTTPException(status_code=400, detail="Order must be SWAPPED")
 
     if _get_sandbox_scenario(order) == "PAYOUT_STUCK":
-        order.status = EscrowOrderStatus.PAYOUT_PENDING
+        transition_escrow_order_status(order, EscrowOrderStatus.PAYOUT_PENDING)
         await db.commit()
         await broadcast_tracking_update(order)
         return {"status": "PAYOUT_PENDING"}
 
     order.bif_paid = order.bif_target
-    order.status = EscrowOrderStatus.PAID_OUT
+    transition_escrow_order_status(order, EscrowOrderStatus.PAID_OUT)
     _set_sandbox_step(order, 3)
 
     await on_payout_confirmed(db, order)

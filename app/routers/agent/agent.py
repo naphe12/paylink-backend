@@ -5,7 +5,7 @@ import json
 from uuid import UUID
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Header
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import insert, update, select, func, or_
@@ -23,6 +23,11 @@ from app.models.agent_commissions import AgentCommissions
 from app.models.wallets import Wallets
 from app.models.transactions import Transactions
 from app.models.agents import Agents
+from app.services.idempotency_service import (
+    acquire_idempotency,
+    compute_request_hash,
+    store_idempotency_response,
+)
 
 
 
@@ -59,15 +64,42 @@ class AgentQrConfirmRequest(BaseModel):
 
 
 @router.post("/cash-in", dependencies=[Depends(agent_required)])
-async def agent_cashin(body: AgentCashPayload,
-                       db: AsyncSession = Depends(get_db),
-                       agent: Users = Depends(get_current_user)):
+async def agent_cashin(
+    body: AgentCashPayload,
+    db: AsyncSession = Depends(get_db),
+    agent: Users = Depends(get_current_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
     agent_row = await _require_agent(db, agent)
     agent_id = agent_row.agent_id
     client = await db.scalar(select(Users).where(Users.user_id==body.client_user_id))
     if not client: raise HTTPException(404, "Client introuvable")
     if str(agent.user_id) == str(client.user_id):
         raise HTTPException(400, "Agent ≠ Client")
+
+    scoped_idempotency_key = None
+    if idempotency_key and idempotency_key.strip():
+        raw_key = idempotency_key.strip()
+        payload_hash = compute_request_hash(
+            {
+                "operation": "agent_cashin",
+                "agent_id": str(agent.user_id),
+                "client_user_id": str(body.client_user_id),
+                "amount": str(body.amount),
+            }
+        )
+        scoped_idempotency_key = f"agent_cashin:{agent.user_id}:{raw_key}"
+        idem = await acquire_idempotency(
+            db,
+            key=scoped_idempotency_key,
+            request_hash=payload_hash,
+        )
+        if idem.conflict:
+            raise HTTPException(status_code=409, detail="Idempotency-Key deja utilisee avec un payload different.")
+        if idem.replay_payload is not None:
+            return idem.replay_payload
+        if idem.in_progress:
+            raise HTTPException(status_code=409, detail="Requete dupliquee en cours de traitement.")
 
     amount = float(body.amount)
     await guard_and_increment_limits(db, client, amount)
@@ -86,17 +118,52 @@ async def agent_cashin(body: AgentCashPayload,
         commission=commission,
         status="completed"
     ))
+    response_payload = {"message": "Cash-in effectue", "commission": str(commission), "risk_score": score}
+    if scoped_idempotency_key:
+        await store_idempotency_response(
+            db,
+            key=scoped_idempotency_key,
+            status_code=200,
+            payload=response_payload,
+        )
     await db.commit()
-    return {"message":"✅ Cash-in effectué","commission":str(commission),"risk_score":score}
+    return response_payload
 
 @router.post("/cash-out", dependencies=[Depends(agent_required)])
-async def agent_cashout(body: AgentCashPayload,
-                        db: AsyncSession = Depends(get_db),
-                        agent: Users = Depends(get_current_user)):
+async def agent_cashout(
+    body: AgentCashPayload,
+    db: AsyncSession = Depends(get_db),
+    agent: Users = Depends(get_current_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
     agent_row = await _require_agent(db, agent)
     agent_id = agent_row.agent_id
     client = await db.scalar(select(Users).where(Users.user_id==body.client_user_id))
     if not client: raise HTTPException(404, "Client introuvable")
+
+    scoped_idempotency_key = None
+    if idempotency_key and idempotency_key.strip():
+        raw_key = idempotency_key.strip()
+        payload_hash = compute_request_hash(
+            {
+                "operation": "agent_cashout",
+                "agent_id": str(agent.user_id),
+                "client_user_id": str(body.client_user_id),
+                "amount": str(body.amount),
+            }
+        )
+        scoped_idempotency_key = f"agent_cashout:{agent.user_id}:{raw_key}"
+        idem = await acquire_idempotency(
+            db,
+            key=scoped_idempotency_key,
+            request_hash=payload_hash,
+        )
+        if idem.conflict:
+            raise HTTPException(status_code=409, detail="Idempotency-Key deja utilisee avec un payload different.")
+        if idem.replay_payload is not None:
+            return idem.replay_payload
+        if idem.in_progress:
+            raise HTTPException(status_code=409, detail="Requete dupliquee en cours de traitement.")
 
     amount = float(body.amount)
     await guard_and_increment_limits(db, client, amount)
@@ -113,8 +180,16 @@ async def agent_cashout(body: AgentCashPayload,
         commission=commission,
         status="completed"
     ))
+    response_payload = {"message": "Cash-out effectue", "commission": str(commission), "risk_score": score}
+    if scoped_idempotency_key:
+        await store_idempotency_response(
+            db,
+            key=scoped_idempotency_key,
+            status_code=200,
+            payload=response_payload,
+        )
     await db.commit()
-    return {"message":"✅ Cash-out effectué","commission":str(commission),"risk_score":score}
+    return response_payload
 
 
 @router.get("/cash/users")
@@ -158,8 +233,34 @@ async def agent_cash_deposit_direct(
     payload: AgentCashDepositCreate,
     db: AsyncSession = Depends(get_db),
     current_agent: Users = Depends(get_current_agent),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     agent_row = await _require_agent(db, current_agent)
+    scoped_idempotency_key = None
+    if idempotency_key and idempotency_key.strip():
+        raw_key = idempotency_key.strip()
+        payload_hash = compute_request_hash(
+            {
+                "operation": "agent_cash_deposit_direct",
+                "agent_id": str(current_agent.user_id),
+                "user_id": str(payload.user_id),
+                "amount": str(payload.amount),
+                "note": payload.note,
+            }
+        )
+        scoped_idempotency_key = f"agent_cash_deposit_direct:{current_agent.user_id}:{raw_key}"
+        idem = await acquire_idempotency(
+            db,
+            key=scoped_idempotency_key,
+            request_hash=payload_hash,
+        )
+        if idem.conflict:
+            raise HTTPException(status_code=409, detail="Idempotency-Key deja utilisee avec un payload different.")
+        if idem.replay_payload is not None:
+            return idem.replay_payload
+        if idem.in_progress:
+            raise HTTPException(status_code=409, detail="Requete dupliquee en cours de traitement.")
+
     user = await db.scalar(select(Users).where(Users.user_id == payload.user_id))
     if not user:
         raise HTTPException(status_code=404, detail="Utilisateur introuvable")
@@ -194,14 +295,22 @@ async def agent_cash_deposit_direct(
         commission=0,
         status="completed",
     ))
-    await db.commit()
-    return {
+    response_payload = {
         "message": "Depot cash effectue",
         "user_id": str(user.user_id),
         "amount": float(payload.amount),
         "currency": wallet.currency_code,
         "new_balance": float(wallet.available),
     }
+    if scoped_idempotency_key:
+        await store_idempotency_response(
+            db,
+            key=scoped_idempotency_key,
+            status_code=200,
+            payload=response_payload,
+        )
+    await db.commit()
+    return response_payload
 
 @router.get("/dashboard")
 async def agent_dashboard(
@@ -458,3 +567,5 @@ async def _fetch_pending_qr_transaction(
         raise HTTPException(400, "Transaction non éligible au mode agent")
 
     return tx, client_name, client_phone
+
+

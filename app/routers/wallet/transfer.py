@@ -7,8 +7,7 @@ from datetime import timedelta
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -17,7 +16,6 @@ from app.dependencies.auth import get_current_agent, get_current_user
 from app.models.bonus_history import BonusHistory
 from app.models.credit_line_history import CreditLineHistory
 from app.models.external_transfers import ExternalTransfers
-from app.models.idempotencykeys import IdempotencyKeys
 from app.models.telegram_user import TelegramUser
 from app.models.transactions import Transactions
 from app.models.users import Users
@@ -38,10 +36,16 @@ from app.services.telegram import send_message as send_telegram_message
 from app.services.transaction_notifications import send_transaction_emails
 from app.services.wallet_history import log_wallet_movement
 from app.services.pdf_utils import build_external_transfer_receipt
+from app.services.idempotency_service import (
+    acquire_idempotency,
+    compute_request_hash,
+    store_idempotency_response,
+)
 from app.models.general_settings import GeneralSettings
 from app.models.fx_custom_rates import FxCustomRates
 from app.models.fxconversions import FxConversions
 from app.core.security import create_access_token
+from app.services.external_transfer_rules import transition_external_transfer_status
 
 router = APIRouter(prefix="/wallet/transfer", tags=["External Transfer"])
 logger = logging.getLogger(__name__)
@@ -330,23 +334,34 @@ async def external_transfer(
 
     scoped_idempotency_key = None
     if idempotency_key and idempotency_key.strip():
-        scoped_idempotency_key = f"external_transfer:{current_user.user_id}:{idempotency_key.strip()}"
-        try:
-            db.add(IdempotencyKeys(client_key=scoped_idempotency_key))
-            await db.flush()
-        except IntegrityError:
-            await db.rollback()
-            latest = await db.scalar(
-                select(ExternalTransfers)
-                .where(ExternalTransfers.user_id == current_user.user_id)
-                .order_by(ExternalTransfers.created_at.desc())
-                .limit(1)
-            )
-            if latest:
-                return latest
+        raw_key = idempotency_key.strip()
+        payload_hash = compute_request_hash(
+            {
+                "partner_name": str(data.partner_name or "").strip(),
+                "country_destination": str(data.country_destination or "").strip(),
+                "recipient_name": str(data.recipient_name or "").strip(),
+                "recipient_phone": str(data.recipient_phone or "").strip(),
+                "amount": str(data.amount),
+                "user_id": str(current_user.user_id),
+            }
+        )
+        scoped_idempotency_key = f"external_transfer:{current_user.user_id}:{raw_key}"
+        idem = await acquire_idempotency(
+            db,
+            key=scoped_idempotency_key,
+            request_hash=payload_hash,
+        )
+        if idem.conflict:
             raise HTTPException(
                 status_code=409,
-                detail="Requete dupliquee (Idempotency-Key deja utilisee).",
+                detail="Idempotency-Key deja utilisee avec un payload different.",
+            )
+        if idem.replay_payload is not None:
+            return idem.replay_payload
+        if idem.in_progress:
+            raise HTTPException(
+                status_code=409,
+                detail="Requete dupliquee en cours de traitement. Reessayez dans quelques secondes.",
             )
 
     amount = decimal.Decimal(data.amount)
@@ -573,6 +588,15 @@ async def external_transfer(
     user_locked.used_monthly = decimal.Decimal(user_locked.used_monthly or 0) + amount
     await db.commit()
     await db.refresh(transfer)
+    if scoped_idempotency_key:
+        payload_out = ExternalTransferRead.model_validate(transfer).model_dump(mode="json")
+        await store_idempotency_response(
+            db,
+            key=scoped_idempotency_key,
+            status_code=200,
+            payload=payload_out,
+        )
+        await db.commit()
 
     await _notify_external_transfer(
         db=db,
@@ -588,7 +612,7 @@ async def external_transfer(
         requires_admin=requires_admin,
         fx_rate=fx_rate,
     )
-    return transfer
+    return payload_out if scoped_idempotency_key else transfer
 
 
 @router.post("/transfer/external/{transfer_id}/approve")
@@ -603,7 +627,7 @@ async def approve_external_transfer(
     if not transfer:
         raise HTTPException(status_code=404, detail="Transfert introuvable")
 
-    transfer.status = "approved"
+    transition_external_transfer_status(transfer, "approved")
     transfer.processed_by = current_agent.user_id
     transfer.processed_at = datetime.utcnow()
 

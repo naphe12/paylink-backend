@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,9 +33,13 @@ from app.services.p2p_dispute_service import P2PDisputeService
 from app.security.rate_limit import rate_limit
 from app.services.webhook_log_service import log_webhook
 from app.core.security import decode_access_token
+from app.services.idempotency_service import (
+    acquire_idempotency,
+    compute_request_hash,
+    store_idempotency_response,
+)
 
 router = APIRouter(prefix="/p2p", tags=["P2P"])
-
 
 class SandboxCryptoLockedIn(BaseModel):
     escrow_tx_hash: str | None = None
@@ -82,9 +86,53 @@ async def create_offer(
     db: AsyncSession = Depends(get_db),
     me: Users = Depends(get_current_user),
     _: None = Depends(require_not_killed),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     try:
-        return await P2POfferService.create_offer(db, me.user_id, data)
+        scoped_idempotency_key = None
+        if idempotency_key and idempotency_key.strip():
+            payload_hash = compute_request_hash(
+                {
+                    "side": str(data.side.value if hasattr(data.side, "value") else data.side),
+                    "token": str(data.token.value if hasattr(data.token, "value") else data.token),
+                    "price_bif_per_usd": str(data.price_bif_per_usd),
+                    "min_token_amount": str(data.min_token_amount),
+                    "max_token_amount": str(data.max_token_amount),
+                    "available_amount": str(data.available_amount),
+                    "payment_method": str(data.payment_method.value if hasattr(data.payment_method, "value") else data.payment_method),
+                    "terms": str(data.terms or ""),
+                }
+            )
+            scoped_idempotency_key = f"p2p_create_offer:{me.user_id}:{idempotency_key.strip()}"
+            idem = await acquire_idempotency(
+                db,
+                key=scoped_idempotency_key,
+                request_hash=payload_hash,
+            )
+            if idem.conflict:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Idempotency-Key deja utilisee avec un payload different.",
+                )
+            if idem.replay_payload is not None:
+                return idem.replay_payload
+            if idem.in_progress:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Requete dupliquee en cours de traitement. Reessayez dans quelques secondes.",
+                )
+        created = await P2POfferService.create_offer(db, me.user_id, data)
+        if scoped_idempotency_key:
+            payload_out = OfferOut.model_validate(created).model_dump(mode="json")
+            await store_idempotency_response(
+                db,
+                key=scoped_idempotency_key,
+                status_code=200,
+                payload=payload_out,
+            )
+            await db.commit()
+            return payload_out
+        return created
     except Exception as e:
         raise HTTPException(400, str(e))
 
@@ -94,9 +142,47 @@ async def create_trade(
     db: AsyncSession = Depends(get_db),
     me: Users = Depends(get_current_user),
     _: None = Depends(require_not_killed),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     try:
-        return await P2PTradeService.create_trade(db, me.user_id, data)
+        scoped_idempotency_key = None
+        if idempotency_key and idempotency_key.strip():
+            payload_hash = compute_request_hash(
+                {
+                    "offer_id": str(data.offer_id),
+                    "token_amount": str(data.token_amount),
+                }
+            )
+            scoped_idempotency_key = f"p2p_create_trade:{me.user_id}:{idempotency_key.strip()}"
+            idem = await acquire_idempotency(
+                db,
+                key=scoped_idempotency_key,
+                request_hash=payload_hash,
+            )
+            if idem.conflict:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Idempotency-Key deja utilisee avec un payload different.",
+                )
+            if idem.replay_payload is not None:
+                return idem.replay_payload
+            if idem.in_progress:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Requete dupliquee en cours de traitement. Reessayez dans quelques secondes.",
+                )
+        created = await P2PTradeService.create_trade(db, me.user_id, data)
+        if scoped_idempotency_key:
+            payload_out = TradeOut.model_validate(created).model_dump(mode="json")
+            await store_idempotency_response(
+                db,
+                key=scoped_idempotency_key,
+                status_code=200,
+                payload=payload_out,
+            )
+            await db.commit()
+            return payload_out
+        return created
     except PermissionError as e:
         raise HTTPException(403, str(e))
     except Exception as e:
@@ -273,8 +359,36 @@ async def market_order(
     db: AsyncSession = Depends(get_db),
     me: Users = Depends(get_current_user),
     _: None = Depends(require_not_killed),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     try:
+        scoped_idempotency_key = None
+        if idempotency_key and idempotency_key.strip():
+            payload_hash = compute_request_hash(
+                {
+                    "token": token.value,
+                    "side": side.value,
+                    "token_amount": str(token_amount),
+                }
+            )
+            scoped_idempotency_key = f"p2p_market_order:{me.user_id}:{idempotency_key.strip()}"
+            idem = await acquire_idempotency(
+                db,
+                key=scoped_idempotency_key,
+                request_hash=payload_hash,
+            )
+            if idem.conflict:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Idempotency-Key deja utilisee avec un payload different.",
+                )
+            if idem.replay_payload is not None:
+                return idem.replay_payload
+            if idem.in_progress:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Requete dupliquee en cours de traitement. Reessayez dans quelques secondes.",
+                )
         offer = await P2PMatchingEngine.best_offer(
             db=db,
             token=token,
@@ -282,9 +396,20 @@ async def market_order(
             token_amount=token_amount,
         )
         if offer:
-            return await P2PTradeService.create_trade(
+            created = await P2PTradeService.create_trade(
                 db, me.user_id, TradeCreate(offer_id=offer.offer_id, token_amount=token_amount)
             )
+            if scoped_idempotency_key:
+                payload_out = TradeOut.model_validate(created).model_dump(mode="json")
+                await store_idempotency_response(
+                    db,
+                    key=scoped_idempotency_key,
+                    status_code=200,
+                    payload=payload_out,
+                )
+                await db.commit()
+                return payload_out
+            return created
 
         # fallback MM
         if not settings.P2P_MM_ENABLED:
@@ -355,6 +480,16 @@ async def market_order(
             },
         )
         await db.commit()
+        if scoped_idempotency_key:
+            payload_out = TradeOut.model_validate(trade).model_dump(mode="json")
+            await store_idempotency_response(
+                db,
+                key=scoped_idempotency_key,
+                status_code=200,
+                payload=payload_out,
+            )
+            await db.commit()
+            return payload_out
         return trade
     except PermissionError as e:
         raise HTTPException(403, str(e))
@@ -405,9 +540,50 @@ async def fiat_sent(
     data: FiatSentIn,
     db: AsyncSession = Depends(get_db),
     me: Users = Depends(get_current_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     try:
-        return await P2PTradeService.mark_fiat_sent(db, trade_id, me.user_id, data)
+        scoped_idempotency_key = None
+        if idempotency_key and idempotency_key.strip():
+            scoped_idempotency_key = f"p2p_fiat_sent:{trade_id}:{me.user_id}:{idempotency_key.strip()}"
+            payload_hash = compute_request_hash(
+                {
+                    "action": "p2p_fiat_sent",
+                    "trade_id": str(trade_id),
+                    "actor_id": str(me.user_id),
+                    "proof_url": str(data.proof_url or ""),
+                    "note": str(data.note or ""),
+                }
+            )
+            idem = await acquire_idempotency(
+                db,
+                key=scoped_idempotency_key,
+                request_hash=payload_hash,
+            )
+            if idem.conflict:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Idempotency-Key deja utilisee avec un payload different.",
+                )
+            if idem.replay_payload is not None:
+                return idem.replay_payload
+            if idem.in_progress:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Requete dupliquee en cours de traitement. Reessayez dans quelques secondes.",
+                )
+        updated = await P2PTradeService.mark_fiat_sent(db, trade_id, me.user_id, data)
+        if scoped_idempotency_key:
+            payload_out = TradeOut.model_validate(updated).model_dump(mode="json")
+            await store_idempotency_response(
+                db,
+                key=scoped_idempotency_key,
+                status_code=200,
+                payload=payload_out,
+            )
+            await db.commit()
+            return payload_out
+        return updated
     except PermissionError as e:
         raise HTTPException(403, str(e))
     except Exception as e:
@@ -467,9 +643,48 @@ async def fiat_confirm(
     trade_id: str,
     db: AsyncSession = Depends(get_db),
     me: Users = Depends(get_current_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     try:
-        return await P2PTradeService.confirm_fiat_received(db, trade_id, me.user_id)
+        scoped_idempotency_key = None
+        if idempotency_key and idempotency_key.strip():
+            scoped_idempotency_key = f"p2p_fiat_confirm:{trade_id}:{me.user_id}:{idempotency_key.strip()}"
+            payload_hash = compute_request_hash(
+                {
+                    "action": "p2p_fiat_confirm",
+                    "trade_id": str(trade_id),
+                    "actor_id": str(me.user_id),
+                }
+            )
+            idem = await acquire_idempotency(
+                db,
+                key=scoped_idempotency_key,
+                request_hash=payload_hash,
+            )
+            if idem.conflict:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Idempotency-Key deja utilisee avec un payload different.",
+                )
+            if idem.replay_payload is not None:
+                return idem.replay_payload
+            if idem.in_progress:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Requete dupliquee en cours de traitement. Reessayez dans quelques secondes.",
+                )
+        updated = await P2PTradeService.confirm_fiat_received(db, trade_id, me.user_id)
+        if scoped_idempotency_key:
+            payload_out = TradeOut.model_validate(updated).model_dump(mode="json")
+            await store_idempotency_response(
+                db,
+                key=scoped_idempotency_key,
+                status_code=200,
+                payload=payload_out,
+            )
+            await db.commit()
+            return payload_out
+        return updated
     except PermissionError as e:
         raise HTTPException(403, str(e))
     except Exception as e:
@@ -481,10 +696,48 @@ async def open_dispute(
     data: DisputeOpenIn,
     db: AsyncSession = Depends(get_db),
     me: Users = Depends(get_current_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     try:
+        scoped_idempotency_key = None
+        if idempotency_key and idempotency_key.strip():
+            scoped_idempotency_key = f"p2p_open_dispute:{trade_id}:{me.user_id}:{idempotency_key.strip()}"
+            payload_hash = compute_request_hash(
+                {
+                    "action": "p2p_open_dispute",
+                    "trade_id": str(trade_id),
+                    "actor_id": str(me.user_id),
+                    "reason": str(data.reason or ""),
+                }
+            )
+            idem = await acquire_idempotency(
+                db,
+                key=scoped_idempotency_key,
+                request_hash=payload_hash,
+            )
+            if idem.conflict:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Idempotency-Key deja utilisee avec un payload different.",
+                )
+            if idem.replay_payload is not None:
+                return idem.replay_payload
+            if idem.in_progress:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Requete dupliquee en cours de traitement. Reessayez dans quelques secondes.",
+                )
         dispute = await P2PDisputeService.open_dispute(db, trade_id, me.user_id, data.reason)
-        return {"status": "OK", "dispute_id": str(dispute.dispute_id)}
+        response_payload = {"status": "OK", "dispute_id": str(dispute.dispute_id)}
+        if scoped_idempotency_key:
+            await store_idempotency_response(
+                db,
+                key=scoped_idempotency_key,
+                status_code=200,
+                payload=response_payload,
+            )
+            await db.commit()
+        return response_payload
     except PermissionError as e:
         raise HTTPException(403, str(e))
     except Exception as e:

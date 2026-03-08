@@ -11,6 +11,7 @@ from app.models.escrow_event import EscrowEvent
 from app.models.escrow_enums import EscrowOrderStatus
 from app.services.escrow_tracking_ws import broadcast_tracking_update
 from app.services.payout_orchestrator import assign_agent_and_notify
+from app.services.escrow_order_rules import transition_escrow_order_status
 
 from services.swap_engine import SwapProvider
 
@@ -53,7 +54,7 @@ class EscrowSwapService:
         order.conversion_rate_usdc_usdt = swap_res.rate
         order.swap_reference = swap_res.reference
         order.swapped_at = datetime.now(timezone.utc)
-        order.status = EscrowOrderStatus.SWAPPED
+        transition_escrow_order_status(order, EscrowOrderStatus.SWAPPED)
 
         # Audit event
         db.add(EscrowEvent(
