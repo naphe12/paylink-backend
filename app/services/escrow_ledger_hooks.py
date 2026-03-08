@@ -132,3 +132,61 @@ async def on_payout_confirmed(db, order):
             "event": "PAYOUT",
         },
     )
+
+
+async def on_fiat_in_confirmed(db, order):
+    """
+    Ledger hook for inverse flow: fiat BIF received before crypto release.
+    """
+    await PaylinkLedgerService.post_journal(
+        db,
+        tx_id=order.id,
+        description="Escrow inverse fiat-in confirmed",
+        postings=[
+            {
+                "account_code": "CASH_BIF",
+                "direction": "DEBIT",
+                "amount": order.bif_paid or order.bif_target,
+                "currency": "BIF",
+            },
+            {
+                "account_code": "ESCROW_BIF_LIABILITY",
+                "direction": "CREDIT",
+                "amount": order.bif_paid or order.bif_target,
+                "currency": "BIF",
+            },
+        ],
+        metadata={
+            "escrow_order_id": str(order.id),
+            "event": "FIAT_IN_CONFIRMED",
+        },
+    )
+
+
+async def on_crypto_release_confirmed(db, order):
+    """
+    Ledger hook for inverse flow: crypto released to beneficiary after fiat confirmation.
+    """
+    await PaylinkLedgerService.post_journal(
+        db,
+        tx_id=order.id,
+        description="Escrow inverse crypto release confirmed",
+        postings=[
+            {
+                "account_code": "ESCROW_BIF_LIABILITY",
+                "direction": "DEBIT",
+                "amount": order.bif_paid or order.bif_target,
+                "currency": "BIF",
+            },
+            {
+                "account_code": "REVENUE_SETTLEMENT_BIF",
+                "direction": "CREDIT",
+                "amount": order.bif_paid or order.bif_target,
+                "currency": "BIF",
+            },
+        ],
+        metadata={
+            "escrow_order_id": str(order.id),
+            "event": "CRYPTO_RELEASE_CONFIRMED",
+        },
+    )

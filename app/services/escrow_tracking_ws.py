@@ -21,10 +21,23 @@ PROGRESS_MAP = {
     "PAYOUT_PENDING": 80,
     "PAID_OUT": 100,
 }
+FLOW_FLAG_PREFIX = "FLOW:"
+FLOW_CRYPTO_TO_FIAT = "CRYPTO_TO_FIAT"
+FLOW_FIAT_TO_CRYPTO = "FIAT_TO_CRYPTO"
 
 
 def _status_to_str(status_value) -> str:
     return status_value.value if hasattr(status_value, "value") else str(status_value)
+
+
+def _extract_flow_type(order) -> str:
+    for flag in list(getattr(order, "flags", []) or []):
+        value = str(flag)
+        if value.startswith(FLOW_FLAG_PREFIX):
+            candidate = value.split(":", 1)[1].strip().upper()
+            if candidate in {FLOW_CRYPTO_TO_FIAT, FLOW_FIAT_TO_CRYPTO}:
+                return candidate
+    return FLOW_CRYPTO_TO_FIAT
 
 
 def build_tracking_steps(current_status: str, timestamps: dict[str, datetime | None]) -> list[dict]:
@@ -58,6 +71,7 @@ async def build_tracking_payload(order) -> dict:
     return {
         "order_id": str(order.id),
         "current_status": status,
+        "flow_type": _extract_flow_type(order),
         "is_terminal": status in TERMINAL_ESCROW_STATUSES,
         "progress": progress,
         "eta_seconds": eta_seconds,

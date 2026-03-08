@@ -29,6 +29,8 @@ from app.models.escrow_enums import EscrowOrderStatus
 from services.escrow_ledger_hooks import (
     post_funded_usdc_deposit_journal,
     post_swap_usdc_to_usdt_journal,
+    on_crypto_release_confirmed,
+    on_fiat_in_confirmed,
     on_payout_confirmed,
 )
 
@@ -36,10 +38,55 @@ router = APIRouter(prefix="/escrow", tags=["Escrow"])
 DAILY_USDC_LIMIT = 5000
 DAILY_TX_LIMIT = 20
 MAX_OPEN_CREATED_ORDERS = 5
+FLOW_FLAG_PREFIX = "FLOW:"
+FLOW_CRYPTO_TO_FIAT = "CRYPTO_TO_FIAT"
+FLOW_FIAT_TO_CRYPTO = "FIAT_TO_CRYPTO"
+VALID_ESCROW_FLOW_TYPES = {FLOW_CRYPTO_TO_FIAT, FLOW_FIAT_TO_CRYPTO}
 
 
 def _status_to_str(status_value) -> str:
     return status_value.value if hasattr(status_value, "value") else str(status_value)
+
+
+def _normalize_flow_type(raw_flow_type: str | None) -> str:
+    if raw_flow_type is None:
+        return FLOW_CRYPTO_TO_FIAT
+    normalized = str(raw_flow_type).strip().upper()
+    if normalized not in VALID_ESCROW_FLOW_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"flow_type invalide. Valeurs supportees: {sorted(VALID_ESCROW_FLOW_TYPES)}",
+        )
+    return normalized
+
+
+def _set_flow_type_in_flags(flags: list[str] | None, flow_type: str) -> list[str]:
+    normalized_flags = [str(flag) for flag in list(flags or []) if not str(flag).startswith(FLOW_FLAG_PREFIX)]
+    normalized_flags.append(f"{FLOW_FLAG_PREFIX}{flow_type}")
+    return normalized_flags
+
+
+def _extract_flow_type_from_flags(flags: list[str] | None) -> str:
+    for flag in list(flags or []):
+        value = str(flag)
+        if value.startswith(FLOW_FLAG_PREFIX):
+            candidate = value.split(":", 1)[1].strip().upper()
+            if candidate in VALID_ESCROW_FLOW_TYPES:
+                return candidate
+    return FLOW_CRYPTO_TO_FIAT
+
+
+def _get_flow_type(order: EscrowOrder) -> str:
+    return _extract_flow_type_from_flags(list(getattr(order, "flags", []) or []))
+
+
+def _require_operator_role(current_user: Users, allow_agent: bool = False) -> None:
+    current_role = str(getattr(current_user, "role", "")).lower()
+    allowed_roles = {"admin", "operator"}
+    if allow_agent:
+        allowed_roles.add("agent")
+    if current_role not in allowed_roles:
+        raise HTTPException(status_code=403, detail="Acces reserve aux operateurs")
 
 
 def _estimate_minutes_remaining(order: EscrowOrder) -> int:
@@ -85,6 +132,7 @@ async def create_escrow(
     current_user: Users = Depends(get_current_user_db),
 ):
     try:
+        order_payload = dict(order_payload or {})
         ip = request.client.host if request.client else None
         ua = request.headers.get("user-agent")
         user_id = str(getattr(current_user, "user_id", ""))
@@ -100,6 +148,13 @@ async def create_escrow(
             raise HTTPException(status_code=403, detail="KYC non verifie")
         if bool(getattr(current_user, "external_transfers_blocked", False)):
             raise HTTPException(status_code=403, detail="Transferts externes bloques")
+
+        requested_flow_type = _normalize_flow_type(order_payload.get("flow_type"))
+        order_payload.pop("flow_type", None)
+        order_payload["flags"] = _set_flow_type_in_flags(
+            list(order_payload.get("flags") or []),
+            requested_flow_type,
+        )
 
         if "amount_usdc" in order_payload:
             raw_amount = order_payload.get("amount_usdc")
@@ -152,7 +207,7 @@ async def create_escrow(
                 "payout_account_name": payout_name,
                 "payout_account_number": payout_phone,
                 "payout_method": order_payload.get("payout_method", "MOBILE_MONEY"),
-                "flags": list(order_payload.get("flags") or []),
+                "flags": _set_flow_type_in_flags(list(order_payload.get("flags") or []), requested_flow_type),
             }
 
         order = EscrowOrder(**order_payload)
@@ -239,6 +294,7 @@ async def create_escrow(
         return {
             "id": str(o.id),
             "status": o.status,
+            "flow_type": _get_flow_type(o),
             "is_sandbox": "SANDBOX" in list(o.flags or []),
             "sandbox_scenario": next(
                 (str(f).split(":", 1)[1] for f in list(o.flags or []) if str(f).startswith("SANDBOX_SCENARIO:")),
@@ -267,6 +323,7 @@ async def get_escrow(
         return {
             "id": str(o.id),
             "status": o.status,
+            "flow_type": _get_flow_type(o),
             "is_sandbox": "SANDBOX" in list(o.flags or []),
             "sandbox_scenario": next(
                 (str(f).split(":", 1)[1] for f in list(o.flags or []) if str(f).startswith("SANDBOX_SCENARIO:")),
@@ -303,7 +360,9 @@ async def get_escrow_tracking(
         if not is_owner and current_role not in {"admin", "agent", "operator"}:
             raise HTTPException(status_code=403, detail="Acces refuse")
 
-        return await build_tracking_payload(o)
+        payload = await build_tracking_payload(o)
+        payload["flow_type"] = _get_flow_type(o)
+        return payload
     except HTTPException:
         raise
     except Exception as e:
@@ -318,10 +377,13 @@ async def mark_paid(
     current_user: Users = Depends(get_current_user_db),
 ):
     try:
-        current_role = str(getattr(current_user, "role", "")).lower()
-        if current_role not in {"admin", "operator"}:
-            raise HTTPException(status_code=403, detail="Acces reserve aux operateurs")
+        _require_operator_role(current_user, allow_agent=False)
         o = await EscrowService.get_order(db, order_id)
+        if _get_flow_type(o) != FLOW_CRYPTO_TO_FIAT:
+            raise HTTPException(
+                status_code=400,
+                detail="Cette action est reservee au flux CRYPTO_TO_FIAT. Utilisez confirm-crypto-release.",
+            )
         before = {"status": str(o.status), "bif_paid": float(o.bif_paid or 0)}
         owner = await db.get(Users, o.user_id)
         if owner:
@@ -343,7 +405,16 @@ async def mark_paid(
                 o.flags = flags
                 await db.commit()
                 return {"status": "PAYOUT_REVIEW", "reasons": risk.reasons}
-        await EscrowService.mark_paid_out(db, o)
+        if o.status != EscrowOrderStatus.PAYOUT_PENDING:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Transition invalide: status attendu=PAYOUT_PENDING, actuel={_status_to_str(o.status)}",
+            )
+        o.paid_out_at = datetime.now(timezone.utc)
+        o.status = EscrowOrderStatus.PAID_OUT
+        if not o.bif_paid:
+            o.bif_paid = o.bif_target
+        await on_payout_confirmed(db, o)
         after = {"status": "PAID_OUT", "bif_paid": float(o.bif_paid or 0)}
         actor_id = getattr(current_user, "id", None) or getattr(current_user, "user_id", None)
         await audit_log(
@@ -359,7 +430,110 @@ async def mark_paid(
             user_agent=request.headers.get("user-agent"),
         )
         await db.commit()
+        await broadcast_tracking_update(o)
         return {"status": "PAID_OUT"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/orders/{order_id}/confirm-fiat-in")
+async def confirm_fiat_in(
+    order_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user_db),
+    body: dict | None = None,
+):
+    try:
+        _require_operator_role(current_user, allow_agent=True)
+        o = await EscrowService.get_order(db, order_id)
+        if _get_flow_type(o) != FLOW_FIAT_TO_CRYPTO:
+            raise HTTPException(status_code=400, detail="Action reservee au flux FIAT_TO_CRYPTO")
+        if o.status != EscrowOrderStatus.SWAPPED:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Transition invalide: status attendu=SWAPPED, actuel={_status_to_str(o.status)}",
+            )
+
+        payload = body or {}
+        bif_received_raw = payload.get("bif_received")
+        bif_received = Decimal(str(bif_received_raw if bif_received_raw is not None else o.bif_target or 0))
+        if bif_received <= 0:
+            raise HTTPException(status_code=400, detail="bif_received doit etre superieur a 0")
+
+        before = {"status": str(o.status), "bif_paid": float(o.bif_paid or 0)}
+        o.bif_paid = bif_received
+        o.payout_initiated_at = datetime.now(timezone.utc)
+        o.status = EscrowOrderStatus.PAYOUT_PENDING
+        await on_fiat_in_confirmed(db, o)
+
+        actor_id = getattr(current_user, "id", None) or getattr(current_user, "user_id", None)
+        await audit_log(
+            db,
+            actor_user_id=str(actor_id) if actor_id else None,
+            actor_role=str(getattr(current_user, "role", "") or ""),
+            action="ESCROW_FIAT_IN_CONFIRMED",
+            entity_type="escrow_order",
+            entity_id=str(o.id),
+            before_state=before,
+            after_state={"status": "PAYOUT_PENDING", "bif_paid": float(o.bif_paid or 0)},
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+
+        await db.commit()
+        await broadcast_tracking_update(o)
+        return {"status": "PAYOUT_PENDING", "flow_type": _get_flow_type(o)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/orders/{order_id}/confirm-crypto-release")
+async def confirm_crypto_release(
+    order_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user_db),
+):
+    try:
+        _require_operator_role(current_user, allow_agent=True)
+        o = await EscrowService.get_order(db, order_id)
+        if _get_flow_type(o) != FLOW_FIAT_TO_CRYPTO:
+            raise HTTPException(status_code=400, detail="Action reservee au flux FIAT_TO_CRYPTO")
+        if o.status != EscrowOrderStatus.PAYOUT_PENDING:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Transition invalide: status attendu=PAYOUT_PENDING, actuel={_status_to_str(o.status)}",
+            )
+
+        before = {"status": str(o.status), "bif_paid": float(o.bif_paid or 0)}
+        if not o.bif_paid:
+            o.bif_paid = o.bif_target
+        o.paid_out_at = datetime.now(timezone.utc)
+        o.status = EscrowOrderStatus.PAID_OUT
+        await on_crypto_release_confirmed(db, o)
+
+        actor_id = getattr(current_user, "id", None) or getattr(current_user, "user_id", None)
+        await audit_log(
+            db,
+            actor_user_id=str(actor_id) if actor_id else None,
+            actor_role=str(getattr(current_user, "role", "") or ""),
+            action="ESCROW_CRYPTO_RELEASE_CONFIRMED",
+            entity_type="escrow_order",
+            entity_id=str(o.id),
+            before_state=before,
+            after_state={"status": "PAID_OUT", "bif_paid": float(o.bif_paid or 0)},
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+
+        await db.commit()
+        await broadcast_tracking_update(o)
+        return {"status": "PAID_OUT", "flow_type": _get_flow_type(o)}
     except HTTPException:
         raise
     except Exception as e:
@@ -454,6 +628,7 @@ async def sandbox_simulate_transition(
 
         current_status = o.status.value if hasattr(o.status, "value") else str(o.status)
         requested_action = str(action or "").strip().upper()
+        flow_type = _get_flow_type(o)
 
         if requested_action == "FUND":
             if current_status != "CREATED":
@@ -484,6 +659,8 @@ async def sandbox_simulate_transition(
             await db.refresh(o)
 
         elif requested_action == "PAYOUT_PENDING":
+            if flow_type != FLOW_CRYPTO_TO_FIAT:
+                raise HTTPException(status_code=400, detail="Utilisez FIAT_IN pour le flux FIAT_TO_CRYPTO")
             if current_status != "SWAPPED":
                 raise HTTPException(
                     status_code=400,
@@ -493,12 +670,36 @@ async def sandbox_simulate_transition(
             o.status = EscrowOrderStatus.PAYOUT_PENDING
 
         elif requested_action == "PAYOUT":
+            if flow_type != FLOW_CRYPTO_TO_FIAT:
+                raise HTTPException(status_code=400, detail="Utilisez CRYPTO_RELEASE pour le flux FIAT_TO_CRYPTO")
             if current_status != "PAYOUT_PENDING":
                 raise HTTPException(status_code=400, detail=f"Action PAYOUT non autorisee pour status={current_status}")
             o.bif_paid = o.bif_target
             o.paid_out_at = datetime.now(timezone.utc)
             o.status = EscrowOrderStatus.PAID_OUT
             await on_payout_confirmed(db, o)
+        elif requested_action == "FIAT_IN":
+            if flow_type != FLOW_FIAT_TO_CRYPTO:
+                raise HTTPException(status_code=400, detail="Action reservee au flux FIAT_TO_CRYPTO")
+            if current_status != "SWAPPED":
+                raise HTTPException(status_code=400, detail=f"Action FIAT_IN non autorisee pour status={current_status}")
+            o.bif_paid = o.bif_target
+            o.payout_initiated_at = datetime.now(timezone.utc)
+            o.status = EscrowOrderStatus.PAYOUT_PENDING
+            await on_fiat_in_confirmed(db, o)
+        elif requested_action == "CRYPTO_RELEASE":
+            if flow_type != FLOW_FIAT_TO_CRYPTO:
+                raise HTTPException(status_code=400, detail="Action reservee au flux FIAT_TO_CRYPTO")
+            if current_status != "PAYOUT_PENDING":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Action CRYPTO_RELEASE non autorisee pour status={current_status}",
+                )
+            if not o.bif_paid:
+                o.bif_paid = o.bif_target
+            o.paid_out_at = datetime.now(timezone.utc)
+            o.status = EscrowOrderStatus.PAID_OUT
+            await on_crypto_release_confirmed(db, o)
 
         else:
             raise HTTPException(status_code=400, detail=f"Action sandbox inconnue: {requested_action}")
@@ -511,6 +712,7 @@ async def sandbox_simulate_transition(
             "status": "OK",
             "id": str(o.id),
             "escrow_status": o.status,
+            "flow_type": _get_flow_type(o),
             "is_sandbox": "SANDBOX" in list(o.flags or []),
         }
     except HTTPException:

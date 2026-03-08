@@ -3,15 +3,32 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ExternalTransferBase(BaseModel):
-    partner_name: str = Field(..., example="Lumicash")
+    partner_name: str = Field(..., min_length=2, max_length=80, example="Lumicash")
     country_destination: str = Field(..., example="Burundi")
-    recipient_name: str = Field(..., example="Jean Ndayishimiye")
-    recipient_phone: str = Field(..., example="+25761234567")
-    amount: Decimal = Field(..., example=100.00)
+    recipient_name: str = Field(..., min_length=2, max_length=120, example="Jean Ndayishimiye")
+    recipient_phone: str = Field(..., min_length=8, max_length=20, pattern=r"^\+?[0-9]{8,15}$", example="+25761234567")
+    amount: Decimal = Field(..., gt=Decimal("0"), le=Decimal("100000000"), example=100.00)
+
+    @field_validator("country_destination")
+    @classmethod
+    def validate_country_destination(cls, value: str) -> str:
+        raw = (value or "").strip()
+        allowed = {
+            "burundi": "Burundi",
+            "rwanda": "Rwanda",
+            "drc": "DRC",
+            "rd congo": "DRC",
+            "rdc": "DRC",
+            "democratic republic of congo": "DRC",
+        }
+        mapped = allowed.get(raw.lower())
+        if not mapped:
+            raise ValueError("country_destination invalide (Burundi, Rwanda, DRC)")
+        return mapped
 
 
 class ExternalTransferCreate(ExternalTransferBase):
