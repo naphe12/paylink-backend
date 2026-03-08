@@ -227,7 +227,12 @@ async def forgot_password(
     Ce lien est valable pendant 1 heure.
     """
 
-    background_tasks.add_task(send_email, to=user.email, subject=subject, body=body_text)
+    background_tasks.add_task(
+        send_email,
+        to=user.email,
+        subject=subject,
+        body_html=body_text.replace("\n", "<br>"),
+    )
     return {"message": "Un email de réinitialisation a été envoyé."}
 
 
