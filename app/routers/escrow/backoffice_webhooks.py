@@ -1,14 +1,29 @@
+from decimal import Decimal
+from uuid import uuid4
+
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_user_db
+from app.models.escrow_order import EscrowOrder
 from app.models.users import Users
+from app.schemas.escrow_chain import ChainDepositWebhook
 from app.services.audit_service import audit_log
 from app.services.escrow_webhook_service import enqueue_webhook_retry
+from app.services.escrow_webhook_service import process_usdc_webhook
 
 router = APIRouter(prefix="/backoffice/webhooks", tags=["Backoffice - Webhooks"])
+
+
+class SandboxUsdcWebhookIn(BaseModel):
+    order_id: str
+    amount: Decimal = Field(gt=Decimal("0"))
+    confirmations: int = Field(default=3, ge=0)
+    tx_hash: str | None = None
+    from_address: str | None = None
 
 
 @router.get("/providers")
@@ -205,3 +220,50 @@ async def retry_webhook_log(
     )
     await db.commit()
     return {"status": "QUEUED_RETRY", "source_log_id": int(log_id), "event_type": str(event_type), "tx_hash": tx_hash}
+
+
+@router.post("/sandbox/usdc")
+async def sandbox_usdc_webhook(
+    payload: SandboxUsdcWebhookIn,
+    db: AsyncSession = Depends(get_db),
+    user: Users = Depends(get_current_user_db),
+):
+    role = str(getattr(user, "role", "")).lower()
+    if role not in {"admin", "operator"}:
+        raise HTTPException(status_code=403, detail="Acces reserve admin/operator")
+
+    order = await db.get(EscrowOrder, payload.order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order introuvable")
+
+    flags = [str(f) for f in list(getattr(order, "flags", []) or [])]
+    if "SANDBOX" not in flags:
+        raise HTTPException(status_code=400, detail="Action reservee aux ordres escrow sandbox")
+    if not order.deposit_address:
+        raise HTTPException(status_code=400, detail="Order sans deposit_address")
+
+    tx_hash = (payload.tx_hash or f"0xsandbox{uuid4().hex}").strip()
+    from_address = (payload.from_address or "0x000000000000000000000000000000000000dEaD").strip()
+
+    chain_payload = ChainDepositWebhook(
+        network=order.deposit_network,
+        tx_hash=tx_hash,
+        from_address=from_address,
+        to_address=str(order.deposit_address),
+        amount=payload.amount,
+        confirmations=payload.confirmations,
+    )
+
+    result = await process_usdc_webhook(
+        db,
+        chain_payload,
+        ip="backoffice",
+        user_agent="backoffice-sandbox-usdc",
+    )
+    await db.commit()
+    return {
+        "status": "OK",
+        "result": result,
+        "payload": chain_payload.model_dump(mode="json"),
+        "order_id": str(order.id),
+    }
