@@ -12,6 +12,7 @@ class P2PMatchingEngine:
         token: TokenCode,
         side: OfferSide,
         token_amount,
+        exclude_user_id=None,
     ) -> P2POffer | None:
         # BUY order wants to buy => match a SELL offer.
         # SELL order wants to sell => match a BUY offer.
@@ -26,6 +27,8 @@ class P2PMatchingEngine:
                 P2POffer.available_amount >= token_amount,
             )
         )
+        if exclude_user_id is not None:
+            stmt = stmt.where(P2POffer.user_id != exclude_user_id)
 
         # If user buys, prefer the lowest price.
         # If user sells, prefer the highest price.

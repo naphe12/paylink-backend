@@ -394,6 +394,7 @@ async def market_order(
             token=token,
             side=side,
             token_amount=token_amount,
+            exclude_user_id=me.user_id,
         )
         if offer:
             created = await P2PTradeService.create_trade(
