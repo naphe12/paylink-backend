@@ -514,18 +514,21 @@ async def sandbox_crypto_locked(
 
         if trade.status == TradeStatus.CRYPTO_LOCKED:
             return trade
-        if trade.status != TradeStatus.AWAITING_CRYPTO:
-            raise HTTPException(400, f"Trade not in AWAITING_CRYPTO (current={trade.status.value})")
+        if trade.status not in (TradeStatus.AWAITING_CRYPTO, TradeStatus.EXPIRED):
+            raise HTTPException(400, f"Trade not in AWAITING_CRYPTO/EXPIRED (current={trade.status.value})")
 
         trade.escrow_tx_hash = (data.escrow_tx_hash if data and data.escrow_tx_hash else f"0xsandbox{uuid4().hex}")
         trade.escrow_locked_at = datetime.now(timezone.utc)
+        note = "Sandbox forced crypto lock"
+        if trade.status == TradeStatus.EXPIRED:
+            note = "Sandbox forced crypto lock (override from EXPIRED)"
         await set_trade_status(
             db,
             trade,
             TradeStatus.CRYPTO_LOCKED,
             actor_user_id=None,
             actor_role="ADMIN",
-            note="Sandbox forced crypto lock",
+            note=note,
         )
         await db.commit()
         await db.refresh(trade)
