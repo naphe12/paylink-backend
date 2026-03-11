@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.models.fx_custom_rates import FxCustomRates
+from app.models.general_settings import GeneralSettings
 
 router = APIRouter(prefix="/api/exchange-rate", tags=["exchange"])
 
@@ -17,6 +18,20 @@ FEE_RULES = {
     "CDF": 5.0,
     "KES": 6.8,
 }
+
+
+async def _resolve_fee_percent(db: AsyncSession, destination: str) -> float:
+    """
+    Priority:
+    1) General settings charge (%)
+    2) Legacy destination-based fallback table
+    """
+    settings_row = await db.scalar(
+        select(GeneralSettings).order_by(GeneralSettings.created_at.desc())
+    )
+    if settings_row and getattr(settings_row, "charge", None) is not None:
+        return float(settings_row.charge)
+    return float(FEE_RULES.get(destination, 2.5))
 
 @router.get("/")
 async def get_exchange_rate(
@@ -36,6 +51,7 @@ async def get_exchange_rate(
         )
     )
     custom = result.scalar_one_or_none()
+    fee_percent = await _resolve_fee_percent(db, destination)
 
     # 1️⃣ Taux interne (prioritaire)
     if custom:
@@ -43,7 +59,7 @@ async def get_exchange_rate(
             "origin": origin,
             "destination": destination,
             "rate": float(custom.rate),
-            "fees_percent": FEE_RULES.get(destination, 2.5),
+            "fees_percent": fee_percent,
             "source": custom.source,
             "timestamp": custom.updated_at.isoformat() if custom.updated_at else None
         }
@@ -60,7 +76,7 @@ async def get_exchange_rate(
         raise HTTPException(status_code=400, detail="Devise non supportée")
 
     rate = data["info"]["rate"]
-    fee = FEE_RULES.get(destination, 2.5)
+    fee = fee_percent
 
     return {
         "origin": origin,
