@@ -133,6 +133,9 @@ async def list_orders(
         return [_order_row_to_dict(r) for r in rows.mappings().all()]
     except Exception:
         # Fallback for environments where schema/column types differ.
+        # The first SQL attempt may leave the transaction in aborted state.
+        # Rollback before executing fallback ORM queries.
+        await db.rollback()
         q = select(EscrowOrder)
         if status_filter:
             q = q.where(EscrowOrder.status == status_filter)
@@ -234,6 +237,9 @@ async def get_order_detail(
     except HTTPException:
         raise
     except Exception:
+        # The first SQL attempt may leave the transaction in aborted state.
+        # Rollback before executing fallback ORM query.
+        await db.rollback()
         result = await db.execute(select(EscrowOrder).where(EscrowOrder.id == order_id))
         o = result.scalar_one_or_none()
         if not o:
