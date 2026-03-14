@@ -264,7 +264,7 @@ async def _notify_external_transfer(
             await send_transaction_emails(
                 db,
                 initiator=current_user,
-                subject=f"Reçu PayLink {transfer.reference_code}",
+                subject=f"Reçu PesaPaid {transfer.reference_code}",
                 template="external_transfer_receipt.html",
                 recipients=[current_user.email],
                 client_name=current_user.full_name or "",

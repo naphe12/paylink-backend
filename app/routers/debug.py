@@ -14,7 +14,7 @@ async def send_email():
         raise HTTPException(status_code=500, detail="BREVO_API_KEY is not configured")
 
     payload = {
-        "sender": {"email": "adolphe.nahimana@gmail.com", "name": "PayLink App"},
+        "sender": {"email": "adolphe.nahimana@gmail.com", "name": "PesaPaid App"},
         "to": [{"email": "naphe12@yahoo.fr"}],
         "subject": "Test Brevo",
         "htmlContent": "<h1>Email envoye via Brevo</h1>",

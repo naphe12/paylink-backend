@@ -15,7 +15,7 @@ from app.models.telegram_user import TelegramUser
 from app.models.transaction_email_recipients import TransactionEmailRecipient
 from app.services.mailjet_service import MailjetEmailService
 from app.services.notifiers import EmailNotifier, NotificationMessage
-from app.services.paylink_ledger_service import PaylinkLedgerService
+from app.services.PesaPaid_ledger_service import PesaPaidLedgerService
 from app.services.telegram import send_message as send_telegram_message
 
 logger = logging.getLogger(__name__)
@@ -72,7 +72,7 @@ def _build_assignment_email_html(
     )
     return (
         "<div>"
-        "<p>Une demande escrow PayLink vient d'etre detectee apres depot USD.</p>"
+        "<p>Une demande escrow PesaPaid vient d'etre detectee apres depot USD.</p>"
         "<p>Merci de preparer le paiement BIF correspondant.</p>"
         f"{rows_html}"
         "</div>"
@@ -97,7 +97,7 @@ async def _persist_assignment_notification(
             await db.execute(
                 text(
                     """
-                    INSERT INTO paylink.notifications (user_id, channel, subject, message, metadata)
+                    INSERT INTO PesaPaid.notifications (user_id, channel, subject, message, metadata)
                     VALUES (
                         CAST(:uid AS uuid),
                         'PAYOUT_ASSIGNMENT',
@@ -189,7 +189,7 @@ async def _send_assignment_email(
                     f"Nouvelle affectation payout de {amount_bif} BIF "
                     f"(order {order_id}, assignment {assignment_id}, agent {agent_id})."
                 ),
-                client_name=client_name or "Client PayLink",
+                client_name=client_name or "Client PesaPaid",
                 client_email=client_email or "-",
                 client_phone=client_phone or "-",
                 amount=amount_usd_label,
@@ -197,7 +197,7 @@ async def _send_assignment_email(
                 payout_amount=f"{amount_bif} BIF",
                 receiver_name=recipient_name or "-",
                 receiver_phone=recipient_phone or "-",
-                partner_name=f"Escrow PayLink ({payout_method or 'PAYOUT'})",
+                partner_name=f"Escrow PesaPaid ({payout_method or 'PAYOUT'})",
                 country="Burundi",
                 transfer_id=order_id,
                 dashboard_url=dashboard_url,
@@ -321,7 +321,7 @@ async def assign_agent_and_notify(order_id: str, amount_bif: float | Decimal) ->
                     u.email AS client_email,
                     u.phone_e164 AS client_phone
                 FROM escrow.orders o
-                LEFT JOIN paylink.users u ON u.user_id = o.user_id
+                LEFT JOIN PesaPaid.users u ON u.user_id = o.user_id
                 WHERE o.id = CAST(:oid AS uuid)
                 LIMIT 1
                 """
@@ -348,7 +348,7 @@ async def assign_agent_and_notify(order_id: str, amount_bif: float | Decimal) ->
             text(
                 """
                 SELECT id, agent_id, status
-                FROM paylink.assignments
+                FROM PesaPaid.assignments
                 WHERE order_id = CAST(:oid AS uuid)
                 ORDER BY assigned_at DESC NULLS LAST, id DESC
                 LIMIT 1
@@ -389,7 +389,7 @@ async def assign_agent_and_notify(order_id: str, amount_bif: float | Decimal) ->
                     user_id,
                     daily_limit_bif,
                     daily_used_bif
-                FROM paylink.agents
+                FROM PesaPaid.agents
                 WHERE active = true
                   AND (
                     COALESCE(daily_limit_bif, 0) = 0
@@ -413,7 +413,7 @@ async def assign_agent_and_notify(order_id: str, amount_bif: float | Decimal) ->
         agent_email = str(agent_row["email"]) if agent_row.get("email") else None
 
         # Reserve BIF liquidity in ledger.
-        await PaylinkLedgerService.post_journal(
+        await PesaPaidLedgerService.post_journal(
             db,
             tx_id=uuid.uuid4(),
             description="Reserve BIF liquidity for payout assignment",
@@ -442,7 +442,7 @@ async def assign_agent_and_notify(order_id: str, amount_bif: float | Decimal) ->
         await db.execute(
             text(
                 """
-                INSERT INTO paylink.assignments (id, order_id, agent_id, amount_bif, status)
+                INSERT INTO PesaPaid.assignments (id, order_id, agent_id, amount_bif, status)
                 VALUES (
                     CAST(:id AS uuid),
                     CAST(:oid AS uuid),
@@ -458,7 +458,7 @@ async def assign_agent_and_notify(order_id: str, amount_bif: float | Decimal) ->
         await db.execute(
             text(
                 """
-                UPDATE paylink.agents
+                UPDATE PesaPaid.agents
                 SET daily_used_bif = COALESCE(daily_used_bif, 0) + :amt,
                     last_assigned_at = now()
                 WHERE agent_id = CAST(:aid AS uuid)

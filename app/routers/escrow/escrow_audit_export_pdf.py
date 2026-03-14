@@ -47,7 +47,7 @@ async def export_pdf(
         o.deposit_tx_hash,
         o.created_at
       FROM escrow.orders o
-      LEFT JOIN paylink.users u ON u.user_id = o.user_id
+      LEFT JOIN PesaPaid.users u ON u.user_id = o.user_id
       WHERE (:status IS NULL OR o.status::text = :status)
         AND (:min_risk IS NULL OR COALESCE(o.risk_score, 0) >= :min_risk)
         AND (:created_from IS NULL OR o.created_at >= :created_from)
@@ -70,7 +70,7 @@ async def export_pdf(
     pdf.set_auto_page_break(auto=True, margin=12)
     pdf.add_page()
     pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(0, 8, "PayLink Escrow Audit Report", ln=1)
+    pdf.cell(0, 8, "PesaPaid Escrow Audit Report", ln=1)
     pdf.set_font("Helvetica", "", 10)
     pdf.cell(0, 7, f"Filter status: {status_filter or 'ALL'}", ln=1)
     pdf.cell(0, 7, f"Filter min_risk: {min_risk if min_risk is not None else 'N/A'}", ln=1)

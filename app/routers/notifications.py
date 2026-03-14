@@ -34,7 +34,7 @@ class TestPushPayload(BaseModel):
 async def test_email():
     send_email(
         to="tonemail@gmail.com",
-        subject="Test d'envoi PayLink",
+        subject="Test d'envoi PesaPaid",
         template_name="payment_confirmation.html",
         user_name="Adolphe",
         amount="250.00",

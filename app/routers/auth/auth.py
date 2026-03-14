@@ -87,11 +87,11 @@ async def register_user(
         expires_delta=expires,
     )
     verify_link = f"{settings.FRONTEND_URL}/auth/verify-email?token={verify_token}"
-    subject = "Confirmez votre adresse email PayLink"
+    subject = "Confirmez votre adresse email PesaPaid"
     verification_body = f"""
     Bonjour {user.full_name},
 
-    Merci de vous être inscrit sur PayLink. Cliquez sur le lien ci-dessous pour vérifier votre adresse email :
+    Merci de vous être inscrit sur PesaPaid. Cliquez sur le lien ci-dessous pour vérifier votre adresse email :
     <a href="{verify_link}">Vérifier mon adresse</a>
 
     Ce lien est valide 24 heures.
@@ -218,7 +218,7 @@ async def forgot_password(
     )
 
     reset_link = f"{settings.FRONTEND_URL}/auth/reset-password?token={reset_token}"
-    subject = "Reinitialisation de votre mot de passe PayLink"
+    subject = "Reinitialisation de votre mot de passe PesaPaid"
     plain_text = (
         f"Bonjour {user.full_name or ''},\n\n"
         "Pour reinitialiser votre mot de passe, cliquez sur le lien suivant :\n"

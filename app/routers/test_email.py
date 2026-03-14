@@ -8,7 +8,7 @@ def test_mailjet():
     mailer = MailjetEmailService()
     return mailer.send_email(
         to_email="adolphe.nahimana@gmail.com",
-        subject="Test Mailjet - PayLink",
+        subject="Test Mailjet - PesaPaid",
         text="Ceci est un test d'envoi d'email depuis FastAPI + Railway avec Mailjet API."
     )
 

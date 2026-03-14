@@ -955,7 +955,7 @@ async def send_money(
         sender_wallet=sender_wallet.wallet_id,
         receiver_wallet=receiver_wallet.wallet_id,
         initiated_by=current_user.user_id,
-        description=tx.description or "Transfert PayLink",
+        description=tx.description or "Transfert PesaPaid",
         channel="internal",
         status="succeeded"
     )

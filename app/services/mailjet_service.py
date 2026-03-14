@@ -62,7 +62,7 @@ class MailjetEmailService:
 
         # Ajoute un texte brut minimal si seul HTML est fourni (ameliorer la deliverabilite)
         if html_content and text is None:
-            text = "Notification PayLink"
+            text = "Notification PesaPaid"
 
         if self.provider == "brevo":
             payload = {

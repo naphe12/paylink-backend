@@ -158,7 +158,7 @@ async def list_loan_products(
     current_user: Users = Depends(get_current_user_db),
 ):
     params = {}
-    sql = "SELECT * FROM paylink.loan_products"
+    sql = "SELECT * FROM PesaPaid.loan_products"
     if product_type:
         sql += " WHERE product_type = :ptype"
         params["ptype"] = product_type
@@ -187,7 +187,7 @@ async def apply_for_short_term_loan(
     if payload.product_id:
         product_row = (
             await db.execute(
-                text("SELECT * FROM paylink.loan_products WHERE product_id = :pid"),
+                text("SELECT * FROM PesaPaid.loan_products WHERE product_id = :pid"),
                 {"pid": str(payload.product_id)},
             )
         ).mappings().first()
@@ -397,7 +397,7 @@ async def disburse_loan(
     if loan.product_id:
         prod_row = (
             await db.execute(
-                text("SELECT require_documents FROM paylink.loan_products WHERE product_id = :pid"),
+                text("SELECT require_documents FROM PesaPaid.loan_products WHERE product_id = :pid"),
                 {"pid": str(loan.product_id)},
             )
         ).mappings().first()
@@ -640,7 +640,7 @@ async def remind_loan_borrower(
         f"Rappel échéance: merci de régler votre crédit {loan.loan_id} "
         f"avant le {next_installment.due_date.isoformat()}"
         if next_installment and next_installment.due_date
-        else "Merci de régulariser votre crédit PayLink."
+        else "Merci de régulariser votre crédit PesaPaid."
     )
     message = payload.message or auto_message
 
@@ -648,7 +648,7 @@ async def remind_loan_borrower(
         Notifications(
             user_id=borrower.user_id,
             channel="loan_reminder",
-            subject="Rappel remboursement PayLink",
+            subject="Rappel remboursement PesaPaid",
             message=message,
             metadata_={
                 "loan_id": str(loan.loan_id),

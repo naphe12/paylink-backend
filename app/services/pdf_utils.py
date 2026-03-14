@@ -26,7 +26,7 @@ def build_external_transfer_receipt(payload: Mapping[str, Any]) -> bytes:
     pdf.rect(0, 0, 210, 36, "F")
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 18)
-    pdf.cell(0, 12, "PayLink - Recu de transfert externe", ln=True, align="C")
+    pdf.cell(0, 12, "PesaPaid - Recu de transfert externe", ln=True, align="C")
     pdf.set_font("Helvetica", "", 11)
     pdf.cell(0, 8, "Document genere automatiquement - veuillez conserver ce recu", ln=True, align="C")
     pdf.ln(6)
@@ -91,7 +91,7 @@ def build_external_transfer_receipt(payload: Mapping[str, Any]) -> bytes:
     pdf.multi_cell(
         0,
         6,
-        "Ce recu atteste de la demande de transfert externe initiee depuis PayLink. "
+        "Ce recu atteste de la demande de transfert externe initiee depuis PesaPaid. "
         "Merci de conserver ce document pour vos archives.",
     )
 
