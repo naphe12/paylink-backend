@@ -15,7 +15,7 @@ from app.models.telegram_user import TelegramUser
 from app.models.transaction_email_recipients import TransactionEmailRecipient
 from app.services.mailjet_service import MailjetEmailService
 from app.services.notifiers import EmailNotifier, NotificationMessage
-from app.services.PesaPaid_ledger_service import PesaPaidLedgerService
+from app.services.paylink_ledger_service import PaylinkLedgerService
 from app.services.telegram import send_message as send_telegram_message
 
 logger = logging.getLogger(__name__)
@@ -413,7 +413,7 @@ async def assign_agent_and_notify(order_id: str, amount_bif: float | Decimal) ->
         agent_email = str(agent_row["email"]) if agent_row.get("email") else None
 
         # Reserve BIF liquidity in ledger.
-        await PesaPaidLedgerService.post_journal(
+        await PaylinkLedgerService.post_journal(
             db,
             tx_id=uuid.uuid4(),
             description="Reserve BIF liquidity for payout assignment",
