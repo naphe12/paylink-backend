@@ -397,7 +397,7 @@ app.add_middleware(RateLimitMiddleware, redis_url=settings.REDIS_URL)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_origin_regex=r"https://.*\.up\.railway\.app",
+    allow_origin_regex=r"(https://.*\.up\.railway\.app|http://localhost(:\d+)?|http://127\.0\.0\.1(:\d+)?)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
