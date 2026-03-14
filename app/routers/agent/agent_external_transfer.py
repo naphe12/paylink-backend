@@ -208,7 +208,7 @@ async def _close_external_transfer_core(
         Montant envoye : {transfer.amount} {transfer.currency}
         Beneficiaire : {transfer.recipient_name} ({transfer.recipient_phone})
 
-        Merci d'utiliser PesaPaid.
+        Merci d'utiliser paylink.
         """
         await send_transaction_emails(
             db,
@@ -298,7 +298,7 @@ async def update_external_transfer_status(
         - Partenaire : {transfer.partner_name}
         - Pays destination : {transfer.country_destination}
 
-        Merci d'utiliser PesaPaid.
+        Merci d'utiliser paylink.
         """
     else:
         msg = f"""

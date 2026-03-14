@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     # -------------------------------------------------
     # JWT (compatibility for existing auth dependencies)
     # -------------------------------------------------
-    SECRET_KEY: str = "secret-PesaPaid-key"
+    SECRET_KEY: str = "secret-paylink-key"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 240
 
@@ -62,8 +62,8 @@ class Settings(BaseSettings):
     POLYGON_CHAIN_ID: int = 137
     USDC_CONTRACT_ADDRESS: str = "0x0000000000000000000000000000000000000000"
     USDT_CONTRACT_ADDRESS: str = "0x0000000000000000000000000000000000000000"
-    PesaPaid_USDC_DEPOSIT_ADDRESS: str = "0x0000000000000000000000000000000000000000"
-    PesaPaid_USDT_DEPOSIT_ADDRESS: str = "0x0000000000000000000000000000000000000000"
+    PAYLINK_USDC_DEPOSIT_ADDRESS: str = "0x0000000000000000000000000000000000000000"
+    PAYLINK_USDT_DEPOSIT_ADDRESS: str = "0x0000000000000000000000000000000000000000"
     # -------------------------------------------------
     # ALERTING / NOTIFICATIONS
     # -------------------------------------------------
@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     # -------------------------------------------------
     # EMAIL SMTP
     # -------------------------------------------------
-    MAIL_FROM: str = "noreply@PesaPaid.com"
+    MAIL_FROM: str = "noreply@paylink.com"
     MAIL_FROM_NAME: str = "PesaPaid"
     SMTP_HOST: str = "smtp.mailgun.org"
     SMTP_PORT: int = 587

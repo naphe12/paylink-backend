@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
 
     # Config email
-    MAIL_FROM: str = "no-reply@PesaPaid.app"
+    MAIL_FROM: str = "no-reply@paylink.app"
     SMTP_HOST: str = os.getenv("MAIL_SERVER", "smtp.gmail.com")
     SMTP_PORT: int = int(os.getenv("MAIL_PORT", "587"))
     SMTP_USER: str = os.getenv("MAIL_USERNAME", "")
@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     LEDGER_ACCOUNT_CREDIT_LINE: str = os.getenv("LEDGER_ACCOUNT_CREDIT_LINE", "LEDGER::CREDIT_LINE")
     MAILJET_API_KEY: str = os.getenv("MAILJET_API_KEY", "")
     MAILJET_SECRET_KEY: str = os.getenv("MAILJET_SECRET_KEY", "")
-    MAIL_FROM: str = os.getenv("MAIL_FROM", "no-reply@PesaPaid.app")
+    MAIL_FROM: str = os.getenv("MAIL_FROM", "no-reply@paylink.app")
     MAIL_FROM_NAME: str = os.getenv("MAIL_FROM_NAME", "PesaPaid")
     BREVO_API_KEY:str= os.getenv("BREVO_API_KEY", "")
     STRIPE_WEBHOOK_SECRET:str= os.getenv("STRIPE_WEBHOOK_SECRET", "")

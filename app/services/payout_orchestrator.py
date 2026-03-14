@@ -97,7 +97,7 @@ async def _persist_assignment_notification(
             await db.execute(
                 text(
                     """
-                    INSERT INTO PesaPaid.notifications (user_id, channel, subject, message, metadata)
+                    INSERT INTO paylink.notifications (user_id, channel, subject, message, metadata)
                     VALUES (
                         CAST(:uid AS uuid),
                         'PAYOUT_ASSIGNMENT',
@@ -321,7 +321,7 @@ async def assign_agent_and_notify(order_id: str, amount_bif: float | Decimal) ->
                     u.email AS client_email,
                     u.phone_e164 AS client_phone
                 FROM escrow.orders o
-                LEFT JOIN PesaPaid.users u ON u.user_id = o.user_id
+                LEFT JOIN paylink.users u ON u.user_id = o.user_id
                 WHERE o.id = CAST(:oid AS uuid)
                 LIMIT 1
                 """
@@ -348,7 +348,7 @@ async def assign_agent_and_notify(order_id: str, amount_bif: float | Decimal) ->
             text(
                 """
                 SELECT id, agent_id, status
-                FROM PesaPaid.assignments
+                FROM paylink.assignments
                 WHERE order_id = CAST(:oid AS uuid)
                 ORDER BY assigned_at DESC NULLS LAST, id DESC
                 LIMIT 1
@@ -389,7 +389,7 @@ async def assign_agent_and_notify(order_id: str, amount_bif: float | Decimal) ->
                     user_id,
                     daily_limit_bif,
                     daily_used_bif
-                FROM PesaPaid.agents
+                FROM paylink.agents
                 WHERE active = true
                   AND (
                     COALESCE(daily_limit_bif, 0) = 0
@@ -442,7 +442,7 @@ async def assign_agent_and_notify(order_id: str, amount_bif: float | Decimal) ->
         await db.execute(
             text(
                 """
-                INSERT INTO PesaPaid.assignments (id, order_id, agent_id, amount_bif, status)
+                INSERT INTO paylink.assignments (id, order_id, agent_id, amount_bif, status)
                 VALUES (
                     CAST(:id AS uuid),
                     CAST(:oid AS uuid),
@@ -458,7 +458,7 @@ async def assign_agent_and_notify(order_id: str, amount_bif: float | Decimal) ->
         await db.execute(
             text(
                 """
-                UPDATE PesaPaid.agents
+                UPDATE paylink.agents
                 SET daily_used_bif = COALESCE(daily_used_bif, 0) + :amt,
                     last_assigned_at = now()
                 WHERE agent_id = CAST(:aid AS uuid)

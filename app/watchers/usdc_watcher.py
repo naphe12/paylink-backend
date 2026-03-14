@@ -6,7 +6,7 @@ from web3 import Web3
 from app.config import settings
 
 USDC_DECIMALS = 6
-ESCROW_WEBHOOK_URL = "https://api.pesapaid.com/escrow/webhooks/usdc"
+ESCROW_WEBHOOK_URL = "https://api.paylink.com/escrow/webhooks/usdc"
 
 w3 = Web3(Web3.HTTPProvider(settings.POLYGON_RPC_URL))
 USDC_ADDRESS = Web3.to_checksum_address(settings.USDC_CONTRACT_ADDRESS)

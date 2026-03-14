@@ -41,16 +41,16 @@ def normalize_address(address: str) -> str:
     return normalized
 
 
-def get_PesaPaid_deposit_address(token_symbol: str, network: str) -> str:
+def get_paylink_deposit_address(token_symbol: str, network: str) -> str:
     normalized_token = normalize_wallet_token(token_symbol)
     normalized_network = normalize_network(network)
     if normalized_network != "POLYGON":
         raise ValueError("Only POLYGON network is supported for now")
 
     if normalized_token == "USDC":
-        address = getattr(settings, "PesaPaid_USDC_DEPOSIT_ADDRESS", "") or ""
+        address = getattr(settings, "PAYLINK_USDC_DEPOSIT_ADDRESS", "") or ""
     else:
-        address = getattr(settings, "PesaPaid_USDT_DEPOSIT_ADDRESS", "") or ""
+        address = getattr(settings, "PAYLINK_USDT_DEPOSIT_ADDRESS", "") or ""
 
     normalized_address = normalize_address(address)
     if normalized_address == "0x0000000000000000000000000000000000000000":
@@ -62,12 +62,12 @@ async def ensure_wallet_crypto_deposit_tables(db: AsyncSession) -> None:
     await db.execute(
         text(
             """
-            CREATE TABLE IF NOT EXISTS PesaPaid.wallet_crypto_deposit_requests (
+            CREATE TABLE IF NOT EXISTS paylink.wallet_crypto_deposit_requests (
               request_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-              user_id uuid NOT NULL REFERENCES PesaPaid.users(user_id) ON DELETE CASCADE,
+              user_id uuid NOT NULL REFERENCES paylink.users(user_id) ON DELETE CASCADE,
               token_symbol text NOT NULL,
               network text NOT NULL,
-              PesaPaid_deposit_address text NOT NULL,
+              paylink_deposit_address text NOT NULL,
               expected_amount numeric(24, 8),
               status text NOT NULL DEFAULT 'PENDING',
               expires_at timestamptz,
@@ -85,17 +85,17 @@ async def ensure_wallet_crypto_deposit_tables(db: AsyncSession) -> None:
         text(
             """
             CREATE INDEX IF NOT EXISTS idx_wallet_crypto_deposit_requests_pending
-            ON PesaPaid.wallet_crypto_deposit_requests (token_symbol, network, status, created_at)
+            ON paylink.wallet_crypto_deposit_requests (token_symbol, network, status, created_at)
             """
         )
     )
     await db.execute(
         text(
             """
-            CREATE TABLE IF NOT EXISTS PesaPaid.wallet_crypto_deposits (
+            CREATE TABLE IF NOT EXISTS paylink.wallet_crypto_deposits (
               deposit_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-              user_id uuid NOT NULL REFERENCES PesaPaid.users(user_id) ON DELETE CASCADE,
-              request_id uuid REFERENCES PesaPaid.wallet_crypto_deposit_requests(request_id) ON DELETE SET NULL,
+              user_id uuid NOT NULL REFERENCES paylink.users(user_id) ON DELETE CASCADE,
+              request_id uuid REFERENCES paylink.wallet_crypto_deposit_requests(request_id) ON DELETE SET NULL,
               token_symbol text NOT NULL,
               network text NOT NULL,
               deposit_address text NOT NULL,
@@ -126,7 +126,7 @@ async def create_wallet_deposit_request(
     await ensure_wallet_crypto_deposit_tables(db)
     normalized_token = normalize_wallet_token(token_symbol)
     normalized_network = normalize_network(network)
-    PesaPaid_deposit_address = get_PesaPaid_deposit_address(normalized_token, normalized_network)
+    paylink_deposit_address = get_paylink_deposit_address(normalized_token, normalized_network)
     normalized_expected_amount = None
     if expected_amount is not None:
         normalized_expected_amount = Decimal(str(expected_amount))
@@ -139,16 +139,16 @@ async def create_wallet_deposit_request(
         await db.execute(
             text(
                 """
-                INSERT INTO PesaPaid.wallet_crypto_deposit_requests (
-                  user_id, token_symbol, network, PesaPaid_deposit_address,
+                INSERT INTO paylink.wallet_crypto_deposit_requests (
+                  user_id, token_symbol, network, paylink_deposit_address,
                   expected_amount, status, expires_at, metadata
                 )
                 VALUES (
-                  CAST(:user_id AS uuid), :token_symbol, :network, :PesaPaid_deposit_address,
+                  CAST(:user_id AS uuid), :token_symbol, :network, :paylink_deposit_address,
                   :expected_amount, 'PENDING', now() + make_interval(mins => :ttl_minutes),
                   CAST(:metadata AS jsonb)
                 )
-                RETURNING request_id, user_id, token_symbol, network, PesaPaid_deposit_address,
+                RETURNING request_id, user_id, token_symbol, network, paylink_deposit_address,
                           expected_amount, status, expires_at, tx_hash, log_index,
                           matched_amount, created_at, updated_at
                 """
@@ -157,7 +157,7 @@ async def create_wallet_deposit_request(
                 "user_id": str(user_id),
                 "token_symbol": normalized_token,
                 "network": normalized_network,
-                "PesaPaid_deposit_address": PesaPaid_deposit_address,
+                "paylink_deposit_address": paylink_deposit_address,
                 "expected_amount": normalized_expected_amount,
                 "ttl_minutes": int(ttl_minutes),
                 "metadata": json.dumps({"source": "wallet_crypto_deposit_request"}),
@@ -172,7 +172,7 @@ async def expire_wallet_deposit_requests(db: AsyncSession) -> None:
     await db.execute(
         text(
             """
-            UPDATE PesaPaid.wallet_crypto_deposit_requests
+            UPDATE paylink.wallet_crypto_deposit_requests
             SET status = 'EXPIRED',
                 updated_at = now()
             WHERE status = 'PENDING'
@@ -193,7 +193,7 @@ async def cancel_wallet_deposit_request(
     await db.execute(
         text(
             """
-            UPDATE PesaPaid.wallet_crypto_deposit_requests
+            UPDATE paylink.wallet_crypto_deposit_requests
             SET status = 'CANCELLED',
                 updated_at = now()
             WHERE request_id = CAST(:request_id AS uuid)
@@ -220,16 +220,16 @@ async def get_wallet_deposit_instruction(
 
     normalized_token = normalize_wallet_token(token_symbol)
     normalized_network = normalize_network(network)
-    PesaPaid_deposit_address = get_PesaPaid_deposit_address(normalized_token, normalized_network)
+    paylink_deposit_address = get_paylink_deposit_address(normalized_token, normalized_network)
 
     row = (
         await db.execute(
             text(
                 """
-                SELECT request_id, user_id, token_symbol, network, PesaPaid_deposit_address,
+                SELECT request_id, user_id, token_symbol, network, paylink_deposit_address,
                        expected_amount, status, expires_at, tx_hash, log_index,
                        matched_amount, created_at, updated_at
-                FROM PesaPaid.wallet_crypto_deposit_requests
+                FROM paylink.wallet_crypto_deposit_requests
                 WHERE user_id = CAST(:user_id AS uuid)
                   AND token_symbol = :token_symbol
                   AND network = :network
@@ -250,7 +250,7 @@ async def get_wallet_deposit_instruction(
         "user_id": str(user_id),
         "token_symbol": normalized_token,
         "network": normalized_network,
-        "PesaPaid_deposit_address": PesaPaid_deposit_address,
+        "paylink_deposit_address": paylink_deposit_address,
         "has_pending_request": row is not None,
         "active_request": _serialize_request_row(row) if row else None,
     }
@@ -267,10 +267,10 @@ async def list_wallet_deposit_requests(
 
     params = {"user_id": str(user_id)}
     sql = """
-        SELECT request_id, user_id, token_symbol, network, PesaPaid_deposit_address,
+        SELECT request_id, user_id, token_symbol, network, paylink_deposit_address,
                expected_amount, status, expires_at, tx_hash, log_index,
                matched_amount, created_at, updated_at
-        FROM PesaPaid.wallet_crypto_deposit_requests
+        FROM paylink.wallet_crypto_deposit_requests
         WHERE user_id = CAST(:user_id AS uuid)
     """
     if token_symbol:
@@ -290,7 +290,7 @@ def _serialize_request_row(row) -> dict | None:
         "user_id": str(row["user_id"]),
         "token_symbol": row["token_symbol"],
         "network": row["network"],
-        "PesaPaid_deposit_address": row["PesaPaid_deposit_address"],
+        "paylink_deposit_address": row["paylink_deposit_address"],
         "expected_amount": float(row["expected_amount"]) if row["expected_amount"] is not None else None,
         "status": row["status"],
         "expires_at": row["expires_at"].isoformat() if row["expires_at"] else None,
@@ -321,13 +321,13 @@ async def _find_matching_request(
         await db.execute(
             text(
                 """
-                SELECT request_id, user_id, token_symbol, network, PesaPaid_deposit_address,
+                SELECT request_id, user_id, token_symbol, network, paylink_deposit_address,
                        expected_amount, status, expires_at, tx_hash, log_index,
                        matched_amount, created_at, updated_at
-                FROM PesaPaid.wallet_crypto_deposit_requests
+                FROM paylink.wallet_crypto_deposit_requests
                 WHERE token_symbol = :token_symbol
                   AND network = :network
-                  AND lower(PesaPaid_deposit_address) = :deposit_address
+                  AND lower(paylink_deposit_address) = :deposit_address
                   AND status = 'PENDING'
                 ORDER BY created_at DESC
                 """
@@ -404,8 +404,8 @@ async def process_wallet_crypto_webhook(
     if normalized_amount <= 0:
         raise ValueError("Amount must be > 0")
 
-    PesaPaid_deposit_address = get_PesaPaid_deposit_address(normalized_token, normalized_network)
-    if normalized_address != PesaPaid_deposit_address:
+    paylink_deposit_address = get_paylink_deposit_address(normalized_token, normalized_network)
+    if normalized_address != paylink_deposit_address:
         raise ValueError("Deposit not sent to PesaPaid deposit address")
 
     request_row = await _find_matching_request(
@@ -423,7 +423,7 @@ async def process_wallet_crypto_webhook(
             await db.execute(
                 text(
                     """
-                    INSERT INTO PesaPaid.wallet_crypto_deposits (
+                    INSERT INTO paylink.wallet_crypto_deposits (
                       user_id, request_id, token_symbol, network, deposit_address, tx_hash,
                       log_index, from_address, amount, confirmations, status, metadata
                     )
@@ -472,7 +472,7 @@ async def process_wallet_crypto_webhook(
     await db.execute(
         text(
             """
-            UPDATE PesaPaid.wallet_crypto_deposit_requests
+            UPDATE paylink.wallet_crypto_deposit_requests
             SET status = 'MATCHED',
                 tx_hash = :tx_hash,
                 log_index = :log_index,

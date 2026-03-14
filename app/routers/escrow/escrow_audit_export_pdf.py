@@ -47,7 +47,7 @@ async def export_pdf(
         o.deposit_tx_hash,
         o.created_at
       FROM escrow.orders o
-      LEFT JOIN PesaPaid.users u ON u.user_id = o.user_id
+      LEFT JOIN paylink.users u ON u.user_id = o.user_id
       WHERE (:status IS NULL OR o.status::text = :status)
         AND (:min_risk IS NULL OR COALESCE(o.risk_score, 0) >= :min_risk)
         AND (:created_from IS NULL OR o.created_at >= :created_from)

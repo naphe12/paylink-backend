@@ -156,7 +156,7 @@ async def _count_unbalanced_journals(db) -> int:
             SELECT COUNT(*)::int
             FROM (
               SELECT journal_id
-              FROM PesaPaid.ledger_entries
+              FROM paylink.ledger_entries
               GROUP BY journal_id
               HAVING
                 SUM(CASE WHEN LOWER(direction::text)='debit' THEN amount ELSE 0 END)
@@ -304,7 +304,7 @@ async def idempotency_cleanup_worker():
                     text(
                         """
                         WITH deleted AS (
-                            DELETE FROM PesaPaid.idempotency_keys
+                            DELETE FROM paylink.idempotency_keys
                             WHERE created_at < (NOW() - make_interval(hours => :retention_hours))
                             RETURNING 1
                         )
@@ -331,7 +331,7 @@ async def ensure_request_metrics_schema(db) -> None:
     await db.execute(
         text(
             """
-            CREATE TABLE IF NOT EXISTS PesaPaid.request_metrics (
+            CREATE TABLE IF NOT EXISTS paylink.request_metrics (
               id bigserial PRIMARY KEY,
               created_at timestamptz NOT NULL DEFAULT now(),
               method text NOT NULL,
@@ -347,7 +347,7 @@ async def ensure_request_metrics_schema(db) -> None:
         text(
             """
             CREATE INDEX IF NOT EXISTS idx_request_metrics_created_at
-            ON PesaPaid.request_metrics (created_at DESC)
+            ON paylink.request_metrics (created_at DESC)
             """
         )
     )
@@ -355,7 +355,7 @@ async def ensure_request_metrics_schema(db) -> None:
         text(
             """
             CREATE INDEX IF NOT EXISTS idx_request_metrics_status
-            ON PesaPaid.request_metrics (status_code)
+            ON paylink.request_metrics (status_code)
             """
         )
     )
@@ -363,7 +363,7 @@ async def ensure_request_metrics_schema(db) -> None:
         text(
             """
             CREATE INDEX IF NOT EXISTS idx_request_metrics_path
-            ON PesaPaid.request_metrics (path)
+            ON paylink.request_metrics (path)
             """
         )
     )
@@ -372,7 +372,7 @@ async def ensure_request_metrics_schema(db) -> None:
 default_origins = {
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "https://PesaPaid-frontend-production.up.railway.app",
+    "https://paylink-frontend-production.up.railway.app",
     "https://web-production-448ce.up.railway.app",
 }
 configured_origins = {
@@ -424,7 +424,6 @@ app.include_router(loans_router)
 app.include_router(transactions.router)
 app.include_router(transfer_router)
 app.include_router(tontine_router, prefix="/tontines", tags=["Tontines"])
-app.include_router(ws_router)
 app.include_router(ws_router)
 app.include_router(risk_admin_router.router)
 app.include_router(ws_security_router)
@@ -509,7 +508,7 @@ async def request_metrics_middleware(request: Request, call_next):
             await db.execute(
                 text(
                     """
-                    INSERT INTO PesaPaid.request_metrics
+                    INSERT INTO paylink.request_metrics
                     (method, path, status_code, duration_ms, request_id)
                     VALUES (:method, :path, :status_code, :duration_ms, :request_id)
                     """
@@ -663,4 +662,4 @@ async def root():
     return {"message": "PesaPaid backend en mode developpement"}
 
 
-logger.info("Demarrage du backend PesaPaid...")
+logger.info("Demarrage du backend paylink...")

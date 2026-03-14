@@ -144,7 +144,7 @@ async def delete_user(
 async def request_kyc_upgrade(user_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
     await notify_user(user_id, {
         "type": "KYC_UPGRADE_REQUIRED",
-        "message": "Merci de completer votre KYC pour continuer a utiliser PesaPaid."
+        "message": "Merci de completer votre KYC pour continuer a utiliser paylink."
     })
     await push_admin_notification(
         "kyc_reset",
@@ -162,7 +162,7 @@ async def request_kyc_upgrade(user_id: str, db: AsyncSession = Depends(get_db), 
         db,
         user_id=user_id,
         title="Action requise",
-        body="Merci de mettre a jour vos informations KYC sur PesaPaid.",
+        body="Merci de mettre a jour vos informations KYC sur paylink.",
         data={"type": "kyc_action"},
     )
     return {"message": "Demande envoyee a l'utilisateur"}

@@ -91,7 +91,7 @@ async def register_user(
     verification_body = f"""
     Bonjour {user.full_name},
 
-    Merci de vous être inscrit sur PesaPaid. Cliquez sur le lien ci-dessous pour vérifier votre adresse email :
+    Merci de vous être inscrit sur paylink. Cliquez sur le lien ci-dessous pour vérifier votre adresse email :
     <a href="{verify_link}">Vérifier mon adresse</a>
 
     Ce lien est valide 24 heures.
