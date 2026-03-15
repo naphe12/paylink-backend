@@ -57,6 +57,30 @@ class LedgerService:
             raise LookupError(f"Compte comptable '{code}' introuvable.")
         return account
 
+    async def ensure_system_account(
+        self,
+        *,
+        code: str,
+        name: str,
+        currency_code: str,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> LedgerAccounts:
+        account = await self.db.scalar(
+            select(LedgerAccounts).where(LedgerAccounts.code == code)
+        )
+        if account:
+            return account
+
+        account = LedgerAccounts(
+            code=code,
+            name=name,
+            currency_code=(currency_code or "").upper(),
+            metadata_=dict(metadata or {}),
+        )
+        self.db.add(account)
+        await self.db.flush()
+        return account
+
     async def post_journal(
         self,
         *,

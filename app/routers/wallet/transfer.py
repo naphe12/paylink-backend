@@ -554,13 +554,12 @@ async def external_transfer(
             )
         )
     if credit_used > 0:
-        try:
-            credit_account = await ledger.get_account_by_code(settings.LEDGER_ACCOUNT_CREDIT_LINE)
-        except LookupError as exc:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Configuration ledger invalide: {exc}",
-            ) from exc
+        credit_account = await ledger.ensure_system_account(
+            code=settings.LEDGER_ACCOUNT_CREDIT_LINE,
+            name="Ligne de credit clients",
+            currency_code=wallet.currency_code,
+            metadata={"kind": "system", "purpose": "credit_line"},
+        )
         entries.append(
             LedgerLine(
                 account=credit_account,
