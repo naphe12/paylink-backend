@@ -62,6 +62,42 @@ class FinancialSummary(BaseModel):
     credit_available: decimal.Decimal
     tontines_count: int
 
+
+async def _load_wallet_summary_row(db: AsyncSession, user_id):
+    row = (
+        await db.execute(
+            select(
+                Wallets.wallet_id,
+                cast(Wallets.type, String).label("wallet_type"),
+                Wallets.currency_code,
+                Wallets.available,
+                Wallets.pending,
+                Wallets.bonus_balance,
+            ).where(Wallets.user_id == user_id)
+        )
+    ).first()
+    if row:
+        return row
+
+    wallet = Wallets(
+        user_id=user_id,
+        type="consumer",
+        currency_code="EUR",
+        available=decimal.Decimal("0.00"),
+        pending=decimal.Decimal("0.00"),
+    )
+    db.add(wallet)
+    await db.commit()
+
+    return (
+        wallet.wallet_id,
+        "consumer",
+        wallet.currency_code,
+        wallet.available,
+        wallet.pending,
+        wallet.bonus_balance,
+    )
+
 # 🔹 Obtenir le portefeuille utilisateur
 @router.get("/", response_model=WalletsRead)
 async def get_wallet(
@@ -1149,28 +1185,7 @@ async def financial_summary(
     """
     Vue synthétique de la situation financière utilisateur (solde, bonus, crédit, tontines).
     """
-    ledger = LedgerService(db)
-    result = await db.execute(
-        select(Wallets)
-        .options(selectinload(Wallets.user))
-        .where(Wallets.user_id == current_user.user_id)
-    )
-    wallet = result.scalar_one_or_none()
-
-    if not wallet:
-        wallet = Wallets(
-            user_id=current_user.user_id,
-            type="personal",
-            currency_code="EUR",
-            available=decimal.Decimal("0.00"),
-            pending=decimal.Decimal("0.00"),
-        )
-        db.add(wallet)
-        await db.commit()
-        await db.refresh(wallet)
-        wallet.user = current_user
-
-    await ledger.ensure_wallet_account(wallet)
+    wallet_row = await _load_wallet_summary_row(db, current_user.user_id)
 
     credit_line = await db.scalar(
         select(CreditLines)
@@ -1196,10 +1211,10 @@ async def financial_summary(
     )
 
     return FinancialSummary(
-        wallet_available=wallet.available or decimal.Decimal(0),
-        wallet_pending=wallet.pending or decimal.Decimal(0),
-        wallet_currency=wallet.currency_code or "EUR",
-        bonus_balance=wallet.bonus_balance,
+        wallet_available=wallet_row.available or decimal.Decimal(0),
+        wallet_pending=wallet_row.pending or decimal.Decimal(0),
+        wallet_currency=wallet_row.currency_code or "EUR",
+        bonus_balance=wallet_row.bonus_balance,
         credit_limit=credit_limit,
         credit_used=credit_used,
         credit_available=credit_available,
@@ -1220,27 +1235,7 @@ async def financial_summary_admin(
     if not user:
         raise HTTPException(status_code=404, detail="Utilisateur introuvable")
 
-    ledger = LedgerService(db)
-    result = await db.execute(
-        select(Wallets)
-        .options(selectinload(Wallets.user))
-        .where(Wallets.user_id == user.user_id)
-    )
-    wallet = result.scalar_one_or_none()
-    if not wallet:
-        wallet = Wallets(
-            user_id=user.user_id,
-            type="personal",
-            currency_code="EUR",
-            available=decimal.Decimal("0.00"),
-            pending=decimal.Decimal("0.00"),
-        )
-        db.add(wallet)
-        await db.commit()
-        await db.refresh(wallet)
-        wallet.user = user
-
-    await ledger.ensure_wallet_account(wallet)
+    wallet_row = await _load_wallet_summary_row(db, user.user_id)
 
     credit_line = await db.scalar(
         select(CreditLines)
@@ -1266,10 +1261,10 @@ async def financial_summary_admin(
     )
 
     return FinancialSummary(
-        wallet_available=wallet.available or decimal.Decimal(0),
-        wallet_pending=wallet.pending or decimal.Decimal(0),
-        wallet_currency=wallet.currency_code or "EUR",
-        bonus_balance=wallet.bonus_balance,
+        wallet_available=wallet_row.available or decimal.Decimal(0),
+        wallet_pending=wallet_row.pending or decimal.Decimal(0),
+        wallet_currency=wallet_row.currency_code or "EUR",
+        bonus_balance=wallet_row.bonus_balance,
         credit_limit=credit_limit,
         credit_used=credit_used,
         credit_available=credit_available,
