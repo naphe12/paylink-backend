@@ -15,6 +15,8 @@ from app.core.database import get_db
 from app.dependencies.auth import get_current_agent, get_current_user
 from app.models.bonus_history import BonusHistory
 from app.models.credit_line_history import CreditLineHistory
+from app.models.credit_line_events import CreditLineEvents
+from app.models.credit_lines import CreditLines
 from app.models.external_transfers import ExternalTransfers
 from app.models.telegram_user import TelegramUser
 from app.models.transactions import Transactions
@@ -385,9 +387,23 @@ async def external_transfer(
         raise HTTPException(status_code=404, detail="Portefeuille introuvable")
 
     wallet_balance = decimal.Decimal(wallet.available or 0)
-    credit_limit = decimal.Decimal(user_locked.credit_limit or 0)
-    credit_used_total = decimal.Decimal(user_locked.credit_used or 0)
-    credit_available = max(credit_limit - credit_used_total, decimal.Decimal(0))
+    credit_line = await db.scalar(
+        select(CreditLines)
+        .where(
+            CreditLines.user_id == current_user.user_id,
+            CreditLines.deleted_at.is_(None),
+        )
+        .order_by(CreditLines.created_at.desc())
+        .with_for_update()
+    )
+    if credit_line:
+        credit_limit = decimal.Decimal(credit_line.initial_amount or 0)
+        credit_used_total = decimal.Decimal(credit_line.used_amount or 0)
+        credit_available = max(decimal.Decimal(credit_line.outstanding_amount or 0), decimal.Decimal(0))
+    else:
+        credit_limit = decimal.Decimal(user_locked.credit_limit or 0)
+        credit_used_total = decimal.Decimal(user_locked.credit_used or 0)
+        credit_available = max(credit_limit - credit_used_total, decimal.Decimal(0))
     credit_available_before = credit_available
     settings_row = await db.scalar(
         select(GeneralSettings).order_by(GeneralSettings.created_at.desc())
@@ -438,8 +454,15 @@ async def external_transfer(
     else:
         credit_used = total_required - wallet_balance
         wallet.available = decimal.Decimal(0)
-        user_locked.credit_used = credit_used_total + credit_used
         credit_available_after = credit_available_before - credit_used
+        if credit_line:
+            credit_line.used_amount = decimal.Decimal(credit_line.used_amount or 0) + credit_used
+            credit_line.outstanding_amount = max(decimal.Decimal("0"), credit_available_after)
+            credit_line.updated_at = datetime.utcnow()
+            user_locked.credit_limit = decimal.Decimal(credit_line.initial_amount or 0)
+            user_locked.credit_used = decimal.Decimal(credit_line.used_amount or 0)
+        else:
+            user_locked.credit_used = credit_used_total + credit_used
 
     requires_admin = credit_used > decimal.Decimal(0)
 
@@ -583,9 +606,27 @@ async def external_transfer(
             description=f"Transfert externe {transfer.reference_code}",
         )
         db.add(history_entry)
+        if credit_line:
+            db.add(
+                CreditLineEvents(
+                    credit_line_id=credit_line.credit_line_id,
+                    user_id=current_user.user_id,
+                    amount_delta=credit_used,
+                    currency_code=credit_line.currency_code,
+                    old_limit=credit_available_before,
+                    new_limit=max(decimal.Decimal("0"), credit_available_after),
+                    operation_code=9101,
+                    status="used",
+                    source="external_transfer",
+                    occurred_at=datetime.utcnow(),
+                )
+            )
 
     user_locked.used_daily = decimal.Decimal(user_locked.used_daily or 0) + amount
     user_locked.used_monthly = decimal.Decimal(user_locked.used_monthly or 0) + amount
+    if credit_line and credit_used <= decimal.Decimal("0"):
+        user_locked.credit_limit = decimal.Decimal(credit_line.initial_amount or 0)
+        user_locked.credit_used = decimal.Decimal(credit_line.used_amount or 0)
     await db.commit()
     await db.refresh(transfer)
     if scoped_idempotency_key:

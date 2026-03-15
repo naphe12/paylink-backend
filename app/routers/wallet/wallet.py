@@ -1172,9 +1172,22 @@ async def financial_summary(
 
     await ledger.ensure_wallet_account(wallet)
 
-    credit_limit = decimal.Decimal(getattr(current_user, "credit_limit", 0) or 0)
-    credit_used = decimal.Decimal(getattr(current_user, "credit_used", 0) or 0)
-    credit_available = max(credit_limit - credit_used, decimal.Decimal(0))
+    credit_line = await db.scalar(
+        select(CreditLines)
+        .where(
+            CreditLines.user_id == current_user.user_id,
+            CreditLines.deleted_at.is_(None),
+        )
+        .order_by(CreditLines.created_at.desc())
+    )
+    if credit_line:
+        credit_limit = decimal.Decimal(credit_line.initial_amount or 0)
+        credit_used = decimal.Decimal(credit_line.used_amount or 0)
+        credit_available = max(decimal.Decimal(credit_line.outstanding_amount or 0), decimal.Decimal(0))
+    else:
+        credit_limit = decimal.Decimal(getattr(current_user, "credit_limit", 0) or 0)
+        credit_used = decimal.Decimal(getattr(current_user, "credit_used", 0) or 0)
+        credit_available = max(credit_limit - credit_used, decimal.Decimal(0))
 
     tontines_count = await db.scalar(
         select(func.count())
@@ -1229,9 +1242,22 @@ async def financial_summary_admin(
 
     await ledger.ensure_wallet_account(wallet)
 
-    credit_limit = decimal.Decimal(getattr(user, "credit_limit", 0) or 0)
-    credit_used = decimal.Decimal(getattr(user, "credit_used", 0) or 0)
-    credit_available = max(credit_limit - credit_used, decimal.Decimal(0))
+    credit_line = await db.scalar(
+        select(CreditLines)
+        .where(
+            CreditLines.user_id == user.user_id,
+            CreditLines.deleted_at.is_(None),
+        )
+        .order_by(CreditLines.created_at.desc())
+    )
+    if credit_line:
+        credit_limit = decimal.Decimal(credit_line.initial_amount or 0)
+        credit_used = decimal.Decimal(credit_line.used_amount or 0)
+        credit_available = max(decimal.Decimal(credit_line.outstanding_amount or 0), decimal.Decimal(0))
+    else:
+        credit_limit = decimal.Decimal(getattr(user, "credit_limit", 0) or 0)
+        credit_used = decimal.Decimal(getattr(user, "credit_used", 0) or 0)
+        credit_available = max(credit_limit - credit_used, decimal.Decimal(0))
 
     tontines_count = await db.scalar(
         select(func.count())
