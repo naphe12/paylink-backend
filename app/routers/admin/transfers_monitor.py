@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
 from app.models.client_balance_events import ClientBalanceEvents
+from app.models.wallet_transactions import WalletTransactions
 from app.models.transactions import Transactions
 from app.models.users import Users
 from app.models.general_settings import GeneralSettings
@@ -250,7 +251,8 @@ async def list_balance_events(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
 ):
-    stmt = (
+    fetch_size = limit + offset
+    legacy_stmt = (
         select(
             ClientBalanceEvents,
             Users.full_name,
@@ -259,24 +261,36 @@ async def list_balance_events(
         )
         .join(Users, Users.user_id == ClientBalanceEvents.user_id)
         .order_by(desc(ClientBalanceEvents.occurred_at))
-        .offset(offset)
-        .limit(limit)
+        .limit(fetch_size)
+    )
+    wallet_stmt = (
+        select(
+            WalletTransactions,
+            Users.full_name,
+            Users.email,
+            Users.phone_e164,
+        )
+        .join(Users, Users.user_id == WalletTransactions.user_id)
+        .order_by(desc(WalletTransactions.created_at))
+        .limit(fetch_size)
     )
 
     if user_id:
-        stmt = stmt.where(ClientBalanceEvents.user_id == user_id)
+        legacy_stmt = legacy_stmt.where(ClientBalanceEvents.user_id == user_id)
+        wallet_stmt = wallet_stmt.where(WalletTransactions.user_id == user_id)
     if q:
         pattern = f"%{q}%"
-        stmt = stmt.where(
-            or_(
-                Users.full_name.ilike(pattern),
-                Users.email.ilike(pattern),
-                Users.phone_e164.ilike(pattern),
-            )
+        filters = or_(
+            Users.full_name.ilike(pattern),
+            Users.email.ilike(pattern),
+            Users.phone_e164.ilike(pattern),
         )
+        legacy_stmt = legacy_stmt.where(filters)
+        wallet_stmt = wallet_stmt.where(filters)
 
-    rows = (await db.execute(stmt)).all()
-    return [
+    legacy_rows = (await db.execute(legacy_stmt)).all()
+    wallet_rows = (await db.execute(wallet_stmt)).all()
+    merged = [
         {
             "event_id": str(ev.event_id),
             "user_id": str(ev.user_id),
@@ -291,8 +305,35 @@ async def list_balance_events(
             "occurred_at": ev.occurred_at,
             "created_at": ev.created_at,
         }
-        for ev, full_name, email, phone in rows
+        for ev, full_name, email, phone in legacy_rows
     ]
+    for tx, full_name, email, phone in wallet_rows:
+        raw_amount = float(tx.amount or 0)
+        direction = str(getattr(tx, "direction", "") or "").lower()
+        signed_delta = raw_amount if direction == "credit" else -raw_amount
+        balance_after = float(tx.balance_after) if tx.balance_after is not None else None
+        balance_before = balance_after - signed_delta if balance_after is not None else None
+        merged.append(
+            {
+                "event_id": f"wallet-{tx.transaction_id}",
+                "user_id": str(tx.user_id) if tx.user_id else None,
+                "full_name": full_name,
+                "email": email,
+                "phone": phone,
+                "balance_before": balance_before,
+                "amount_delta": signed_delta,
+                "balance_after": balance_after,
+                "currency": tx.currency_code,
+                "source": tx.operation_type or "wallet_transaction",
+                "occurred_at": tx.created_at,
+                "created_at": tx.created_at,
+            }
+        )
+    merged.sort(
+        key=lambda item: item.get("occurred_at") or item.get("created_at"),
+        reverse=True,
+    )
+    return merged[offset : offset + limit]
 
 
 @router.get("/users/{user_id}/balance-events")
@@ -303,7 +344,8 @@ async def list_user_balance_events(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
 ):
-    stmt = (
+    fetch_size = limit + offset
+    legacy_stmt = (
         select(
             ClientBalanceEvents,
             Users.full_name,
@@ -312,11 +354,22 @@ async def list_user_balance_events(
         .join(Users, Users.user_id == ClientBalanceEvents.user_id)
         .where(ClientBalanceEvents.user_id == user_id)
         .order_by(desc(ClientBalanceEvents.occurred_at))
-        .offset(offset)
-        .limit(limit)
+        .limit(fetch_size)
     )
-    rows = (await db.execute(stmt)).all()
-    return [
+    wallet_stmt = (
+        select(
+            WalletTransactions,
+            Users.full_name,
+            Users.email,
+        )
+        .join(Users, Users.user_id == WalletTransactions.user_id)
+        .where(WalletTransactions.user_id == user_id)
+        .order_by(desc(WalletTransactions.created_at))
+        .limit(fetch_size)
+    )
+    legacy_rows = (await db.execute(legacy_stmt)).all()
+    wallet_rows = (await db.execute(wallet_stmt)).all()
+    merged = [
         {
             "event_id": str(ev.event_id),
             "user_id": str(ev.user_id),
@@ -330,5 +383,32 @@ async def list_user_balance_events(
             "occurred_at": ev.occurred_at,
             "created_at": ev.created_at,
         }
-        for ev, full_name, email in rows
+        for ev, full_name, email in legacy_rows
     ]
+    for tx, full_name, email in wallet_rows:
+        raw_amount = float(tx.amount or 0)
+        direction = str(getattr(tx, "direction", "") or "").lower()
+        signed_delta = raw_amount if direction == "credit" else -raw_amount
+        balance_after = float(tx.balance_after) if tx.balance_after is not None else None
+        balance_before = balance_after - signed_delta if balance_after is not None else None
+        merged.append(
+            {
+                "event_id": f"wallet-{tx.transaction_id}",
+                "user_id": str(tx.user_id) if tx.user_id else None,
+                "full_name": full_name,
+                "email": email,
+                "balance_before": balance_before,
+                "amount_delta": signed_delta,
+                "balance_after": balance_after,
+                "currency": tx.currency_code,
+                "source": tx.operation_type or "wallet_transaction",
+                "occurred_at": tx.created_at,
+                "created_at": tx.created_at,
+            }
+        )
+    merged.sort(
+        key=lambda item: item.get("occurred_at") or item.get("created_at"),
+        reverse=True,
+    )
+    return merged[offset : offset + limit]
+

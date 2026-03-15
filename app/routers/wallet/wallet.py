@@ -49,6 +49,7 @@ from app.services.idempotency_service import (
 from app.models.credit_lines import CreditLines
 from app.models.credit_line_events import CreditLineEvents
 from app.models.tontinemembers import TontineMembers
+from app.models.wallet_transactions import WalletTransactions
 router = APIRouter()
 
 
@@ -920,28 +921,59 @@ async def get_balance_events(
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user),
 ):
-    stmt = (
+    fetch_size = limit + offset
+    legacy_stmt = (
         select(ClientBalanceEvents)
         .where(ClientBalanceEvents.user_id == current_user.user_id)
         .order_by(desc(ClientBalanceEvents.occurred_at))
-        .offset(offset)
-        .limit(limit)
+        .limit(fetch_size)
     )
-    rows = (await db.execute(stmt)).scalars().all()
-    return [
+    wallet_stmt = (
+        select(WalletTransactions)
+        .where(WalletTransactions.user_id == current_user.user_id)
+        .order_by(desc(WalletTransactions.created_at))
+        .limit(fetch_size)
+    )
+    legacy_rows = (await db.execute(legacy_stmt)).scalars().all()
+    wallet_rows = (await db.execute(wallet_stmt)).scalars().all()
+
+    merged = [
         {
             "event_id": str(r.event_id),
             "balance_before": float(r.balance_before) if r.balance_before is not None else None,
             "amount_delta": float(r.amount_delta) if r.amount_delta is not None else None,
             "balance_after": float(r.balance_after) if r.balance_after is not None else None,
-            # utilise currency si présent, sinon currency_code
             "currency": getattr(r, "currency", None) or getattr(r, "currency_code", None),
             "source": r.source,
             "occurred_at": r.occurred_at,
             "created_at": r.created_at,
         }
-        for r in rows
+        for r in legacy_rows
     ]
+    for tx in wallet_rows:
+        raw_amount = float(tx.amount or 0)
+        direction = str(getattr(tx, "direction", "") or "").lower()
+        signed_delta = raw_amount if direction == "credit" else -raw_amount
+        balance_after = float(tx.balance_after) if tx.balance_after is not None else None
+        balance_before = balance_after - signed_delta if balance_after is not None else None
+        merged.append(
+            {
+                "event_id": f"wallet-{tx.transaction_id}",
+                "balance_before": balance_before,
+                "amount_delta": signed_delta,
+                "balance_after": balance_after,
+                "currency": tx.currency_code,
+                "source": tx.operation_type or "wallet_transaction",
+                "occurred_at": tx.created_at,
+                "created_at": tx.created_at,
+            }
+        )
+
+    merged.sort(
+        key=lambda item: item.get("occurred_at") or item.get("created_at"),
+        reverse=True,
+    )
+    return merged[offset : offset + limit]
 
 from decimal import Decimal
 
@@ -1270,6 +1302,7 @@ async def financial_summary_admin(
         credit_available=credit_available,
         tontines_count=int(tontines_count or 0),
     )
+
 
 
 
