@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
+from app.models.credit_line_history import CreditLineHistory
 from app.models.credit_lines import CreditLines
 from app.models.credit_line_events import CreditLineEvents
 from app.models.users import Users
@@ -22,6 +23,7 @@ router = APIRouter(prefix="/admin/credit-lines", tags=["Admin Credit Lines"])
 @router.get("")
 async def list_credit_lines(
     q: Optional[str] = Query(None, description="Filtre nom/email"),
+    user_id: UUID | None = Query(None),
     limit: int = Query(100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
@@ -44,6 +46,8 @@ async def list_credit_lines(
     if q:
         pattern = f"%{q}%"
         stmt = stmt.where((Users.full_name.ilike(pattern)) | (Users.email.ilike(pattern)))
+    if user_id:
+        stmt = stmt.where(CreditLines.user_id == user_id)
 
     rows = (await db.execute(stmt)).all()
     return [
@@ -140,6 +144,11 @@ async def increase_credit_line(
     credit_line.outstanding_amount = new_outstanding
     credit_line.updated_at = datetime.utcnow()
 
+    user = await db.scalar(select(Users).where(Users.user_id == credit_line.user_id))
+    if user:
+        user.credit_limit = credit_line.initial_amount
+        user.credit_used = credit_line.used_amount or Decimal("0")
+
     event = CreditLineEvents(
         credit_line_id=credit_line.credit_line_id,
         user_id=credit_line.user_id,
@@ -153,6 +162,83 @@ async def increase_credit_line(
         occurred_at=datetime.utcnow(),
     )
     db.add(event)
+    db.add(
+        CreditLineHistory(
+            user_id=credit_line.user_id,
+            transaction_id=None,
+            amount=delta,
+            credit_available_before=old_outstanding,
+            credit_available_after=new_outstanding,
+            description="Augmentation de ligne de credit",
+        )
+    )
+    await db.commit()
+
+    return await get_credit_line_detail(credit_line_id, db, admin)
+
+
+class CreditLineDecrease(BaseModel):
+    amount: Decimal = Field(..., gt=0)
+
+
+@router.post("/{credit_line_id}/decrease")
+async def decrease_credit_line(
+    credit_line_id: UUID,
+    payload: CreditLineDecrease,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    credit_line = await db.scalar(
+        select(CreditLines).where(CreditLines.credit_line_id == credit_line_id)
+    )
+    if not credit_line:
+        raise HTTPException(404, "Ligne de credit introuvable")
+
+    amount = Decimal(payload.amount)
+    old_limit = credit_line.initial_amount or Decimal("0")
+    old_outstanding = credit_line.outstanding_amount or Decimal("0")
+    used_amount = credit_line.used_amount or Decimal("0")
+    new_limit = old_limit - amount
+    if new_limit < used_amount:
+        raise HTTPException(
+            400,
+            "Reduction impossible: le nouveau plafond serait inferieur au credit deja utilise.",
+        )
+
+    new_outstanding = max(Decimal("0"), old_outstanding - amount)
+    credit_line.initial_amount = new_limit
+    credit_line.outstanding_amount = new_outstanding
+    credit_line.updated_at = datetime.utcnow()
+
+    user = await db.scalar(select(Users).where(Users.user_id == credit_line.user_id))
+    if user:
+        user.credit_limit = credit_line.initial_amount
+        user.credit_used = credit_line.used_amount or Decimal("0")
+
+    db.add(
+        CreditLineEvents(
+            credit_line_id=credit_line.credit_line_id,
+            user_id=credit_line.user_id,
+            amount_delta=-amount,
+            currency_code=credit_line.currency_code,
+            old_limit=old_outstanding,
+            new_limit=new_outstanding,
+            operation_code=9003,
+            status="decreased",
+            source="admin",
+            occurred_at=datetime.utcnow(),
+        )
+    )
+    db.add(
+        CreditLineHistory(
+            user_id=credit_line.user_id,
+            transaction_id=None,
+            amount=-amount,
+            credit_available_before=old_outstanding,
+            credit_available_after=new_outstanding,
+            description="Diminution de ligne de credit",
+        )
+    )
     await db.commit()
 
     return await get_credit_line_detail(credit_line_id, db, admin)
@@ -186,6 +272,11 @@ async def repay_credit_line(
     credit_line.outstanding_amount = new_outstanding
     credit_line.updated_at = datetime.utcnow()
 
+    user = await db.scalar(select(Users).where(Users.user_id == credit_line.user_id))
+    if user:
+        user.credit_limit = credit_line.initial_amount or Decimal("0")
+        user.credit_used = new_used
+
     movement = None
     if credit_line.currency_code.upper() == "EUR":
         wallet = await db.scalar(
@@ -218,6 +309,16 @@ async def repay_credit_line(
         occurred_at=datetime.utcnow(),
     )
     db.add(event)
+    db.add(
+        CreditLineHistory(
+            user_id=credit_line.user_id,
+            transaction_id=None,
+            amount=-amount,
+            credit_available_before=old_outstanding,
+            credit_available_after=new_outstanding,
+            description="Remboursement ligne de credit",
+        )
+    )
     await db.commit()
 
     return await get_credit_line_detail(credit_line_id, db, admin)
