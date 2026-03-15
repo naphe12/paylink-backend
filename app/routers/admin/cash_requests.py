@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Header
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import String, cast, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -15,6 +15,8 @@ from app.models.wallet_cash_requests import (
     WalletCashRequestStatus,
     WalletCashRequestType,
     WalletCashRequests,
+    normalize_wallet_cash_request_status,
+    normalize_wallet_cash_request_type,
 )
 from app.models.wallets import Wallets
 from app.schemas.wallet_cash_requests import (
@@ -62,6 +64,37 @@ async def _serialize_request(
     )
 
 
+async def _serialize_cash_request_row(
+    db: AsyncSession,
+    row,
+) -> WalletCashRequestAdminRead | None:
+    normalized_type = normalize_wallet_cash_request_type(row.type)
+    normalized_status = normalize_wallet_cash_request_status(row.status)
+    if not normalized_type or not normalized_status:
+        return None
+    user = await db.get(Users, row.user_id)
+    return WalletCashRequestAdminRead(
+        request_id=row.request_id,
+        type=normalized_type,
+        status=normalized_status,
+        amount=row.amount,
+        fee_amount=row.fee_amount,
+        total_amount=row.total_amount,
+        currency_code=row.currency_code,
+        mobile_number=row.mobile_number,
+        provider_name=row.provider_name,
+        note=row.note,
+        admin_note=row.admin_note,
+        created_at=row.created_at,
+        processed_at=row.processed_at,
+        user={
+            "user_id": row.user_id,
+            "full_name": getattr(user, "full_name", None),
+            "email": getattr(user, "email", None),
+        },
+    )
+
+
 # Autorise /admin/cash-requests et /admin/cash-requests/
 @router.get("", response_model=list[WalletCashRequestAdminRead])
 @router.get("/", response_model=list[WalletCashRequestAdminRead])
@@ -73,18 +106,38 @@ async def list_cash_requests(
     admin=Depends(get_current_admin),
 ):
     stmt = (
-        select(WalletCashRequests)
+        select(
+            WalletCashRequests.request_id,
+            WalletCashRequests.user_id,
+            cast(WalletCashRequests.type, String).label("type"),
+            cast(WalletCashRequests.status, String).label("status"),
+            WalletCashRequests.amount,
+            WalletCashRequests.fee_amount,
+            WalletCashRequests.total_amount,
+            WalletCashRequests.currency_code,
+            WalletCashRequests.mobile_number,
+            WalletCashRequests.provider_name,
+            WalletCashRequests.note,
+            WalletCashRequests.admin_note,
+            WalletCashRequests.created_at,
+            WalletCashRequests.processed_at,
+        )
         .where(True)
         .order_by(WalletCashRequests.created_at.desc())
         .limit(limit)
     )
     if status:
-        stmt = stmt.where(WalletCashRequests.status == status)
+        stmt = stmt.where(cast(WalletCashRequests.status, String) == status.value)
     if request_type:
-        stmt = stmt.where(WalletCashRequests.type == request_type)
+        stmt = stmt.where(cast(WalletCashRequests.type, String) == request_type.value)
 
-    requests = (await db.execute(stmt)).scalars().all()
-    return [await _serialize_request(db, req) for req in requests]
+    rows = (await db.execute(stmt)).all()
+    result = []
+    for row in rows:
+        serialized = await _serialize_cash_request_row(db, row)
+        if serialized is not None:
+            result.append(serialized)
+    return result
 
 
 @router.get("/users", response_model=list[AdminCashUserRead])

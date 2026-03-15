@@ -27,6 +27,47 @@ class WalletCashRequestStatus(str, enum.Enum):
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
+    COMPLETED = "completed"
+
+
+def normalize_wallet_cash_request_type(value: str | WalletCashRequestType | None) -> WalletCashRequestType | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, WalletCashRequestType):
+        return value
+    raw = str(value).strip()
+    if not raw:
+        return None
+    mapping = {
+        "DEPOSIT": WalletCashRequestType.DEPOSIT,
+        "deposit": WalletCashRequestType.DEPOSIT,
+        "WITHDRAW": WalletCashRequestType.WITHDRAW,
+        "withdraw": WalletCashRequestType.WITHDRAW,
+        "EXTERNAL_TRANSFER": WalletCashRequestType.EXTERNAL_TRANSFER,
+        "external_transfer": WalletCashRequestType.EXTERNAL_TRANSFER,
+    }
+    return mapping.get(raw)
+
+
+def normalize_wallet_cash_request_status(value: str | WalletCashRequestStatus | None) -> WalletCashRequestStatus | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, WalletCashRequestStatus):
+        return value
+    raw = str(value).strip()
+    if not raw:
+        return None
+    mapping = {
+        "pending": WalletCashRequestStatus.PENDING,
+        "PENDING": WalletCashRequestStatus.PENDING,
+        "approved": WalletCashRequestStatus.APPROVED,
+        "APPROVED": WalletCashRequestStatus.APPROVED,
+        "rejected": WalletCashRequestStatus.REJECTED,
+        "REJECTED": WalletCashRequestStatus.REJECTED,
+        "completed": WalletCashRequestStatus.COMPLETED,
+        "COMPLETED": WalletCashRequestStatus.COMPLETED,
+    }
+    return mapping.get(raw)
 
 
 class WalletCashRequests(Base):

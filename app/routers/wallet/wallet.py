@@ -23,6 +23,8 @@ from app.models.wallet_cash_requests import (
     WalletCashRequestStatus,
     WalletCashRequestType,
     WalletCashRequests,
+    normalize_wallet_cash_request_status,
+    normalize_wallet_cash_request_type,
 )
 from app.models.wallets import Wallets
 from app.models.credit_line_history import CreditLineHistory
@@ -377,15 +379,52 @@ async def list_cash_requests(
     current_user: Users = Depends(get_current_user),
 ):
     stmt = (
-        select(WalletCashRequests)
+        select(
+            WalletCashRequests.request_id,
+            cast(WalletCashRequests.type, String).label("type"),
+            cast(WalletCashRequests.status, String).label("status"),
+            WalletCashRequests.amount,
+            WalletCashRequests.fee_amount,
+            WalletCashRequests.total_amount,
+            WalletCashRequests.currency_code,
+            WalletCashRequests.mobile_number,
+            WalletCashRequests.provider_name,
+            WalletCashRequests.note,
+            WalletCashRequests.admin_note,
+            WalletCashRequests.created_at,
+            WalletCashRequests.processed_at,
+        )
         .where(WalletCashRequests.user_id == current_user.user_id)
         .order_by(WalletCashRequests.created_at.desc())
     )
     if request_type:
-        stmt = stmt.where(WalletCashRequests.type == request_type)
+        stmt = stmt.where(cast(WalletCashRequests.type, String) == request_type.value)
 
-    requests = (await db.execute(stmt)).scalars().all()
-    return requests
+    rows = (await db.execute(stmt)).all()
+    payload = []
+    for row in rows:
+        normalized_type = normalize_wallet_cash_request_type(row.type)
+        normalized_status = normalize_wallet_cash_request_status(row.status)
+        if not normalized_type or not normalized_status:
+            continue
+        payload.append(
+            WalletCashRequestRead(
+                request_id=row.request_id,
+                type=normalized_type,
+                status=normalized_status,
+                amount=row.amount,
+                fee_amount=row.fee_amount,
+                total_amount=row.total_amount,
+                currency_code=row.currency_code,
+                mobile_number=row.mobile_number,
+                provider_name=row.provider_name,
+                note=row.note,
+                admin_note=row.admin_note,
+                created_at=row.created_at,
+                processed_at=row.processed_at,
+            )
+        )
+    return payload
 
 
 
