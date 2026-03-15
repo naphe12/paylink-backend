@@ -30,6 +30,7 @@ class WalletCashDecision(BaseModel):
 
 class WalletCashRequestBase(BaseModel):
     request_id: UUID
+    reference_code: str | None = None
     type: WalletCashRequestType
     status: WalletCashRequestStatus
     amount: Decimal
@@ -59,3 +60,4 @@ class WalletCashRequestUser(BaseModel):
 
 class WalletCashRequestAdminRead(WalletCashRequestBase):
     user: WalletCashRequestUser
+    processed_by_admin: WalletCashRequestUser | None = None

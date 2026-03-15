@@ -85,6 +85,7 @@ async def list_external_transfers(
             ExternalTransfers.local_amount,
             ExternalTransfers.currency.label("local_currency"),
             ExternalTransfers.country_destination,
+            ExternalTransfers.reference_code,
         )
         .join(Users, Users.user_id == Transactions.initiated_by, isouter=True)
         .join(
@@ -129,6 +130,7 @@ async def list_external_transfers(
             "initiator_email": r.email,
             "local_amount": serialize_decimal(r.local_amount) if r.local_amount is not None else None,
             "local_currency": _resolve_local_currency(r.country_destination, r.local_currency),
+            "reference_code": r.reference_code,
         }
         for r in rows
     ]

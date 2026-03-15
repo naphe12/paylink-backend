@@ -36,6 +36,17 @@ from app.services.wallet_history import log_wallet_movement
 router = APIRouter(prefix="/admin/cash-requests", tags=["Admin Cash Requests"])
 
 
+def _build_cash_request_reference(request_id, request_type) -> str:
+    type_token = str(getattr(request_type, "value", request_type) or "").strip().upper()
+    prefix = {
+        "DEPOSIT": "DEP",
+        "WITHDRAW": "WDR",
+        "EXTERNAL_TRANSFER": "EXT",
+    }.get(type_token, "CSH")
+    raw = str(request_id or "").replace("-", "").upper()
+    return f"{prefix}-{raw[:10]}"
+
+
 class AdminCashDepositCreate(BaseModel):
     user_id: UUID
     amount: decimal.Decimal = Field(gt=decimal.Decimal("0"))
@@ -53,14 +64,25 @@ async def _serialize_request(
     db: AsyncSession, request: WalletCashRequests
 ) -> WalletCashRequestAdminRead:
     user = await db.get(Users, request.user_id)
+    processor = await db.get(Users, request.processed_by) if request.processed_by else None
     base = WalletCashRequestRead.model_validate(request)
     return WalletCashRequestAdminRead(
         **base.model_dump(),
+        reference_code=_build_cash_request_reference(request.request_id, request.type),
         user={
             "user_id": request.user_id,
             "full_name": getattr(user, "full_name", None),
             "email": getattr(user, "email", None),
         },
+        processed_by_admin=(
+            {
+                "user_id": request.processed_by,
+                "full_name": getattr(processor, "full_name", None),
+                "email": getattr(processor, "email", None),
+            }
+            if processor
+            else None
+        ),
     )
 
 
@@ -73,8 +95,10 @@ async def _serialize_cash_request_row(
     if not normalized_type or not normalized_status:
         return None
     user = await db.get(Users, row.user_id)
+    processor = await db.get(Users, row.processed_by) if getattr(row, "processed_by", None) else None
     return WalletCashRequestAdminRead(
         request_id=row.request_id,
+        reference_code=_build_cash_request_reference(row.request_id, normalized_type),
         type=normalized_type,
         status=normalized_status,
         amount=row.amount,
@@ -92,6 +116,15 @@ async def _serialize_cash_request_row(
             "full_name": getattr(user, "full_name", None),
             "email": getattr(user, "email", None),
         },
+        processed_by_admin=(
+            {
+                "user_id": row.processed_by,
+                "full_name": getattr(processor, "full_name", None),
+                "email": getattr(processor, "email", None),
+            }
+            if processor
+            else None
+        ),
     )
 
 
@@ -102,6 +135,8 @@ async def list_cash_requests(
     request: Request,
     status: str | None = Query(None),
     request_type: str | None = Query(None),
+    created_from: datetime | None = Query(None),
+    created_to: datetime | None = Query(None),
     limit: int = Query(200, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
@@ -135,6 +170,10 @@ async def list_cash_requests(
         stmt = stmt.where(cast(WalletCashRequests.status, String).in_([normalized_status.value, normalized_status.value.upper()]))
     if normalized_type:
         stmt = stmt.where(cast(WalletCashRequests.type, String).in_([normalized_type.value, normalized_type.value.lower()]))
+    if created_from:
+        stmt = stmt.where(WalletCashRequests.created_at >= created_from)
+    if created_to:
+        stmt = stmt.where(WalletCashRequests.created_at <= created_to)
 
     rows = (await db.execute(stmt)).all()
     result = []
@@ -184,6 +223,13 @@ async def admin_cash_deposit_direct(
     admin=Depends(get_current_admin),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
+    note = (payload.note or "").strip()
+    if not note:
+        raise HTTPException(
+            status_code=400,
+            detail="Une note admin est obligatoire pour effectuer un depot direct.",
+        )
+
     scoped_idempotency_key = None
     if idempotency_key and idempotency_key.strip():
         raw_key = idempotency_key.strip()
@@ -191,7 +237,7 @@ async def admin_cash_deposit_direct(
             {
                 "user_id": str(payload.user_id),
                 "amount": str(payload.amount),
-                "note": payload.note,
+                "note": note,
                 "actor": str(admin.user_id),
                 "operation": "admin_cash_deposit_direct",
             }
@@ -246,7 +292,7 @@ async def admin_cash_deposit_direct(
         direction="credit",
         operation_type="cash_deposit_admin_direct",
         reference=str(admin.user_id),
-        description=f"Depot cash direct admin ({payload.note or 'sans note'})",
+        description=f"Depot cash direct admin ({note})",
     )
     wallet_account = await ledger.ensure_wallet_account(wallet)
     cash_in = await ledger.get_account_by_code(settings.LEDGER_ACCOUNT_CASH_IN)
@@ -258,7 +304,7 @@ async def admin_cash_deposit_direct(
             "target_user_id": str(user.user_id),
             "wallet_id": str(wallet.wallet_id),
             "processed_by": str(admin.user_id),
-            "note": payload.note,
+            "note": note,
             "movement_id": str(movement.transaction_id) if movement else None,
         },
         entries=[
@@ -447,6 +493,13 @@ async def reject_cash_request(
     admin=Depends(get_current_admin),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
+    note = (payload.note or "").strip()
+    if not note:
+        raise HTTPException(
+            status_code=400,
+            detail="Une note admin est obligatoire pour rejeter une demande.",
+        )
+
     scoped_idempotency_key = None
     if idempotency_key and idempotency_key.strip():
         raw_key = idempotency_key.strip()
@@ -454,7 +507,7 @@ async def reject_cash_request(
             {
                 "action": "reject_cash_request",
                 "request_id": str(request_id),
-                "note": payload.note,
+                "note": note,
                 "actor": str(admin.user_id),
             }
         )
@@ -478,7 +531,7 @@ async def reject_cash_request(
     if not request:
         raise HTTPException(status_code=404, detail="Demande introuvable")
     transition_cash_request_status(request, WalletCashRequestStatus.REJECTED)
-    request.admin_note = payload.note
+    request.admin_note = note
     request.processed_by = admin.user_id
     request.processed_at = datetime.utcnow()
     await db.commit()

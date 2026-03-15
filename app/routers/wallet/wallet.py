@@ -64,6 +64,17 @@ class FinancialSummary(BaseModel):
     tontines_count: int
 
 
+def _build_cash_request_reference(request_id, request_type) -> str:
+    type_token = str(getattr(request_type, "value", request_type) or "").strip().upper()
+    prefix = {
+        "DEPOSIT": "DEP",
+        "WITHDRAW": "WDR",
+        "EXTERNAL_TRANSFER": "EXT",
+    }.get(type_token, "CSH")
+    raw = str(request_id or "").replace("-", "").upper()
+    return f"{prefix}-{raw[:10]}"
+
+
 async def _load_wallet_summary_row(db: AsyncSession, user_id):
     row = (
         await db.execute(
@@ -286,9 +297,12 @@ async def request_cash_deposit(
     db.add(request)
     await db.flush()
     await db.refresh(request)
+    response_payload = WalletCashRequestRead.model_validate(request).model_copy(
+        update={"reference_code": _build_cash_request_reference(request.request_id, request.type)}
+    )
     if idempotency_key and idempotency_key.strip():
         scoped_idempotency_key = f"wallet_cash_deposit:{current_user.user_id}:{idempotency_key.strip()}"
-        payload_out = WalletCashRequestRead.model_validate(request).model_dump(mode="json")
+        payload_out = response_payload.model_dump(mode="json")
         await store_idempotency_response(
             db,
             key=scoped_idempotency_key,
@@ -296,7 +310,7 @@ async def request_cash_deposit(
             payload=payload_out,
         )
     await db.commit()
-    return request
+    return response_payload
 
 
 @router.get("/cash/agent-accounts")
@@ -396,9 +410,12 @@ async def request_cash_withdraw(
     db.add(request)
     await db.flush()
     await db.refresh(request)
+    response_payload = WalletCashRequestRead.model_validate(request).model_copy(
+        update={"reference_code": _build_cash_request_reference(request.request_id, request.type)}
+    )
     if idempotency_key and idempotency_key.strip():
         scoped_idempotency_key = f"wallet_cash_withdraw:{current_user.user_id}:{idempotency_key.strip()}"
-        payload_out = WalletCashRequestRead.model_validate(request).model_dump(mode="json")
+        payload_out = response_payload.model_dump(mode="json")
         await store_idempotency_response(
             db,
             key=scoped_idempotency_key,
@@ -406,7 +423,7 @@ async def request_cash_withdraw(
             payload=payload_out,
         )
     await db.commit()
-    return request
+    return response_payload
 
 
 @router.get("/cash/requests", response_model=list[WalletCashRequestRead])
@@ -447,6 +464,7 @@ async def list_cash_requests(
         payload.append(
             WalletCashRequestRead(
                 request_id=row.request_id,
+                reference_code=_build_cash_request_reference(row.request_id, normalized_type),
                 type=normalized_type,
                 status=normalized_status,
                 amount=row.amount,
