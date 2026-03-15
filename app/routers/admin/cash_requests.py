@@ -2,7 +2,7 @@ import decimal
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Header
+from fastapi import APIRouter, Depends, HTTPException, Query, Header, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import String, cast, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -99,12 +99,17 @@ async def _serialize_cash_request_row(
 @router.get("", response_model=list[WalletCashRequestAdminRead])
 @router.get("/", response_model=list[WalletCashRequestAdminRead])
 async def list_cash_requests(
-    status: WalletCashRequestStatus | None = Query(None),
-    request_type: WalletCashRequestType | None = Query(None),
+    request: Request,
+    status: str | None = Query(None),
+    request_type: str | None = Query(None),
     limit: int = Query(200, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
 ):
+    normalized_status = normalize_wallet_cash_request_status(status) if status else None
+    raw_type = request_type or request.query_params.get("type")
+    normalized_type = normalize_wallet_cash_request_type(raw_type) if raw_type else None
+
     stmt = (
         select(
             WalletCashRequests.request_id,
@@ -126,10 +131,10 @@ async def list_cash_requests(
         .order_by(WalletCashRequests.created_at.desc())
         .limit(limit)
     )
-    if status:
-        stmt = stmt.where(cast(WalletCashRequests.status, String) == status.value)
-    if request_type:
-        stmt = stmt.where(cast(WalletCashRequests.type, String) == request_type.value)
+    if normalized_status:
+        stmt = stmt.where(cast(WalletCashRequests.status, String).in_([normalized_status.value, normalized_status.value.upper()]))
+    if normalized_type:
+        stmt = stmt.where(cast(WalletCashRequests.type, String).in_([normalized_type.value, normalized_type.value.lower()]))
 
     rows = (await db.execute(stmt)).all()
     result = []
