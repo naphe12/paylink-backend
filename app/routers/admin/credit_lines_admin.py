@@ -123,6 +123,77 @@ class CreditLineIncrease(BaseModel):
     amount: Decimal = Field(..., gt=0)
 
 
+class CreditLineCreate(BaseModel):
+    user_id: UUID
+    amount: Decimal = Field(..., gt=0)
+    currency_code: str = Field(default="EUR", min_length=3, max_length=3)
+
+
+@router.post("")
+async def create_credit_line(
+    payload: CreditLineCreate,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    user = await db.scalar(select(Users).where(Users.user_id == payload.user_id))
+    if not user:
+        raise HTTPException(404, "Utilisateur introuvable")
+
+    existing = await db.scalar(
+        select(CreditLines).where(CreditLines.user_id == payload.user_id)
+    )
+    if existing:
+        raise HTTPException(400, "Une ligne de credit existe deja pour cet utilisateur.")
+
+    amount = Decimal(payload.amount)
+    currency_code = payload.currency_code.upper()
+    now = datetime.utcnow()
+    credit_line = CreditLines(
+        user_id=payload.user_id,
+        currency_code=currency_code,
+        initial_amount=amount,
+        used_amount=Decimal("0"),
+        outstanding_amount=amount,
+        status="active",
+        source="admin",
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(credit_line)
+    await db.flush()
+
+    user.credit_limit = amount
+    user.credit_used = Decimal("0")
+
+    db.add(
+        CreditLineEvents(
+            credit_line_id=credit_line.credit_line_id,
+            user_id=payload.user_id,
+            amount_delta=amount,
+            currency_code=currency_code,
+            old_limit=Decimal("0"),
+            new_limit=amount,
+            operation_code=9000,
+            status="created",
+            source="admin",
+            occurred_at=now,
+        )
+    )
+    db.add(
+        CreditLineHistory(
+            user_id=payload.user_id,
+            transaction_id=None,
+            amount=amount,
+            credit_available_before=Decimal("0"),
+            credit_available_after=amount,
+            description="Augmentation de ligne de credit",
+        )
+    )
+    await db.commit()
+
+    return await get_credit_line_detail(credit_line.credit_line_id, db, admin)
+
+
 @router.post("/{credit_line_id}/increase")
 async def increase_credit_line(
     credit_line_id: UUID,
