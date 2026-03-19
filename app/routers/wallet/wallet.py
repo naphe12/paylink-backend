@@ -5,7 +5,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, Header
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
-from sqlalchemy import cast, select, String, or_, desc, func
+from sqlalchemy import cast, select, String, or_, desc, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -49,6 +49,7 @@ from app.services.idempotency_service import (
 from app.models.credit_lines import CreditLines
 from app.models.credit_line_events import CreditLineEvents
 from app.models.tontinemembers import TontineMembers
+from app.models.external_transfers import ExternalTransfers
 from app.models.wallet_transactions import WalletTransactions
 router = APIRouter()
 
@@ -62,6 +63,33 @@ class FinancialSummary(BaseModel):
     credit_used: decimal.Decimal
     credit_available: decimal.Decimal
     tontines_count: int
+
+
+class DashboardKpis(BaseModel):
+    total_capacity: decimal.Decimal
+    bonus_balance: decimal.Decimal
+    pending_cash_requests: int
+    pending_external_transfers: int
+    successful_transfers: int
+    total_wallet_movements: int
+    risk_score: int
+    daily_limit: decimal.Decimal
+    used_daily: decimal.Decimal
+    monthly_limit: decimal.Decimal
+    used_monthly: decimal.Decimal
+
+
+class DashboardSeriesPoint(BaseModel):
+    label: str
+    total_amount: decimal.Decimal
+    transfers_count: int
+
+
+class ClientDashboardOverview(BaseModel):
+    financial: FinancialSummary
+    kpis: DashboardKpis
+    monthly_transfer_volume: list[DashboardSeriesPoint]
+    yearly_transfer_volume: list[DashboardSeriesPoint]
 
 
 def _build_cash_request_reference(request_id, request_type) -> str:
@@ -1319,6 +1347,108 @@ async def financial_summary_admin(
         credit_used=credit_used,
         credit_available=credit_available,
         tontines_count=int(tontines_count or 0),
+    )
+
+
+@router.get("/overview", response_model=ClientDashboardOverview)
+async def client_dashboard_overview(
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user),
+):
+    financial = await financial_summary(db=db, current_user=current_user)
+
+    transfer_statuses = ("succeeded", "completed")
+    monthly_rows = (
+        await db.execute(
+            select(
+                func.to_char(func.date_trunc("month", Transactions.created_at), "YYYY-MM").label("label"),
+                func.coalesce(func.sum(Transactions.amount), 0).label("total_amount"),
+                func.count(Transactions.tx_id).label("transfers_count"),
+            )
+            .where(
+                Transactions.initiated_by == current_user.user_id,
+                cast(Transactions.status, String).in_(transfer_statuses),
+                Transactions.created_at >= func.now() - text("interval '12 months'"),
+            )
+            .group_by("label")
+            .order_by("label")
+        )
+    ).all()
+    yearly_rows = (
+        await db.execute(
+            select(
+                func.to_char(func.date_trunc("year", Transactions.created_at), "YYYY").label("label"),
+                func.coalesce(func.sum(Transactions.amount), 0).label("total_amount"),
+                func.count(Transactions.tx_id).label("transfers_count"),
+            )
+            .where(
+                Transactions.initiated_by == current_user.user_id,
+                cast(Transactions.status, String).in_(transfer_statuses),
+                Transactions.created_at >= func.now() - text("interval '5 years'"),
+            )
+            .group_by("label")
+            .order_by("label")
+        )
+    ).all()
+
+    pending_cash_requests = await db.scalar(
+        select(func.count())
+        .select_from(WalletCashRequests)
+        .where(
+            WalletCashRequests.user_id == current_user.user_id,
+            cast(WalletCashRequests.status, String) == WalletCashRequestStatus.PENDING.value,
+        )
+    )
+    pending_external_transfers = await db.scalar(
+        select(func.count())
+        .select_from(ExternalTransfers)
+        .where(
+            ExternalTransfers.user_id == current_user.user_id,
+            cast(ExternalTransfers.status, String).in_(("pending", "initiated")),
+        )
+    )
+    successful_transfers = await db.scalar(
+        select(func.count())
+        .select_from(Transactions)
+        .where(
+            Transactions.initiated_by == current_user.user_id,
+            cast(Transactions.status, String).in_(transfer_statuses),
+        )
+    )
+    total_wallet_movements = await db.scalar(
+        select(func.count())
+        .select_from(WalletTransactions)
+        .where(WalletTransactions.user_id == current_user.user_id)
+    )
+
+    def _series(rows):
+        return [
+            DashboardSeriesPoint(
+                label=str(row.label),
+                total_amount=decimal.Decimal(row.total_amount or 0),
+                transfers_count=int(row.transfers_count or 0),
+            )
+            for row in rows
+        ]
+
+    return ClientDashboardOverview(
+        financial=financial,
+        kpis=DashboardKpis(
+            total_capacity=decimal.Decimal(financial.wallet_available or 0)
+            + decimal.Decimal(financial.credit_available or 0),
+            bonus_balance=decimal.Decimal(financial.bonus_balance or 0),
+            pending_cash_requests=int(pending_cash_requests or 0),
+            pending_external_transfers=int(pending_external_transfers or 0),
+            successful_transfers=int(successful_transfers or 0),
+            total_wallet_movements=int(total_wallet_movements or 0),
+            risk_score=int(getattr(current_user, "risk_score", 0) or 0),
+            daily_limit=decimal.Decimal(getattr(current_user, "daily_limit", 0) or 0),
+            used_daily=decimal.Decimal(getattr(current_user, "used_daily", 0) or 0),
+            monthly_limit=decimal.Decimal(getattr(current_user, "monthly_limit", 0) or 0),
+            used_monthly=decimal.Decimal(getattr(current_user, "used_monthly", 0) or 0),
+        ),
+        monthly_transfer_volume=_series(monthly_rows),
+        yearly_transfer_volume=_series(yearly_rows),
     )
 
 

@@ -90,6 +90,42 @@ async def dashboard_summary(
         0,
     )
 
+    pending_deposits = await _safe_scalar(
+        "pending_deposits",
+        text(
+            """
+            SELECT COUNT(*)::int
+            FROM paylink.wallet_cash_requests
+            WHERE lower(status::text) = 'pending'
+              AND upper(type::text) = 'DEPOSIT'
+            """
+        ),
+        0,
+    )
+    pending_withdraws = await _safe_scalar(
+        "pending_withdraws",
+        text(
+            """
+            SELECT COUNT(*)::int
+            FROM paylink.wallet_cash_requests
+            WHERE lower(status::text) = 'pending'
+              AND upper(type::text) = 'WITHDRAW'
+            """
+        ),
+        0,
+    )
+    pending_external_transfers = await _safe_scalar(
+        "pending_external_transfers",
+        text(
+            """
+            SELECT COUNT(*)::int
+            FROM paylink.external_transfers
+            WHERE lower(status) IN ('pending', 'initiated')
+            """
+        ),
+        0,
+    )
+
     return {
         "aml_open_cases": aml_open,
         "aml_hits_24h": aml_hits_24h,
@@ -97,6 +133,9 @@ async def dashboard_summary(
         "total_trades_24h": total_trades_24h,
         "liquidity": liquidity,
         "arbitrage_executions_24h": arb_24h,
+        "pending_deposits": pending_deposits,
+        "pending_withdraws": pending_withdraws,
+        "pending_external_transfers": pending_external_transfers,
     }
 
 
