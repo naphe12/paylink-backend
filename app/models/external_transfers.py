@@ -23,6 +23,7 @@ class ExternalTransfers(Base):
     country_destination = Column(Text, nullable=False)
     recipient_name = Column(Text, nullable=False)
     recipient_phone = Column(Text, nullable=False)
+    recipient_email = Column(Text, nullable=True)
 
     amount = Column(Numeric(12, 2), nullable=False)
     currency = Column(String(5), default="EUR")

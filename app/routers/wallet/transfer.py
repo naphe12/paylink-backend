@@ -127,6 +127,25 @@ def _parse_telegram_notify_chat_ids() -> list[int]:
     return chat_ids
 
 
+async def _list_external_transfer_agent_users(db: AsyncSession) -> list[Users]:
+    rows = await db.scalars(
+        select(Users).where(
+            Users.role == "agent",
+            Users.status == "active",
+            Users.email.is_not(None),
+        )
+    )
+    agents: list[Users] = []
+    seen_emails: set[str] = set()
+    for agent in rows:
+        email = str(agent.email or "").strip().lower()
+        if not email or email in seen_emails:
+            continue
+        seen_emails.add(email)
+        agents.append(agent)
+    return agents
+
+
 async def _notify_external_transfer(
     *,
     db: AsyncSession,
@@ -142,28 +161,27 @@ async def _notify_external_transfer(
     requires_admin: bool,
     fx_rate: decimal.Decimal,
 ) -> None:
-    close_link = None
-    configured_agent_email = str(getattr(settings, "AGENT_EMAIL", "") or "").strip()
-    agent_user = await db.scalar(
-        select(Users).where(Users.email == configured_agent_email)
-    ) if configured_agent_email else None
+    agent_users = await _list_external_transfer_agent_users(db)
     backend_base = str(getattr(settings, "BACKEND_URL", "") or "").strip()
-    if agent_user and backend_base:
-        close_token = create_access_token(
-            data={
-                "sub": str(agent_user.user_id),
-                "action": "external_transfer_close_by_agent_link",
-                "transfer_id": str(transfer.transfer_id),
-            },
-            expires_delta=timedelta(hours=48),
-        )
-        close_link = f"{backend_base.rstrip('/')}/agent/external/{transfer.transfer_id}/close-by-link?token={close_token}"
-
-    if requires_admin and configured_agent_email:
+    for agent_user in agent_users:
+        close_link = None
+        if backend_base and requires_admin:
+            close_token = create_access_token(
+                data={
+                    "sub": str(agent_user.user_id),
+                    "action": "external_transfer_close_by_agent_link",
+                    "transfer_id": str(transfer.transfer_id),
+                },
+                expires_delta=timedelta(hours=48),
+            )
+            close_link = (
+                f"{backend_base.rstrip('/')}/agent/external/{transfer.transfer_id}"
+                f"/close-by-link?token={close_token}"
+            )
         try:
             await run_in_threadpool(
                 send_email,
-                configured_agent_email,
+                str(agent_user.email),
                 f"Nouvelle demande de transfert #{transfer.reference_code}",
                 "external_transfer_request_agent.html",
                 client_name=current_user.full_name,
@@ -184,8 +202,9 @@ async def _notify_external_transfer(
             )
         except Exception as exc:
             logger.exception(
-                "Agent notification email failed for external transfer %s: %s",
+                "Agent notification email failed for external transfer %s to %s: %s",
                 transfer.transfer_id,
+                agent_user.email,
                 exc,
             )
 
@@ -214,34 +233,32 @@ async def _notify_external_transfer(
                 exc,
             )
 
-    try:
-        await send_transaction_emails(
-            db,
-            initiator=current_user,
-            subject=f"Nouvelle demande de transfert {transfer.reference_code}",
-            template="external_transfer_request_agent.html",
-            client_name=current_user.full_name,
-            client_email=current_user.email,
-            client_phone=current_user.phone_e164 or "",
-            amount=amount,
-            currency=origin_currency,
-            payout_amount=f"{local_amount} {destination_currency}",
-            credit_available=f"{credit_available_after}",
-            receiver_name=data.recipient_name,
-            receiver_phone=data.recipient_phone,
-            partner_name=data.partner_name,
-            country=data.country_destination,
-            transfer_id=transfer.reference_code,
-            dashboard_url=f"{settings.FRONTEND_URL}/dashboard/admin",
-            close_link=close_link,
-            year=datetime.utcnow().year,
-        )
-    except Exception as exc:
-        logger.exception(
-            "Transaction notifications failed for external transfer %s: %s",
-            transfer.transfer_id,
-            exc,
-        )
+    if current_user.email:
+        try:
+            await send_transaction_emails(
+                db,
+                initiator=current_user,
+                subject=f"Demande de transfert {transfer.reference_code}",
+                template="external_transfer_request_client.html",
+                recipients=[current_user.email],
+                client_name=current_user.full_name or "",
+                amount=str(amount),
+                currency=origin_currency,
+                payout_amount=f"{local_amount} {destination_currency}",
+                receiver_name=data.recipient_name,
+                receiver_phone=data.recipient_phone,
+                partner_name=data.partner_name,
+                country=data.country_destination,
+                transfer_id=transfer.reference_code,
+                status=transfer.status,
+                year=datetime.utcnow().year,
+            )
+        except Exception as exc:
+            logger.exception(
+                "Client request notification failed for external transfer %s: %s",
+                transfer.transfer_id,
+                exc,
+            )
 
     if current_user.email:
         receipt_payload = {
@@ -291,6 +308,31 @@ async def _notify_external_transfer(
                 exc,
             )
 
+    if data.recipient_email:
+        try:
+            await send_transaction_emails(
+                db,
+                initiator=current_user,
+                subject=f"Transfert PesaPaid {transfer.reference_code}",
+                recipients=[data.recipient_email],
+                template="external_transfer_recipient_notification.html",
+                recipient_name=data.recipient_name,
+                sender_name=current_user.full_name or "Client PesaPaid",
+                reference=transfer.reference_code,
+                payout_amount=f"{local_amount} {destination_currency}",
+                receiver_phone=data.recipient_phone,
+                partner_name=data.partner_name,
+                country=data.country_destination,
+                status=transfer.status,
+                year=datetime.utcnow().year,
+            )
+        except Exception as exc:
+            logger.exception(
+                "Recipient notification email failed for external transfer %s: %s",
+                transfer.transfer_id,
+                exc,
+            )
+
 
 @router.get("/external/beneficiaries", response_model=list[ExternalBeneficiaryRead])
 async def list_external_beneficiaries(
@@ -304,6 +346,7 @@ async def list_external_beneficiaries(
         select(
             ExternalTransfers.recipient_name,
             ExternalTransfers.recipient_phone,
+            ExternalTransfers.recipient_email,
             ExternalTransfers.partner_name,
             ExternalTransfers.country_destination,
         )
@@ -317,6 +360,7 @@ async def list_external_beneficiaries(
         {
           "recipient_name": r.recipient_name,
           "recipient_phone": r.recipient_phone,
+          "recipient_email": r.recipient_email,
           "partner_name": r.partner_name,
           "country_destination": r.country_destination,
         }
@@ -343,6 +387,7 @@ async def external_transfer(
                 "country_destination": str(data.country_destination or "").strip(),
                 "recipient_name": str(data.recipient_name or "").strip(),
                 "recipient_phone": str(data.recipient_phone or "").strip(),
+                "recipient_email": str(data.recipient_email or "").strip().lower(),
                 "amount": str(data.amount),
                 "user_id": str(current_user.user_id),
             }
@@ -509,6 +554,7 @@ async def external_transfer(
         country_destination=data.country_destination,
         recipient_name=data.recipient_name,
         recipient_phone=data.recipient_phone,
+        recipient_email=data.recipient_email,
         amount=amount,
         currency=destination_currency,
         rate=fx_rate,
