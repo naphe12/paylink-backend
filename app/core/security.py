@@ -10,13 +10,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.config import settings
 from app.models.users import Users
 
 load_dotenv()
 
-SECRET_KEY = os.getenv("SECRET_KEY", "secret-paylink-key")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24h
+SECRET_KEY = os.getenv("SECRET_KEY", settings.SECRET_KEY)
+ALGORITHM = settings.ALGORITHM
+ACCESS_TOKEN_EXPIRE_MINUTES = settings.ACCESS_TOKEN_EXPIRE_MINUTES
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -72,10 +73,6 @@ async def get_current_agent(current_user: Users = Depends(get_current_user)) -> 
             detail="⛔ Accès réservé aux agents"
         )
     return current_user
-
-# app/core/security.py
-from jose import jwt
-from app.core.config import settings
 
 def decode_jwt(token: str):
     return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])

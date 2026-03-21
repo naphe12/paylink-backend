@@ -83,6 +83,7 @@ from app.routers.wallet.transfer import router as transfer_router
 from app.routers.ws import router as ws_router
 from app.services.backoffice_risk import router as backoffice_risk_router
 from app.services.idempotency_service import ensure_idempotency_schema
+from app.services.auth_sessions import ensure_auth_refresh_schema
 from app.services.sandbox_transition_worker import run_sandbox_auto_transitions
 from app.services.p2p_expiration_worker import run_p2p_expiration_worker
 from app.services.tontine_rotation import process_tontine_rotations
@@ -370,13 +371,15 @@ async def ensure_request_metrics_schema(db) -> None:
 
 
 default_origins = {
+    "https://pesapaid.com",
+    "https://app.pesapaid.com",
+    "https://api.pesapaid.com",
+    "https://www.pesapaid.com",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "https://paylink-frontend-production.up.railway.app",
-    "https://web-production-448ce.up.railway.app",
-    "https://pesapaid.com",
-    "https://app.pesapaid.com",
-    "https://www.pesapaid.com",
+    "https://web-production-448ce.up.railway.app"
+  
 }
 configured_origins = {
     o.strip().rstrip("/")
@@ -616,6 +619,7 @@ async def ws_admin(
 @app.on_event("startup")
 async def startup_event():
     async for db in get_db():
+        await ensure_auth_refresh_schema(db)
         await ensure_idempotency_schema(db)
         await ensure_request_metrics_schema(db)
         await db.commit()

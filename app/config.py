@@ -10,7 +10,14 @@ class Settings(BaseSettings):
     # -------------------------------------------------
     SECRET_KEY: str = "secret-paylink-key"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 240
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 14
+    AUTH_COOKIE_DOMAIN: str | None = None
+    AUTH_COOKIE_SAMESITE: str = "lax"
+    AUTH_COOKIE_SECURE: bool = False
+    AUTH_REFRESH_COOKIE_NAME: str = "refresh_token"
+    AUTH_REFRESH_COOKIE_PATH: str = "/auth"
+    AUTH_CSRF_HEADER_NAME: str = "X-CSRF-Token"
 
     # -------------------------------------------------
     # ENVIRONNEMENT

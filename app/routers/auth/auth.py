@@ -11,6 +11,7 @@ from fastapi import (
     Body,
     Form,
     Request,
+    Response,
 )
 from fastapi.concurrency import run_in_threadpool
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -29,16 +30,37 @@ from app.models.wallets import Wallets
 from app.schemas.users import UsersCreate, UsersRead
 from app.services.mailer import send_email
 from app.services.mailjet_service import MailjetEmailService
+from app.services.auth_sessions import issue_refresh_session, revoke_refresh_session, rotate_refresh_session
 
 router = APIRouter()
 
 # OAuth2 helper to pull token from Authorization header
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
+
+def _build_auth_response(user: Users, access_token: str, csrf_token: str | None = None) -> dict:
+    payload = {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "role": user.role,
+        "user": {
+            "user_id": str(user.user_id),
+            "full_name": user.full_name,
+            "email": user.email,
+            "role": user.role,
+            "status": user.status,
+        },
+    }
+    if csrf_token:
+        payload["csrf_token"] = csrf_token
+    return payload
+
 @router.post("/register", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def register_user(
     user_in: UsersCreate,
     background_tasks: BackgroundTasks,
+    request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
 ):
     existing_user = await db.scalar(select(Users).where(Users.email == user_in.email))
@@ -104,16 +126,16 @@ async def register_user(
         body_html=verification_body,
     )
 
-    access_token_expires = timedelta(hours=24)
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={"sub": str(user.user_id)}, expires_delta=access_token_expires
     )
+    csrf_token = await issue_refresh_session(db, response, user, request)
+    await db.commit()
 
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "user": UsersRead.model_validate(user, from_attributes=True),
-    }
+    payload = _build_auth_response(user, access_token, csrf_token)
+    payload["user"] = UsersRead.model_validate(user, from_attributes=True)
+    return payload
 
 
 @router.get("/verify-email")
@@ -145,6 +167,8 @@ async def verify_email(token: str = Query(...), db: AsyncSession = Depends(get_d
 
 @router.post("/login")
 async def login(
+    request: Request,
+    response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db),
 ):
@@ -172,24 +196,42 @@ async def login(
     auth_data.last_login_at = datetime.utcnow()
     await db.commit()
 
-    access_token_expires = timedelta(hours=24)
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={"sub": str(user.user_id)},
         expires_delta=access_token_expires,
     )
+    csrf_token = await issue_refresh_session(db, response, user, request)
+    await db.commit()
+    return _build_auth_response(user, access_token, csrf_token)
 
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "role": user.role,
-        "user": {
-            "user_id": str(user.user_id),
-            "full_name": user.full_name,
-            "email": user.email,
-            "role": user.role,
-            "status": user.status,
-        },
-    }
+
+@router.post("/refresh")
+async def refresh_session(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    session_data = await rotate_refresh_session(db, request, response)
+    user: Users = session_data["user"]
+    access_token = create_access_token(
+        data={"sub": str(user.user_id)},
+        expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
+    )
+    await db.commit()
+    return _build_auth_response(user, access_token, session_data["csrf_token"])
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    await revoke_refresh_session(db, request, response, require_csrf=True)
+    await db.commit()
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
 
 
 @router.get("/me", response_model=UsersRead)
