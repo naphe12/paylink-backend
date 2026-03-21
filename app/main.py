@@ -374,6 +374,8 @@ default_origins = {
     "http://127.0.0.1:5173",
     "https://paylink-frontend-production.up.railway.app",
     "https://web-production-448ce.up.railway.app",
+    "https://app.pesapaid.com",
+     "https://www.pesapaid.com",
 }
 configured_origins = {
     o.strip().rstrip("/")
