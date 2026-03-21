@@ -6,7 +6,7 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +38,17 @@ from app.services.telegram import send_message as send_telegram_message
 from app.services.transaction_notifications import send_transaction_emails
 from app.services.wallet_history import log_wallet_movement
 from app.services.pdf_utils import build_external_transfer_receipt
+
+
+def _normalize_optional_email(value: str | None) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        # Response model expects a valid email; legacy free-text values should not 500 the route.
+        return str(EmailStr(raw))
+    except Exception:
+        return None
 from app.services.idempotency_service import (
     acquire_idempotency,
     compute_request_hash,
@@ -360,7 +371,7 @@ async def list_external_beneficiaries(
         {
           "recipient_name": r.recipient_name,
           "recipient_phone": r.recipient_phone,
-          "recipient_email": r.recipient_email,
+          "recipient_email": _normalize_optional_email(r.recipient_email),
           "partner_name": r.partner_name,
           "country_destination": r.country_destination,
         }
