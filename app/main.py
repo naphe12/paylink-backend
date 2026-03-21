@@ -374,8 +374,9 @@ default_origins = {
     "http://127.0.0.1:5173",
     "https://paylink-frontend-production.up.railway.app",
     "https://web-production-448ce.up.railway.app",
+    "https://pesapaid.com",
     "https://app.pesapaid.com",
-     "https://www.pesapaid.com",
+    "https://www.pesapaid.com",
 }
 configured_origins = {
     o.strip().rstrip("/")
@@ -399,7 +400,7 @@ app.add_middleware(RateLimitMiddleware, redis_url=settings.REDIS_URL)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_origin_regex=r"(https://.*\.up\.railway\.app|http://localhost(:\d+)?|http://127\.0\.0\.1(:\d+)?)",
+    allow_origin_regex=r"(https://.*\.up\.railway\.app|https://([a-z0-9-]+\.)?pesapaid\.com|http://localhost(:\d+)?|http://127\.0\.0\.1(:\d+)?)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
