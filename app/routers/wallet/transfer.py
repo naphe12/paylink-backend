@@ -357,7 +357,6 @@ async def list_external_beneficiaries(
         select(
             ExternalTransfers.recipient_name,
             ExternalTransfers.recipient_phone,
-            ExternalTransfers.recipient_email,
             ExternalTransfers.partner_name,
             ExternalTransfers.country_destination,
         )
@@ -371,7 +370,7 @@ async def list_external_beneficiaries(
         {
           "recipient_name": r.recipient_name,
           "recipient_phone": r.recipient_phone,
-          "recipient_email": _normalize_optional_email(r.recipient_email),
+          "recipient_email": None,
           "partner_name": r.partner_name,
           "country_destination": r.country_destination,
         }
