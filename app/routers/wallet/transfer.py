@@ -388,6 +388,8 @@ async def external_transfer(
     current_user: Users = Depends(get_current_user),
     override_balance_check: bool = False,
     override_context: dict | None = None,
+    final_status_override: str | None = None,
+    processed_by_user_id: str | None = None,
 ):
     ledger = LedgerService(db)
     await calculate_risk_score(db, current_user.user_id)
@@ -476,6 +478,7 @@ async def external_transfer(
 
     total_required = amount + fee_amount
     total_available = wallet_balance + credit_available
+    force_negative_wallet = override_balance_check and total_required > total_available
 
     if total_required > total_available and not override_balance_check:
         raise HTTPException(
@@ -506,7 +509,11 @@ async def external_transfer(
     wallet_balance_before = wallet_balance
     credit_available_after = credit_available_before
     local_amount = (amount * fx_rate).quantize(decimal.Decimal("0.01"))
-    if wallet_balance >= total_required:
+    if force_negative_wallet:
+        wallet_balance -= total_required
+        wallet.available = wallet_balance
+        credit_used = decimal.Decimal(0)
+    elif wallet_balance >= total_required:
         wallet_balance -= total_required
         wallet.available = wallet_balance
         credit_used = decimal.Decimal(0)
@@ -524,8 +531,18 @@ async def external_transfer(
             user_locked.credit_used = credit_used_total + credit_used
 
     requires_admin = credit_used > decimal.Decimal(0)
+    requested_status = str(final_status_override or "").strip().lower()
+    if requested_status == "completed":
+        transfer_status = "completed"
+        txn_status = "completed"
+    elif requested_status == "approved":
+        transfer_status = "approved"
+        txn_status = "pending"
+    else:
+        transfer_status = "pending" if requires_admin else "approved"
+        txn_status = "pending"
 
-    debited = min(wallet_balance_before, total_required)
+    debited = total_required if force_negative_wallet else min(wallet_balance_before, total_required)
     movement = None
     if debited > 0:
         movement = await log_wallet_movement(
@@ -545,8 +562,6 @@ async def external_transfer(
     transfer_id = uuid.uuid4()
     reference_code = f"EXT-{uuid.uuid4().hex[:8].upper()}"
     wallet.bonus_balance = decimal.Decimal(wallet.bonus_balance or 0) + bonus_earned
-
-    txn_status = "pending"
 
     txn = Transactions(
         tx_id=transfer_id,
@@ -573,9 +588,9 @@ async def external_transfer(
         rate=fx_rate,
         local_amount=local_amount,
         credit_used=(credit_used > 0),
-        status="pending" if requires_admin else "approved",
-        processed_by=None,
-        processed_at=None,
+        status=transfer_status,
+        processed_by=processed_by_user_id if transfer_status == "completed" else None,
+        processed_at=datetime.utcnow() if transfer_status == "completed" else None,
         reference_code=reference_code,
     )
     db.add(transfer)
@@ -603,6 +618,9 @@ async def external_transfer(
         "destination_currency": destination_currency,
         "idempotency_key": scoped_idempotency_key,
         "override_balance_check": bool(override_balance_check),
+        "force_negative_wallet": bool(force_negative_wallet),
+        "final_status_override": requested_status or None,
+        "processed_by_user_id": processed_by_user_id if transfer_status == "completed" else None,
     }
     if override_context and isinstance(override_context, dict):
         metadata["override_context"] = {

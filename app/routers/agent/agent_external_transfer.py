@@ -407,6 +407,7 @@ async def create_external_transfer_for_client(
             "agent_paytag": getattr(current_agent, "paytag", None),
             "source": "agent_console",
         },
+        final_status_override="approved",
     )
 
     transfer_id = getattr(result, "transfer_id", None) or result.get("transfer_id")
@@ -418,6 +419,7 @@ async def create_external_transfer_for_client(
                 {
                     "created_via": "agent_console",
                     "created_by_agent_user_id": str(current_agent.user_id),
+                    "auto_approved_by_agent": True,
                 }
             )
             transfer.metadata_ = _jsonify_metadata(metadata)
