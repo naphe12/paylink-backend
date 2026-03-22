@@ -471,7 +471,7 @@ async def list_external_beneficiaries(
 @router.post("/external", response_model=ExternalTransferRead)
 async def external_transfer(
     data: ExternalTransferCreate,
-    background_tasks: BackgroundTasks | None = None,
+    background_tasks: BackgroundTasks,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user),
@@ -826,10 +826,7 @@ async def external_transfer(
         "fx_rate": str(fx_rate),
         "override_context": override_context,
     }
-    if background_tasks is not None:
-        background_tasks.add_task(_notify_external_transfer_task, **notification_kwargs)
-    else:
-        await _notify_external_transfer_task(**notification_kwargs)
+    background_tasks.add_task(_notify_external_transfer_task, **notification_kwargs)
     return payload_out if scoped_idempotency_key else transfer
 
 
