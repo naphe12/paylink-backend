@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
 import json
@@ -18,6 +19,9 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_WALLET_TOKENS = {"USDC", "USDT"}
 SUPPORTED_REQUEST_STATUSES = {"PENDING", "MATCHED", "EXPIRED", "CANCELLED"}
+_wallet_crypto_schema_ready = False
+_wallet_crypto_schema_lock = asyncio.Lock()
+_WALLET_CRYPTO_SCHEMA_LOCK_ID = 90421017
 
 
 def normalize_wallet_token(token_symbol: str) -> str:
@@ -59,59 +63,72 @@ def get_paylink_deposit_address(token_symbol: str, network: str) -> str:
 
 
 async def ensure_wallet_crypto_deposit_tables(db: AsyncSession) -> None:
-    await db.execute(
-        text(
-            """
-            CREATE TABLE IF NOT EXISTS paylink.wallet_crypto_deposit_requests (
-              request_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-              user_id uuid NOT NULL REFERENCES paylink.users(user_id) ON DELETE CASCADE,
-              token_symbol text NOT NULL,
-              network text NOT NULL,
-              paylink_deposit_address text NOT NULL,
-              expected_amount numeric(24, 8),
-              status text NOT NULL DEFAULT 'PENDING',
-              expires_at timestamptz,
-              tx_hash text,
-              log_index integer,
-              matched_amount numeric(24, 8),
-              metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
-              created_at timestamptz NOT NULL DEFAULT now(),
-              updated_at timestamptz NOT NULL DEFAULT now()
+    global _wallet_crypto_schema_ready
+    if _wallet_crypto_schema_ready:
+        return
+
+    async with _wallet_crypto_schema_lock:
+        if _wallet_crypto_schema_ready:
+            return
+
+        await db.execute(text("SELECT pg_advisory_lock(:lock_id)"), {"lock_id": _WALLET_CRYPTO_SCHEMA_LOCK_ID})
+        try:
+            await db.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS paylink.wallet_crypto_deposit_requests (
+                      request_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                      user_id uuid NOT NULL REFERENCES paylink.users(user_id) ON DELETE CASCADE,
+                      token_symbol text NOT NULL,
+                      network text NOT NULL,
+                      paylink_deposit_address text NOT NULL,
+                      expected_amount numeric(24, 8),
+                      status text NOT NULL DEFAULT 'PENDING',
+                      expires_at timestamptz,
+                      tx_hash text,
+                      log_index integer,
+                      matched_amount numeric(24, 8),
+                      metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+                      created_at timestamptz NOT NULL DEFAULT now(),
+                      updated_at timestamptz NOT NULL DEFAULT now()
+                    )
+                    """
+                )
             )
-            """
-        )
-    )
-    await db.execute(
-        text(
-            """
-            CREATE INDEX IF NOT EXISTS idx_wallet_crypto_deposit_requests_pending
-            ON paylink.wallet_crypto_deposit_requests (token_symbol, network, status, created_at)
-            """
-        )
-    )
-    await db.execute(
-        text(
-            """
-            CREATE TABLE IF NOT EXISTS paylink.wallet_crypto_deposits (
-              deposit_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-              user_id uuid NOT NULL REFERENCES paylink.users(user_id) ON DELETE CASCADE,
-              request_id uuid REFERENCES paylink.wallet_crypto_deposit_requests(request_id) ON DELETE SET NULL,
-              token_symbol text NOT NULL,
-              network text NOT NULL,
-              deposit_address text NOT NULL,
-              tx_hash text NOT NULL,
-              log_index integer NOT NULL DEFAULT 0,
-              from_address text,
-              amount numeric(24, 8) NOT NULL,
-              confirmations integer NOT NULL DEFAULT 0,
-              status text NOT NULL DEFAULT 'CONFIRMED',
-              metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
-              created_at timestamptz NOT NULL DEFAULT now(),
-              UNIQUE (network, token_symbol, tx_hash, log_index)
+            await db.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_wallet_crypto_deposit_requests_pending
+                    ON paylink.wallet_crypto_deposit_requests (token_symbol, network, status, created_at)
+                    """
+                )
             )
-            """
-        )
-    )
+            await db.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS paylink.wallet_crypto_deposits (
+                      deposit_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                      user_id uuid NOT NULL REFERENCES paylink.users(user_id) ON DELETE CASCADE,
+                      request_id uuid REFERENCES paylink.wallet_crypto_deposit_requests(request_id) ON DELETE SET NULL,
+                      token_symbol text NOT NULL,
+                      network text NOT NULL,
+                      deposit_address text NOT NULL,
+                      tx_hash text NOT NULL,
+                      log_index integer NOT NULL DEFAULT 0,
+                      from_address text,
+                      amount numeric(24, 8) NOT NULL,
+                      confirmations integer NOT NULL DEFAULT 0,
+                      status text NOT NULL DEFAULT 'CONFIRMED',
+                      metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+                      created_at timestamptz NOT NULL DEFAULT now(),
+                      UNIQUE (network, token_symbol, tx_hash, log_index)
+                    )
+                    """
+                )
+            )
+            _wallet_crypto_schema_ready = True
+        finally:
+            await db.execute(text("SELECT pg_advisory_unlock(:lock_id)"), {"lock_id": _WALLET_CRYPTO_SCHEMA_LOCK_ID})
 
 
 async def create_wallet_deposit_request(

@@ -94,7 +94,7 @@ class Settings(BaseSettings):
     # -------------------------------------------------
     # EMAIL SMTP
     # -------------------------------------------------
-    MAIL_FROM: str = "noreply@paylink.com"
+    MAIL_FROM: str = "noreply@pesapaid.com"
     MAIL_FROM_NAME: str = "PesaPaid"
     SMTP_HOST: str = "smtp.mailgun.org"
     SMTP_PORT: int = 587

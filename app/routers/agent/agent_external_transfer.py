@@ -23,7 +23,7 @@ from app.models.wallets import Wallets
 from app.services.transaction_notifications import send_transaction_emails
 from app.models.agents import Agents
 from app.schemas.external_transfers import ExternalBeneficiaryRead, ExternalTransferCreate
-from app.routers.wallet.transfer import external_transfer as create_client_external_transfer
+from app.routers.wallet.transfer import _external_transfer_core as create_client_external_transfer
 from app.services.external_transfer_rules import (
     normalize_external_transfer_status,
     transition_external_transfer_status,

@@ -468,8 +468,7 @@ async def list_external_beneficiaries(
     ]
 
 
-@router.post("/external", response_model=ExternalTransferRead)
-async def external_transfer(
+async def _external_transfer_core(
     data: ExternalTransferCreate,
     background_tasks: BackgroundTasks,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
@@ -828,6 +827,23 @@ async def external_transfer(
     }
     background_tasks.add_task(_notify_external_transfer_task, **notification_kwargs)
     return payload_out if scoped_idempotency_key else transfer
+
+
+@router.post("/external", response_model=ExternalTransferRead)
+async def external_transfer(
+    data: ExternalTransferCreate,
+    background_tasks: BackgroundTasks,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user),
+):
+    return await _external_transfer_core(
+        data=data,
+        background_tasks=background_tasks,
+        idempotency_key=idempotency_key,
+        db=db,
+        current_user=current_user,
+    )
 
 
 @router.post("/transfer/external/{transfer_id}/approve")
