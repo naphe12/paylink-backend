@@ -509,18 +509,19 @@ async def external_transfer(
     wallet_balance_before = wallet_balance
     credit_available_after = credit_available_before
     local_amount = (amount * fx_rate).quantize(decimal.Decimal("0.01"))
-    if force_negative_wallet:
-        wallet_balance -= total_required
-        wallet.available = wallet_balance
-        credit_used = decimal.Decimal(0)
-    elif wallet_balance >= total_required:
-        wallet_balance -= total_required
-        wallet.available = wallet_balance
+    wallet_after = wallet_balance_before
+    if wallet_balance_before >= total_required:
+        wallet_after = wallet_balance_before - total_required
+        wallet.available = wallet_after
         credit_used = decimal.Decimal(0)
     else:
-        credit_used = total_required - wallet_balance
-        wallet.available = decimal.Decimal(0)
+        wallet_consumed = max(wallet_balance_before, decimal.Decimal("0"))
+        remaining_after_wallet = total_required - wallet_consumed
+        credit_used = min(credit_available_before, remaining_after_wallet)
         credit_available_after = credit_available_before - credit_used
+        residual_after_credit = remaining_after_wallet - credit_used
+        wallet_after = -residual_after_credit if force_negative_wallet else decimal.Decimal("0")
+        wallet.available = wallet_after
         if credit_line:
             credit_line.used_amount = decimal.Decimal(credit_line.used_amount or 0) + credit_used
             credit_line.outstanding_amount = max(decimal.Decimal("0"), credit_available_after)
@@ -542,7 +543,7 @@ async def external_transfer(
         transfer_status = "pending" if requires_admin else "approved"
         txn_status = "pending"
 
-    debited = total_required if force_negative_wallet else min(wallet_balance_before, total_required)
+    debited = wallet_balance_before - wallet_after
     movement = None
     if debited > 0:
         movement = await log_wallet_movement(
