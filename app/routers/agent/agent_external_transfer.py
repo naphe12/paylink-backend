@@ -3,7 +3,7 @@ from decimal import Decimal
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -378,6 +378,7 @@ async def get_pending_transfers(
 @router.post("/create")
 async def create_external_transfer_for_client(
     payload: AgentExternalTransferCreate,
+    background_tasks: BackgroundTasks,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: AsyncSession = Depends(get_db),
     current_agent: Users = Depends(get_current_agent),
@@ -398,6 +399,7 @@ async def create_external_transfer_for_client(
 
     result = await create_client_external_transfer(
         data=transfer_payload,
+        background_tasks=background_tasks,
         idempotency_key=idempotency_key,
         db=db,
         current_user=client_user,

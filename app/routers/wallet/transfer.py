@@ -3,15 +3,16 @@ import logging
 import uuid
 from datetime import datetime
 from datetime import timedelta
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.database import get_db
+from app.core.database import async_session_maker, get_db
 from app.dependencies.auth import get_current_agent, get_current_user
 from app.models.bonus_history import BonusHistory
 from app.models.credit_line_history import CreditLineHistory
@@ -33,7 +34,6 @@ from app.schemas.external_transfers import (
 from app.schemas.transactions import TransactionSend
 from app.services.aml import update_risk_score
 from app.services.ledger import LedgerLine, LedgerService
-from app.services.mailer import send_email
 from app.services.risk_engine import calculate_risk_score
 from app.services.mailjet_service import MailjetEmailService
 from app.services.telegram import send_message as send_telegram_message
@@ -186,6 +186,15 @@ async def _notify_external_transfer(
     override_context: dict | None = None,
 ) -> None:
     agent_users = await _list_external_transfer_agent_users(db)
+    agent_mailer: MailjetEmailService | None = None
+    try:
+        agent_mailer = MailjetEmailService()
+    except Exception as exc:
+        logger.exception(
+            "Agent notification mailer initialization failed for external transfer %s: %s",
+            transfer.transfer_id,
+            exc,
+        )
     explicit_agent_email = _normalize_optional_email(
         (override_context or {}).get("notify_agent_email")
     )
@@ -201,6 +210,8 @@ async def _notify_external_transfer(
             )
     backend_base = str(getattr(settings, "BACKEND_URL", "") or "").strip()
     for agent_user in agent_users:
+        if agent_mailer is None:
+            break
         close_link = None
         if backend_base and requires_admin:
             close_token = create_access_token(
@@ -217,7 +228,7 @@ async def _notify_external_transfer(
             )
         try:
             await run_in_threadpool(
-                send_email,
+                agent_mailer.send_email,
                 str(agent_user.email),
                 f"Nouvelle demande de transfert #{transfer.reference_code}",
                 "external_transfer_request_agent.html",
@@ -371,6 +382,59 @@ async def _notify_external_transfer(
             )
 
 
+async def _notify_external_transfer_task(
+    *,
+    current_user_id: str,
+    transfer_id: str,
+    data_payload: dict,
+    amount: str,
+    origin_currency: str,
+    destination_currency: str,
+    local_amount: str,
+    credit_used: str,
+    credit_available_after: str,
+    requires_admin: bool,
+    fx_rate: str,
+    override_context: dict | None = None,
+) -> None:
+    try:
+        async with async_session_maker() as db:
+            current_user = await db.scalar(
+                select(Users).where(Users.user_id == UUID(str(current_user_id)))
+            )
+            transfer = await db.scalar(
+                select(ExternalTransfers).where(ExternalTransfers.transfer_id == UUID(str(transfer_id)))
+            )
+            if not current_user or not transfer:
+                logger.warning(
+                    "Skip external transfer notifications: current_user=%s transfer=%s missing",
+                    current_user_id,
+                    transfer_id,
+                )
+                return
+            await _notify_external_transfer(
+                db=db,
+                current_user=current_user,
+                transfer=transfer,
+                data=ExternalTransferCreate(**data_payload),
+                amount=decimal.Decimal(amount),
+                origin_currency=origin_currency,
+                destination_currency=destination_currency,
+                local_amount=decimal.Decimal(local_amount),
+                credit_used=decimal.Decimal(credit_used),
+                credit_available_after=decimal.Decimal(credit_available_after),
+                requires_admin=requires_admin,
+                fx_rate=decimal.Decimal(fx_rate),
+                override_context=override_context,
+            )
+    except Exception as exc:
+        logger.exception(
+            "Background external transfer notification failed for transfer %s: %s",
+            transfer_id,
+            exc,
+        )
+
+
 @router.get("/external/beneficiaries", response_model=list[ExternalBeneficiaryRead])
 async def list_external_beneficiaries(
     db: AsyncSession = Depends(get_db),
@@ -407,6 +471,7 @@ async def list_external_beneficiaries(
 @router.post("/external", response_model=ExternalTransferRead)
 async def external_transfer(
     data: ExternalTransferCreate,
+    background_tasks: BackgroundTasks | None = None,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user),
@@ -747,21 +812,24 @@ async def external_transfer(
         )
         await db.commit()
 
-    await _notify_external_transfer(
-        db=db,
-        current_user=current_user,
-        transfer=transfer,
-        data=data,
-        amount=amount,
-        origin_currency=origin_currency,
-        destination_currency=destination_currency,
-        local_amount=local_amount,
-        credit_used=credit_used,
-        credit_available_after=credit_available_after,
-        requires_admin=requires_admin,
-        fx_rate=fx_rate,
-        override_context=override_context,
-    )
+    notification_kwargs = {
+        "current_user_id": str(current_user.user_id),
+        "transfer_id": str(transfer.transfer_id),
+        "data_payload": data.model_dump(mode="json"),
+        "amount": str(amount),
+        "origin_currency": origin_currency,
+        "destination_currency": destination_currency,
+        "local_amount": str(local_amount),
+        "credit_used": str(credit_used),
+        "credit_available_after": str(credit_available_after),
+        "requires_admin": requires_admin,
+        "fx_rate": str(fx_rate),
+        "override_context": override_context,
+    }
+    if background_tasks is not None:
+        background_tasks.add_task(_notify_external_transfer_task, **notification_kwargs)
+    else:
+        await _notify_external_transfer_task(**notification_kwargs)
     return payload_out if scoped_idempotency_key else transfer
 
 
