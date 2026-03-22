@@ -227,6 +227,7 @@ async def _close_external_transfer_core(
             subject=f"Transfert {transfer.reference_code} complete",
             template=None,
             body=body,
+            recipients=[user.email],
         )
 
     return {
@@ -328,6 +329,7 @@ async def update_external_transfer_status(
         subject=subject,
         template=None,
         body=msg,
+        recipients=[user.email],
     )
 
     return {"detail": f"Transfert {new_status} et e-mail envoye."}

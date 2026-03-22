@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     MAILJET_API_KEY: str = os.getenv("MAILJET_API_KEY", "")
     MAILJET_SECRET_KEY: str = os.getenv("MAILJET_SECRET_KEY", "")
     MAIL_FROM: str = os.getenv("MAIL_FROM", "no-reply@pesapaid.com")
-    MAIL_FROM_NAME: str = os.getenv("MAIL_FROM_NAME", "PesaPaid")
+    MAIL_FROM_NAME: str = os.getenv("MAIL_FROM_NAME", "PesaPaid App")
     BREVO_API_KEY:str= os.getenv("BREVO_API_KEY", "")
     STRIPE_WEBHOOK_SECRET:str= os.getenv("STRIPE_WEBHOOK_SECRET", "")
     AGENT_EMAIL: str = os.getenv("AGENT_EMAIL", "")
