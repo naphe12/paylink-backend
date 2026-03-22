@@ -18,18 +18,9 @@ class ExternalTransferBase(BaseModel):
     @classmethod
     def validate_country_destination(cls, value: str) -> str:
         raw = (value or "").strip()
-        allowed = {
-            "burundi": "Burundi",
-            "rwanda": "Rwanda",
-            "drc": "DRC",
-            "rd congo": "DRC",
-            "rdc": "DRC",
-            "democratic republic of congo": "DRC",
-        }
-        mapped = allowed.get(raw.lower())
-        if not mapped:
-            raise ValueError("country_destination invalide (Burundi, Rwanda, DRC)")
-        return mapped
+        if not raw:
+            raise ValueError("country_destination invalide")
+        return raw
 
 
 class ExternalTransferCreate(ExternalTransferBase):

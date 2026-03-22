@@ -12,6 +12,7 @@ from sqlalchemy import insert, update, select, func, or_
 from app.core.database import get_db
 from app.core.security import agent_required, get_current_user
 from app.models.agent_transactions import AgentTransactions
+from app.models.countries import Countries
 from app.models.users import Users
 from app.services.agent_ops import compute_agent_commission
 from app.services.limits import guard_and_increment_limits
@@ -201,11 +202,31 @@ async def agent_cash_users(
 ):
     # Ensure caller has an agent profile.
     await _require_agent(db, current_agent)
-    stmt = select(Users).order_by(Users.created_at.desc()).limit(limit)
+    stmt = (
+        select(
+            Users.user_id,
+            Users.full_name,
+            Users.email,
+            Users.phone_e164,
+            Users.country_code,
+            Countries.currency_code.label("country_currency_code"),
+        )
+        .join(Countries, Countries.country_code == Users.country_code, isouter=True)
+        .order_by(Users.created_at.desc())
+        .limit(limit)
+    )
     if q and q.strip():
         pattern = f"%{q.strip()}%"
         stmt = (
-            select(Users)
+            select(
+                Users.user_id,
+                Users.full_name,
+                Users.email,
+                Users.phone_e164,
+                Users.country_code,
+                Countries.currency_code.label("country_currency_code"),
+            )
+            .join(Countries, Countries.country_code == Users.country_code, isouter=True)
             .where(
                 or_(
                     Users.full_name.ilike(pattern),
@@ -216,15 +237,17 @@ async def agent_cash_users(
             .order_by(Users.created_at.desc())
             .limit(limit)
         )
-    rows = (await db.execute(stmt)).scalars().all()
+    rows = (await db.execute(stmt)).all()
     return [
         {
-            "user_id": str(u.user_id),
-            "full_name": u.full_name,
-            "email": u.email,
-            "phone_e164": u.phone_e164,
+            "user_id": str(r.user_id),
+            "full_name": r.full_name,
+            "email": r.email,
+            "phone_e164": r.phone_e164,
+            "country_code": r.country_code,
+            "currency_code": r.country_currency_code or "EUR",
         }
-        for u in rows
+        for r in rows
     ]
 
 
@@ -265,6 +288,10 @@ async def agent_cash_deposit_direct(
     if not user:
         raise HTTPException(status_code=404, detail="Utilisateur introuvable")
 
+    user_country_currency = await db.scalar(
+        select(Countries.currency_code).where(Countries.country_code == user.country_code)
+    )
+
     wallet = await db.scalar(
         select(Wallets).where(
             Wallets.user_id == payload.user_id,
@@ -277,7 +304,7 @@ async def agent_cash_deposit_direct(
         wallet = Wallets(
             user_id=payload.user_id,
             type="consumer",
-            currency_code="EUR",
+            currency_code=(user_country_currency or "EUR"),
             available=Decimal("0"),
             pending=Decimal("0"),
         )

@@ -17,6 +17,7 @@ from app.models.bonus_history import BonusHistory
 from app.models.credit_line_history import CreditLineHistory
 from app.models.credit_line_events import CreditLineEvents
 from app.models.credit_lines import CreditLines
+from app.models.countries import Countries
 from app.models.external_transfers import ExternalTransfers
 from app.models.telegram_user import TelegramUser
 from app.models.transactions import Transactions
@@ -63,22 +64,23 @@ from app.services.external_transfer_rules import transition_external_transfer_st
 router = APIRouter(prefix="/wallet/transfer", tags=["External Transfer"])
 logger = logging.getLogger(__name__)
 
-DESTINATION_CURRENCY_MAP = {
-    "burundi": "BIF",
-    "rwanda": "RWF",
-    "drc": "CDF",
-    "rd congo": "CDF",
-    "democratic republic of congo": "CDF",
-    "rdc": "CDF",
-}
 
+async def _get_destination_currency(db: AsyncSession, country: str) -> str:
+    """
+    Resolve the destination currency from paylink.countries; fallback to EUR.
+    """
+    raw_country = str(country or "").strip()
+    if not raw_country:
+        return "EUR"
 
-def _get_destination_currency(country: str) -> str:
-    """
-    Map country names to currency codes; fall back to the provided value or EUR.
-    """
-    key = (country or "").strip().lower()
-    return DESTINATION_CURRENCY_MAP.get(key, country or "EUR")
+    country_row = await db.scalar(
+        select(Countries).where(text("lower(name) = :country_name")).params(
+            country_name=raw_country.lower()
+        )
+    )
+    if country_row and country_row.currency_code:
+        return str(country_row.currency_code).upper()
+    return "EUR"
 
 
 async def _resolve_fx_rate(
@@ -467,7 +469,7 @@ async def external_transfer(
     fee_amount = (amount * fee_rate / decimal.Decimal(100)).quantize(decimal.Decimal("0.01"))
 
     origin_currency = wallet.currency_code or "EUR"
-    destination_currency = _get_destination_currency(data.country_destination)
+    destination_currency = await _get_destination_currency(db, data.country_destination)
     fx_rate = await _resolve_fx_rate(db, origin_currency, destination_currency)
 
     total_required = amount + fee_amount

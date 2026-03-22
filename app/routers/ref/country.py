@@ -13,7 +13,14 @@ router = APIRouter()
 
 @router.get("/")
 async def list_countries(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Countries))
-    countries = result.scalars().all()  # Récupère les objets Country
-    print("✅ Pays récupérés :", len(countries))
-    return [{"country_code": c.country_code, "name": c.name} for c in countries]
+    result = await db.execute(select(Countries).order_by(Countries.name.asc()))
+    countries = result.scalars().all()
+    return [
+        {
+            "country_code": c.country_code,
+            "name": c.name,
+            "currency_code": c.currency_code,
+            "phone_prefix": c.phone_prefix,
+        }
+        for c in countries
+    ]
