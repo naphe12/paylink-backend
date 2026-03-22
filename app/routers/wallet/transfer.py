@@ -208,6 +208,13 @@ async def _notify_external_transfer(
                     full_name=explicit_agent_name or "Agent PesaPaid",
                 )
             )
+    logger.info(
+        "External transfer notifications prepared transfer_id=%s agent_recipients=%s client_email=%s recipient_email=%s",
+        transfer.transfer_id,
+        [str(agent.email) for agent in agent_users if getattr(agent, "email", None)],
+        current_user.email,
+        data.recipient_email,
+    )
     backend_base = str(getattr(settings, "BACKEND_URL", "") or "").strip()
     for agent_user in agent_users:
         if agent_mailer is None:

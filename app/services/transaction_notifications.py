@@ -39,11 +39,13 @@ async def send_transaction_emails(
 ) -> None:
     target_emails = recipients or await get_transaction_emails(db, initiator, receiver)
     if not target_emails:
+        logger.warning("No transaction email recipients resolved for subject=%s", subject)
         return
 
     mailer = MailjetEmailService()
+    logger.info("Sending transaction emails via Mailjet subject=%s recipients=%s", subject, target_emails)
     for email in target_emails:
-        print(f"[brevo] sending transaction email to={email}")
+        print(f"[mailjet] sending transaction email to={email}")
         try:
             resp = await run_in_threadpool(
                 mailer.send_email,
@@ -62,7 +64,7 @@ async def send_transaction_emails(
             if status not in (200, 201):
                 logger.warning("Mailjet responded with status=%s for %s", status, email)
             else:
-                print(f"[brevo] transaction email sent status={status} to={email}")
+                print(f"[mailjet] transaction email sent status={status} to={email}")
         except Exception as exc:  # pragma: no cover
             # Ne pas bloquer la transaction en cas d'erreur SMTP / reseau.
             logger.exception("Impossible d'envoyer le mail de transaction a %s: %s", email, exc)
