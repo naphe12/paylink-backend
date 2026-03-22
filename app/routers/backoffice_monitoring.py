@@ -325,9 +325,7 @@ async def ops_metrics(
     api_note = "API request metrics not available yet (no request metrics table)."
     if await _table_exists(db, "paylink.request_metrics"):
         path_like = f"{path_prefix}%" if path_prefix else None
-        api_q = await db.execute(
-            text(
-                """
+        api_sql = """
                 SELECT
                   COUNT(*)::int AS total_requests,
                   COUNT(*) FILTER (WHERE status_code >= 400 AND status_code < 500)::int AS errors_4xx,
@@ -336,10 +334,14 @@ async def ops_metrics(
                   percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::numeric AS latency_p95_ms
                 FROM paylink.request_metrics
                 WHERE created_at >= NOW() - make_interval(hours => :window_hours)
-                  AND (:path_like IS NULL OR path LIKE :path_like)
-                """
-            ),
-            {"window_hours": window_hours, "path_like": path_like},
+        """
+        api_params = {"window_hours": window_hours}
+        if path_like:
+            api_sql += "\n                  AND path LIKE :path_like"
+            api_params["path_like"] = path_like
+        api_q = await db.execute(
+            text(api_sql),
+            api_params,
         )
         api_row = api_q.mappings().one()
         total_requests = int(api_row["total_requests"] or 0)
