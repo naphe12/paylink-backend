@@ -488,7 +488,7 @@ async def list_external_users(
     current_agent: Users = Depends(get_current_agent),
 ):
     """
-    Liste des utilisateurs qui ont déjà fait un transfert externe.
+    Liste tous les clients utilisables pour un transfert externe agent.
     """
     stmt = (
         select(
@@ -497,8 +497,7 @@ async def list_external_users(
             Users.email,
             Users.phone_e164,
         )
-        .join(ExternalTransfers, ExternalTransfers.user_id == Users.user_id)
-        .distinct()
+        .where(Users.role.in_(["client", "user"]))
         .order_by(Users.full_name.asc())
     )
     rows = (await db.execute(stmt)).all()
