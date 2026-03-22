@@ -1,3 +1,5 @@
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +14,7 @@ router = APIRouter(prefix="/admin/wallet-analysis", tags=["Admin Wallet Analysis
 @router.get("/")
 async def get_wallet_analysis(
     user_id: str = Query(...),
-    cutoff_date: str = Query("2025-12-20"),
+    cutoff_date: date = Query(default=date(2025, 12, 20)),
     limit: int = Query(100, ge=10, le=500),
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
