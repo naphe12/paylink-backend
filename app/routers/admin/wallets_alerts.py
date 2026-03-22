@@ -32,6 +32,7 @@ async def list_wallet_alerts(
         None, description="Filtre solde max (None = 50 plus bas)"
     ),
     wallet_type: str | None = Query(None, description="Filtre par type de wallet"),
+    user_id: UUID | None = Query(None, description="Filtre par utilisateur"),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
@@ -56,6 +57,8 @@ async def list_wallet_alerts(
         stmt = stmt.where(func.coalesce(Wallets.available, 0) <= min_available)
     if wallet_type:
         stmt = stmt.where(Wallets.type == wallet_type)
+    if user_id is not None:
+        stmt = stmt.where(Wallets.user_id == user_id)
 
     rows = (await db.execute(stmt)).all()
 
