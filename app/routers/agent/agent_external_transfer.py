@@ -3,7 +3,8 @@ from decimal import Decimal
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,13 +22,23 @@ from app.models.wallet_transactions import WalletTransactions
 from app.models.wallets import Wallets
 from app.services.transaction_notifications import send_transaction_emails
 from app.models.agents import Agents
-from app.schemas.external_transfers import ExternalBeneficiaryRead
+from app.schemas.external_transfers import ExternalBeneficiaryRead, ExternalTransferCreate
+from app.routers.wallet.transfer import external_transfer as create_client_external_transfer
 from app.services.external_transfer_rules import (
     normalize_external_transfer_status,
     transition_external_transfer_status,
 )
 
 router = APIRouter(prefix="/agent/external", tags=["Agent External Transfers"])
+
+
+class AgentExternalTransferCreate(BaseModel):
+    user_id: str
+    partner_name: str
+    country_destination: str
+    recipient_name: str
+    recipient_phone: str
+    amount: Decimal
 
 async def _require_agent(db: AsyncSession, user: Users) -> Agents:
     agent = await db.scalar(select(Agents).where(Agents.user_id == user.user_id))
@@ -362,6 +373,51 @@ async def get_pending_transfers(
             }
         )
     return serialized
+
+
+@router.post("/create")
+async def create_external_transfer_for_client(
+    payload: AgentExternalTransferCreate,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    db: AsyncSession = Depends(get_db),
+    current_agent: Users = Depends(get_current_agent),
+):
+    client_user = await db.scalar(select(Users).where(Users.user_id == payload.user_id))
+    if not client_user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable.")
+    if str(client_user.role or "").lower() not in {"client", "user"}:
+        raise HTTPException(status_code=400, detail="Selectionnez un client valide.")
+
+    transfer_payload = ExternalTransferCreate(
+        partner_name=payload.partner_name,
+        country_destination=payload.country_destination,
+        recipient_name=payload.recipient_name,
+        recipient_phone=payload.recipient_phone,
+        amount=payload.amount,
+    )
+
+    result = await create_client_external_transfer(
+        data=transfer_payload,
+        idempotency_key=idempotency_key,
+        db=db,
+        current_user=client_user,
+    )
+
+    transfer_id = getattr(result, "transfer_id", None) or result.get("transfer_id")
+    if transfer_id:
+        transfer = await db.scalar(select(ExternalTransfers).where(ExternalTransfers.transfer_id == transfer_id))
+        if transfer:
+            metadata = (transfer.metadata_ or {}).copy()
+            metadata.update(
+                {
+                    "created_via": "agent_console",
+                    "created_by_agent_user_id": str(current_agent.user_id),
+                }
+            )
+            transfer.metadata_ = _jsonify_metadata(metadata)
+            await db.commit()
+
+    return result
 
 
 @router.get("/ready")
