@@ -406,6 +406,8 @@ async def create_external_transfer_for_client(
             "agent_user_id": str(current_agent.user_id),
             "agent_paytag": getattr(current_agent, "paytag", None),
             "source": "agent_console",
+            "notify_agent_email": getattr(current_agent, "email", None),
+            "notify_agent_name": getattr(current_agent, "full_name", None),
         },
         final_status_override="approved",
     )

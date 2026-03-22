@@ -22,6 +22,7 @@ from app.models.external_transfers import ExternalTransfers
 from app.models.telegram_user import TelegramUser
 from app.models.transactions import Transactions
 from app.models.users import Users
+from app.models.agents import Agents
 from app.models.wallet_transactions import WalletEntryDirectionEnum
 from app.models.wallets import Wallets
 from app.schemas.external_transfers import (
@@ -141,21 +142,30 @@ def _parse_telegram_notify_chat_ids() -> list[int]:
 
 
 async def _list_external_transfer_agent_users(db: AsyncSession) -> list[Users]:
-    rows = await db.scalars(
-        select(Users).where(
-            Users.role == "agent",
-            Users.status == "active",
-            Users.email.is_not(None),
+    rows = await db.execute(
+        select(Agents, Users)
+        .join(Users, Users.user_id == Agents.user_id, isouter=True)
+        .where(
+            Agents.active.is_(True),
+            Agents.email.is_not(None),
         )
     )
     agents: list[Users] = []
     seen_emails: set[str] = set()
-    for agent in rows:
-        email = str(agent.email or "").strip().lower()
+    for agent_row, user_row in rows.all():
+        email = str(agent_row.email or getattr(user_row, "email", "") or "").strip().lower()
         if not email or email in seen_emails:
             continue
         seen_emails.add(email)
-        agents.append(agent)
+        agents.append(
+            user_row
+            if user_row is not None
+            else Users(
+                user_id=agent_row.user_id,
+                email=email,
+                full_name=str(agent_row.display_name or "Agent PesaPaid").strip() or "Agent PesaPaid",
+            )
+        )
     return agents
 
 
@@ -173,8 +183,22 @@ async def _notify_external_transfer(
     credit_available_after: decimal.Decimal,
     requires_admin: bool,
     fx_rate: decimal.Decimal,
+    override_context: dict | None = None,
 ) -> None:
     agent_users = await _list_external_transfer_agent_users(db)
+    explicit_agent_email = _normalize_optional_email(
+        (override_context or {}).get("notify_agent_email")
+    )
+    explicit_agent_name = str((override_context or {}).get("notify_agent_name") or "").strip()
+    if explicit_agent_email:
+        known_emails = {str(agent.email or "").strip().lower() for agent in agent_users if agent.email}
+        if explicit_agent_email.lower() not in known_emails:
+            agent_users.append(
+                Users(
+                    email=explicit_agent_email,
+                    full_name=explicit_agent_name or "Agent PesaPaid",
+                )
+            )
     backend_base = str(getattr(settings, "BACKEND_URL", "") or "").strip()
     for agent_user in agent_users:
         close_link = None
@@ -736,6 +760,7 @@ async def external_transfer(
         credit_available_after=credit_available_after,
         requires_admin=requires_admin,
         fx_rate=fx_rate,
+        override_context=override_context,
     )
     return payload_out if scoped_idempotency_key else transfer
 
