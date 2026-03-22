@@ -52,6 +52,7 @@ from app.routers.admin import settings as admin_settings_router
 from app.routers.admin import tontine_arrears as admin_tontine_arrears_router
 from app.routers.admin import transactions_audit as admin_transactions_audit_router
 from app.routers.admin import transfers_monitor as admin_transfers_router
+from app.routers.admin import wallet_analysis as admin_wallet_analysis_router
 from app.routers.admin.admin_users import router as admin_users_router
 from app.routers.admin.wallets_alerts import router as admin_wallets_router
 from app.routers.admin_dashboard import router as admin_dashboard_router
@@ -459,6 +460,7 @@ app.include_router(admin_credit_history_router.router)
 app.include_router(admin_cash_requests_router.router)
 app.include_router(admin_transactions_audit_router.router)
 app.include_router(admin_error_logs_router.router)
+app.include_router(admin_wallet_analysis_router.router)
 app.include_router(agent_router, prefix="/agent", tags=["Agent Operations"])
 app.include_router(agent_router_extern)
 app.include_router(debug.router)
