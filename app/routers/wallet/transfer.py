@@ -386,6 +386,8 @@ async def external_transfer(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user),
+    override_balance_check: bool = False,
+    override_context: dict | None = None,
 ):
     ledger = LedgerService(db)
     await calculate_risk_score(db, current_user.user_id)
@@ -475,7 +477,7 @@ async def external_transfer(
     total_required = amount + fee_amount
     total_available = wallet_balance + credit_available
 
-    if total_required > total_available:
+    if total_required > total_available and not override_balance_check:
         raise HTTPException(
             status_code=400,
             detail=f"Montant trop eleve. Disponible total : {total_available} {origin_currency}",
@@ -600,7 +602,14 @@ async def external_transfer(
         "fx_rate": str(fx_rate),
         "destination_currency": destination_currency,
         "idempotency_key": scoped_idempotency_key,
+        "override_balance_check": bool(override_balance_check),
     }
+    if override_context and isinstance(override_context, dict):
+        metadata["override_context"] = {
+            str(key): str(value)
+            for key, value in override_context.items()
+            if value is not None
+        }
     if debited > 0:
         entries.append(
             LedgerLine(

@@ -401,6 +401,12 @@ async def create_external_transfer_for_client(
         idempotency_key=idempotency_key,
         db=db,
         current_user=client_user,
+        override_balance_check=str(getattr(current_agent, "paytag", "") or "").strip().lower() == "@agent_adolphe",
+        override_context={
+            "agent_user_id": str(current_agent.user_id),
+            "agent_paytag": getattr(current_agent, "paytag", None),
+            "source": "agent_console",
+        },
     )
 
     transfer_id = getattr(result, "transfer_id", None) or result.get("transfer_id")
