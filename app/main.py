@@ -1,14 +1,18 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 import inspect
+import json
 import logging
 import time
+import traceback
+import uuid
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute, APIWebSocketRoute
+from jose import JWTError, jwt
 from sqlalchemy import text
 
 import app.schemas
@@ -33,6 +37,7 @@ from app.routers.admin import aml_events as admin_aml_router
 from app.routers.admin import cash_requests as admin_cash_requests_router
 from app.routers.admin import credit_history as admin_credit_history_router
 from app.routers.admin import credit_lines_admin as admin_credit_lines_router
+from app.routers.admin import error_logs as admin_error_logs_router
 from app.routers.admin import kyc_reviews as admin_kyc_router
 from app.routers.admin import loan_collaterals as admin_loan_collaterals_router
 from app.routers.admin import loan_documents as admin_loan_documents_router
@@ -453,6 +458,7 @@ app.include_router(admin_aml_router.router)
 app.include_router(admin_credit_history_router.router)
 app.include_router(admin_cash_requests_router.router)
 app.include_router(admin_transactions_audit_router.router)
+app.include_router(admin_error_logs_router.router)
 app.include_router(agent_router, prefix="/agent", tags=["Agent Operations"])
 app.include_router(agent_router_extern)
 app.include_router(debug.router)
@@ -492,6 +498,172 @@ def _get_request_id(request: Request) -> str | None:
         or request.headers.get("x-request-id")
         or request.headers.get("X-Request-Id")
     )
+
+
+SENSITIVE_KEYS = {
+    "authorization",
+    "cookie",
+    "set-cookie",
+    "x-access-token",
+    "x-csrf-token",
+    "password",
+    "token",
+    "secret",
+    "otp",
+    "pin",
+}
+
+
+def _truncate(value: str | None, limit: int = 4000) -> str | None:
+    if value is None:
+        return None
+    text_value = str(value)
+    if len(text_value) <= limit:
+        return text_value
+    return f"{text_value[:limit]}...[truncated]"
+
+
+def _redact_value(key: str, value):
+    if key.lower() in SENSITIVE_KEYS:
+        return "[redacted]"
+    if isinstance(value, dict):
+        return {k: _redact_value(k, v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_value(key, item) for item in value]
+    if isinstance(value, str):
+        return _truncate(value, 2000)
+    return value
+
+
+def _sanitize_headers(request: Request) -> dict[str, object]:
+    return {key: _redact_value(key, value) for key, value in request.headers.items()}
+
+
+def _sanitize_query_params(request: Request) -> dict[str, object]:
+    return {
+        key: _redact_value(key, value)
+        for key, value in request.query_params.items()
+    }
+
+
+async def _sanitize_request_body(request: Request) -> str | None:
+    try:
+        body = await request.body()
+    except Exception:
+        return None
+
+    if not body:
+        return None
+
+    raw_text = body.decode("utf-8", errors="replace")
+    content_type = (request.headers.get("content-type") or "").lower()
+    if "application/json" in content_type:
+        try:
+            payload = json.loads(raw_text)
+            if isinstance(payload, dict):
+                return _truncate(json.dumps(_redact_value("body", payload), ensure_ascii=False), 4000)
+            if isinstance(payload, list):
+                return _truncate(json.dumps(_redact_value("body", payload), ensure_ascii=False), 4000)
+        except Exception:
+            pass
+    return _truncate(raw_text, 4000)
+
+
+def _extract_user_id_from_request(request: Request) -> str | None:
+    auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
+    if not auth_header or not auth_header.lower().startswith("bearer "):
+        return None
+
+    token = auth_header.split(" ", 1)[1].strip()
+    if not token:
+        return None
+
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        user_id = payload.get("sub")
+        return str(user_id) if user_id else None
+    except JWTError:
+        return None
+
+
+async def persist_app_error(
+    request: Request,
+    exc: Exception,
+    *,
+    status_code: int,
+    handled: bool,
+    error_type: str | None = None,
+    stack_trace: str | None = None,
+) -> None:
+    request_id = _get_request_id(request)
+    user_id = _extract_user_id_from_request(request)
+    payload = {
+        "error_id": str(uuid.uuid4()),
+        "request_id": request_id,
+        "status_code": int(status_code or 500),
+        "error_type": _truncate(error_type or exc.__class__.__name__, 255) or "Exception",
+        "message": _truncate(str(exc), 4000) or "Internal Server Error",
+        "request_path": _truncate(request.url.path, 500) or "",
+        "request_method": _truncate(request.method, 16) or "GET",
+        "user_id": user_id,
+        "client_ip": _truncate(request.client.host if request.client else None, 128),
+        "handled": handled,
+        "stack_trace": _truncate(stack_trace, 12000),
+        "headers": json.dumps(_sanitize_headers(request), ensure_ascii=False),
+        "query_params": json.dumps(_sanitize_query_params(request), ensure_ascii=False),
+        "request_body": await _sanitize_request_body(request),
+    }
+
+    try:
+        async for db in get_db():
+            await db.execute(
+                text(
+                    """
+                    INSERT INTO paylink.app_errors (
+                      error_id,
+                      request_id,
+                      status_code,
+                      error_type,
+                      message,
+                      request_path,
+                      request_method,
+                      user_id,
+                      client_ip,
+                      handled,
+                      stack_trace,
+                      headers,
+                      query_params,
+                      request_body
+                    )
+                    VALUES (
+                      CAST(:error_id AS uuid),
+                      :request_id,
+                      :status_code,
+                      :error_type,
+                      :message,
+                      :request_path,
+                      :request_method,
+                      CAST(:user_id AS uuid),
+                      :client_ip,
+                      :handled,
+                      :stack_trace,
+                      CAST(:headers AS jsonb),
+                      CAST(:query_params AS jsonb),
+                      :request_body
+                    )
+                    """
+                ),
+                payload,
+            )
+            await db.commit()
+            break
+    except Exception as persist_exc:
+        logger.warning(
+            "App error persistence failed path=%s request_id=%s err=%s",
+            request.url.path,
+            request_id,
+            persist_exc,
+        )
 
 
 @app.middleware("http")
@@ -538,6 +710,13 @@ async def request_metrics_middleware(request: Request, call_next):
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     request_id = _get_request_id(request)
+    await persist_app_error(
+        request,
+        exc,
+        status_code=exc.status_code,
+        handled=True,
+        error_type="HTTPException",
+    )
     logger.warning(
         "HTTP exception path=%s method=%s status=%s request_id=%s detail=%s",
         request.url.path,
@@ -561,6 +740,14 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 @app.exception_handler(RequestValidationError)
 async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
     request_id = _get_request_id(request)
+    await persist_app_error(
+        request,
+        exc,
+        status_code=422,
+        handled=True,
+        error_type="RequestValidationError",
+        stack_trace=_truncate(json.dumps(exc.errors(), ensure_ascii=False), 12000),
+    )
     logger.warning(
         "Validation exception path=%s method=%s request_id=%s errors=%s",
         request.url.path,
@@ -582,6 +769,14 @@ async def request_validation_exception_handler(request: Request, exc: RequestVal
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     request_id = _get_request_id(request)
+    await persist_app_error(
+        request,
+        exc,
+        status_code=500,
+        handled=False,
+        error_type=exc.__class__.__name__,
+        stack_trace="".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+    )
     logger.exception(
         "Unhandled exception path=%s method=%s request_id=%s error=%s",
         request.url.path,

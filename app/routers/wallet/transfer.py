@@ -566,7 +566,6 @@ async def external_transfer(
         country_destination=data.country_destination,
         recipient_name=data.recipient_name,
         recipient_phone=data.recipient_phone,
-        recipient_email=data.recipient_email,
         amount=amount,
         currency=destination_currency,
         rate=fx_rate,
