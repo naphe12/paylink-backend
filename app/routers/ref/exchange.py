@@ -71,18 +71,29 @@ async def _get_internal_rate(db: AsyncSession, origin: str, destination: str) ->
 
 
 async def _get_official_rate(origin: str, destination: str) -> tuple[float | None, str]:
-    url = f"https://api.exchangerate.host/convert?from={origin}&to={destination}"
-    async with httpx.AsyncClient() as client:
-        res = await client.get(url)
-        if res.status_code != 200:
-            raise HTTPException(status_code=500, detail="Erreur API ExchangeRate")
-        data = res.json()
+    async def _fetch_rate(source: str, target: str) -> float | None:
+        url = f"https://api.exchangerate.host/convert?from={source}&to={target}"
+        async with httpx.AsyncClient() as client:
+            res = await client.get(url)
+            if res.status_code != 200:
+                raise HTTPException(status_code=500, detail="Erreur API ExchangeRate")
+            data = res.json()
 
-    info = data.get("info") or {}
-    rate = info.get("rate")
-    if rate in (None, 0):
-        return None, "official_rate_unavailable"
-    return float(rate), "official_rate"
+        info = data.get("info") or {}
+        rate = info.get("rate")
+        if rate in (None, 0):
+            return None
+        return float(rate)
+
+    direct_rate = await _fetch_rate(origin, destination)
+    if direct_rate:
+        return direct_rate, "official_rate"
+
+    reverse_rate = await _fetch_rate(destination, origin)
+    if reverse_rate:
+        return round(1 / reverse_rate, 8), "inverse_official_rate"
+
+    return None, "official_rate_unavailable"
 
 
 async def _resolve_exchange_rate(
