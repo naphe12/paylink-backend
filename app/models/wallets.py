@@ -39,7 +39,20 @@ class Wallets(Base):
     __table_args__ = {"schema": "paylink"}
 
     wallet_id = Column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
-    type = Column(Enum("consumer", "agent", "merchant", "settlement", "reserve",'admin' , name="wallet_type", schema="paylink"), nullable=False)
+    type = Column(
+        Enum(
+            "consumer",
+            "personal",
+            "agent",
+            "merchant",
+            "settlement",
+            "reserve",
+            "admin",
+            name="wallet_type",
+            schema="paylink",
+        ),
+        nullable=False,
+    )
     currency_code = Column(CHAR(3), nullable=False)
 
     available = Column(Numeric(20, 6), server_default=text("0"), nullable=False)
