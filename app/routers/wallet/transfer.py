@@ -614,13 +614,9 @@ async def _external_transfer_core(
 
     total_required = amount + fee_amount
     total_available = wallet_balance + credit_available
+    insufficient_funds_review_required = total_required > total_available and not override_balance_check
+    shortfall_amount = max(decimal.Decimal("0"), total_required - total_available)
     force_negative_wallet = override_balance_check and total_required > total_available
-
-    if total_required > total_available and not override_balance_check:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Montant trop eleve. Disponible total : {total_available} {origin_currency}",
-        )
 
     used_daily = decimal.Decimal(user_locked.used_daily or 0)
     used_monthly = decimal.Decimal(user_locked.used_monthly or 0)
@@ -634,10 +630,7 @@ async def _external_transfer_core(
         raise HTTPException(400, "Limite mensuelle atteinte.")
 
     risk = await update_risk_score(db, current_user, amount, channel="external")
-    if risk >= 80:
-        raise HTTPException(423, "Transfert bloque : votre compte necessite une verification d'identite.")
-    elif risk >= 60:
-        raise HTTPException(423, "Niveau de risque eleve. Merci de completer votre KYC.")
+    aml_manual_review_required = risk >= 60
 
     if current_user.external_transfers_blocked:
         raise HTTPException(423, "Transferts externes temporairement suspendus.")
@@ -646,33 +639,48 @@ async def _external_transfer_core(
     credit_available_after = credit_available_before
     local_amount = (amount * fx_rate).quantize(decimal.Decimal("0.01"))
     wallet_after = wallet_balance_before
-    if wallet_balance_before >= total_required:
-        wallet_after = wallet_balance_before - total_required
-        wallet.available = wallet_after
-        credit_used = decimal.Decimal(0)
-    else:
-        wallet_consumed = max(wallet_balance_before, decimal.Decimal("0"))
-        remaining_after_wallet = total_required - wallet_consumed
-        credit_used = min(credit_available_before, remaining_after_wallet)
-        credit_available_after = credit_available_before - credit_used
-        residual_after_credit = remaining_after_wallet - credit_used
-        if str(origin_currency or "").upper() == "EUR":
+    credit_used = decimal.Decimal("0")
+    if not insufficient_funds_review_required:
+        if wallet_balance_before >= total_required:
             wallet_after = wallet_balance_before - total_required
+            wallet.available = wallet_after
+            credit_used = decimal.Decimal(0)
         else:
-            wallet_after = -residual_after_credit if force_negative_wallet else decimal.Decimal("0")
-        wallet.available = wallet_after
-        if credit_line:
-            credit_line.used_amount = decimal.Decimal(credit_line.used_amount or 0) + credit_used
-            credit_line.outstanding_amount = max(decimal.Decimal("0"), credit_available_after)
-            credit_line.updated_at = datetime.utcnow()
-            user_locked.credit_limit = decimal.Decimal(credit_line.initial_amount or 0)
-            user_locked.credit_used = decimal.Decimal(credit_line.used_amount or 0)
-        else:
-            user_locked.credit_used = credit_used_total + credit_used
+            wallet_consumed = max(wallet_balance_before, decimal.Decimal("0"))
+            remaining_after_wallet = total_required - wallet_consumed
+            credit_used = min(credit_available_before, remaining_after_wallet)
+            credit_available_after = credit_available_before - credit_used
+            residual_after_credit = remaining_after_wallet - credit_used
+            if str(origin_currency or "").upper() == "EUR":
+                wallet_after = wallet_balance_before - total_required
+            else:
+                wallet_after = -residual_after_credit if force_negative_wallet else decimal.Decimal("0")
+            wallet.available = wallet_after
+            if credit_line:
+                credit_line.used_amount = decimal.Decimal(credit_line.used_amount or 0) + credit_used
+                credit_line.outstanding_amount = max(decimal.Decimal("0"), credit_available_after)
+                credit_line.updated_at = datetime.utcnow()
+                user_locked.credit_limit = decimal.Decimal(credit_line.initial_amount or 0)
+                user_locked.credit_used = decimal.Decimal(credit_line.used_amount or 0)
+            else:
+                user_locked.credit_used = credit_used_total + credit_used
 
-    requires_admin = credit_used > decimal.Decimal(0)
+    review_reasons: list[str] = []
+    if insufficient_funds_review_required:
+        review_reasons.append("insufficient_funds")
+    if aml_manual_review_required:
+        review_reasons.append("aml")
+
+    requires_admin = (
+        credit_used > decimal.Decimal(0)
+        or aml_manual_review_required
+        or insufficient_funds_review_required
+    )
     requested_status = str(final_status_override or "").strip().lower()
-    if requested_status == "completed":
+    if requires_admin:
+        transfer_status = "pending"
+        txn_status = "pending"
+    elif requested_status == "completed":
         transfer_status = "completed"
         txn_status = "completed"
     elif requested_status == "approved":
@@ -701,7 +709,8 @@ async def _external_transfer_core(
     bonus_earned = min((amount * bonus_rate), bonus_cap)
     transfer_id = uuid.uuid4()
     reference_code = f"EXT-{uuid.uuid4().hex[:8].upper()}"
-    wallet.bonus_balance = decimal.Decimal(wallet.bonus_balance or 0) + bonus_earned
+    if not insufficient_funds_review_required:
+        wallet.bonus_balance = decimal.Decimal(wallet.bonus_balance or 0) + bonus_earned
 
     txn = Transactions(
         tx_id=transfer_id,
@@ -755,12 +764,20 @@ async def _external_transfer_core(
         "fee_rate": str(fee_rate),
         "fee_amount": str(fee_amount),
         "fx_rate": str(fx_rate),
+        "origin_currency": origin_currency,
         "destination_currency": destination_currency,
         "idempotency_key": scoped_idempotency_key,
         "override_balance_check": bool(override_balance_check),
         "force_negative_wallet": bool(force_negative_wallet),
         "final_status_override": requested_status or None,
         "processed_by_user_id": processed_by_user_id if transfer_status == "completed" else None,
+        "aml_risk_score": int(risk),
+        "aml_manual_review_required": bool(aml_manual_review_required),
+        "review_reason": review_reasons[0] if review_reasons else None,
+        "review_reasons": review_reasons or None,
+        "funding_pending": bool(insufficient_funds_review_required),
+        "required_credit_topup": str(shortfall_amount) if insufficient_funds_review_required else None,
+        "total_required": str(total_required),
     }
     if override_context and isinstance(override_context, dict):
         metadata["override_context"] = {
@@ -792,34 +809,38 @@ async def _external_transfer_core(
                 currency_code=wallet.currency_code,
             )
         )
-    entries.append(
-        LedgerLine(
-            account=cash_out_account,
-            direction="credit",
-            amount=total_required,
-            currency_code=wallet.currency_code,
+    if not insufficient_funds_review_required:
+        entries.append(
+            LedgerLine(
+                account=cash_out_account,
+                direction="credit",
+                amount=total_required,
+                currency_code=wallet.currency_code,
+            )
         )
-    )
     if movement:
         metadata["movement_id"] = str(movement.transaction_id)
     metadata = {k: v for k, v in metadata.items() if v is not None}
-    await ledger.post_journal(
-        tx_id=txn.tx_id,
-        description=f"Transfert externe vers {data.recipient_name}",
-        metadata=metadata,
-        entries=entries,
-    )
-
-    db.add(
-        BonusHistory(
-            user_id=current_user.user_id,
-            amount_bif=bonus_earned,
-            source="earned",
-            reference_id=transfer.transfer_id,
+    transfer.metadata_ = metadata
+    if entries:
+        await ledger.post_journal(
+            tx_id=txn.tx_id,
+            description=f"Transfert externe vers {data.recipient_name}",
+            metadata=metadata,
+            entries=entries,
         )
-    )
 
-    if credit_used > 0:
+    if not insufficient_funds_review_required:
+        db.add(
+            BonusHistory(
+                user_id=current_user.user_id,
+                amount_bif=bonus_earned,
+                source="earned",
+                reference_id=transfer.transfer_id,
+            )
+        )
+
+    if not insufficient_funds_review_required and credit_used > 0:
         history_entry = CreditLineHistory(
             user_id=current_user.user_id,
             transaction_id=txn.tx_id,
@@ -845,11 +866,12 @@ async def _external_transfer_core(
                 )
             )
 
-    user_locked.used_daily = decimal.Decimal(user_locked.used_daily or 0) + amount
-    user_locked.used_monthly = decimal.Decimal(user_locked.used_monthly or 0) + amount
-    if credit_line and credit_used <= decimal.Decimal("0"):
-        user_locked.credit_limit = decimal.Decimal(credit_line.initial_amount or 0)
-        user_locked.credit_used = decimal.Decimal(credit_line.used_amount or 0)
+    if not insufficient_funds_review_required:
+        user_locked.used_daily = decimal.Decimal(user_locked.used_daily or 0) + amount
+        user_locked.used_monthly = decimal.Decimal(user_locked.used_monthly or 0) + amount
+        if credit_line and credit_used <= decimal.Decimal("0"):
+            user_locked.credit_limit = decimal.Decimal(credit_line.initial_amount or 0)
+            user_locked.credit_used = decimal.Decimal(credit_line.used_amount or 0)
     await db.commit()
     await db.refresh(transfer)
     if scoped_idempotency_key:
@@ -897,20 +919,271 @@ async def external_transfer(
     )
 
 
+async def _fund_pending_external_transfer_for_approval(
+    db: AsyncSession,
+    *,
+    transfer: ExternalTransfers,
+) -> None:
+    metadata = dict(transfer.metadata_ or {})
+    if not metadata.get("funding_pending"):
+        return
+
+    user = await db.scalar(
+        select(Users).where(Users.user_id == transfer.user_id).with_for_update()
+    )
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+
+    wallet = await db.scalar(
+        select(Wallets).where(Wallets.user_id == transfer.user_id).with_for_update()
+    )
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Portefeuille introuvable")
+
+    credit_line = await db.scalar(
+        select(CreditLines)
+        .where(
+            CreditLines.user_id == transfer.user_id,
+            CreditLines.deleted_at.is_(None),
+        )
+        .order_by(CreditLines.created_at.desc())
+        .with_for_update()
+    )
+
+    total_required = decimal.Decimal(str(metadata.get("total_required") or "0"))
+    if total_required <= decimal.Decimal("0"):
+        raise HTTPException(status_code=400, detail="Montant de financement invalide")
+
+    wallet_balance_before = decimal.Decimal(wallet.available or 0)
+    credit_available_before = (
+        max(decimal.Decimal(credit_line.outstanding_amount or 0), decimal.Decimal("0"))
+        if credit_line
+        else decimal.Decimal("0")
+    )
+    total_available_before = wallet_balance_before + credit_available_before
+    shortage = max(decimal.Decimal("0"), total_required - total_available_before)
+    now = datetime.utcnow()
+
+    if shortage > 0:
+        if credit_line is None:
+            origin_currency = str(metadata.get("origin_currency") or wallet.currency_code or "EUR").upper()
+            credit_line = CreditLines(
+                user_id=transfer.user_id,
+                currency_code=origin_currency,
+                initial_amount=shortage,
+                used_amount=decimal.Decimal("0"),
+                outstanding_amount=shortage,
+                status="active",
+                source="external_transfer_approval",
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(credit_line)
+            await db.flush()
+            db.add(
+                CreditLineEvents(
+                    credit_line_id=credit_line.credit_line_id,
+                    user_id=transfer.user_id,
+                    amount_delta=shortage,
+                    currency_code=credit_line.currency_code,
+                    old_limit=decimal.Decimal("0"),
+                    new_limit=shortage,
+                    operation_code=9000,
+                    status="created",
+                    source="external_transfer_approval",
+                    occurred_at=now,
+                )
+            )
+        else:
+            old_limit = decimal.Decimal(credit_line.initial_amount or 0)
+            old_outstanding = decimal.Decimal(credit_line.outstanding_amount or 0)
+            credit_line.initial_amount = old_limit + shortage
+            credit_line.outstanding_amount = old_outstanding + shortage
+            credit_line.updated_at = now
+            db.add(
+                CreditLineEvents(
+                    credit_line_id=credit_line.credit_line_id,
+                    user_id=transfer.user_id,
+                    amount_delta=shortage,
+                    currency_code=credit_line.currency_code,
+                    old_limit=old_outstanding,
+                    new_limit=decimal.Decimal(credit_line.outstanding_amount or 0),
+                    operation_code=9001,
+                    status="updated",
+                    source="external_transfer_approval",
+                    occurred_at=now,
+                )
+            )
+
+    credit_available_before = (
+        max(decimal.Decimal(credit_line.outstanding_amount or 0), decimal.Decimal("0"))
+        if credit_line
+        else decimal.Decimal("0")
+    )
+    wallet_consumed = max(wallet_balance_before, decimal.Decimal("0"))
+    remaining_after_wallet = max(decimal.Decimal("0"), total_required - wallet_consumed)
+    credit_used = min(credit_available_before, remaining_after_wallet)
+    credit_available_after = credit_available_before - credit_used
+    residual_after_credit = remaining_after_wallet - credit_used
+    origin_currency = str(metadata.get("origin_currency") or wallet.currency_code or "EUR").upper()
+
+    if wallet_balance_before >= total_required:
+        wallet_after = wallet_balance_before - total_required
+    elif origin_currency == "EUR":
+        wallet_after = wallet_balance_before - total_required
+    else:
+        wallet_after = -residual_after_credit if residual_after_credit > 0 else decimal.Decimal("0")
+
+    wallet.available = wallet_after
+    if credit_line:
+        credit_line.used_amount = decimal.Decimal(credit_line.used_amount or 0) + credit_used
+        credit_line.outstanding_amount = max(decimal.Decimal("0"), credit_available_after)
+        credit_line.updated_at = now
+        user.credit_limit = decimal.Decimal(credit_line.initial_amount or 0)
+        user.credit_used = decimal.Decimal(credit_line.used_amount or 0)
+
+    debited = wallet_balance_before - wallet_after
+    movement = None
+    if debited > 0:
+        movement = await log_wallet_movement(
+            db,
+            wallet=wallet,
+            user_id=user.user_id,
+            amount=debited,
+            direction=WalletEntryDirectionEnum.DEBIT,
+            operation_type="external_transfer",
+            reference=transfer.reference_code,
+            description=f"Transfert externe approuve {transfer.reference_code}",
+        )
+
+    txn = await db.scalar(
+        select(Transactions).where(Transactions.related_entity_id == transfer.transfer_id)
+    )
+    if not txn:
+        raise HTTPException(status_code=404, detail="Transaction liee introuvable")
+
+    ledger = LedgerService(db)
+    sender_account = await ledger.ensure_wallet_account(wallet)
+    cash_out_account = await ledger.get_account_by_code(settings.LEDGER_ACCOUNT_CASH_OUT)
+    entries = []
+    if debited > 0:
+        entries.append(
+            LedgerLine(
+                account=sender_account,
+                direction="debit",
+                amount=debited,
+                currency_code=wallet.currency_code,
+            )
+        )
+    if credit_used > 0:
+        credit_account = await ledger.ensure_system_account(
+            code=settings.LEDGER_ACCOUNT_CREDIT_LINE,
+            name="Ligne de credit clients",
+            currency_code=wallet.currency_code,
+            metadata={"kind": "system", "purpose": "credit_line"},
+        )
+        entries.append(
+            LedgerLine(
+                account=credit_account,
+                direction="debit",
+                amount=credit_used,
+                currency_code=wallet.currency_code,
+            )
+        )
+    entries.append(
+        LedgerLine(
+            account=cash_out_account,
+            direction="credit",
+            amount=total_required,
+            currency_code=wallet.currency_code,
+        )
+    )
+
+    metadata.update(
+        {
+            "funding_pending": False,
+            "required_credit_topup": str(shortage),
+            "credit_used_amount": str(credit_used),
+            "debited_amount": str(debited),
+            "approval_funded_at": now.isoformat(),
+        }
+    )
+    if movement:
+        metadata["movement_id"] = str(movement.transaction_id)
+    transfer.credit_used = credit_used > 0
+    transfer.metadata_ = {k: v for k, v in metadata.items() if v is not None}
+
+    await ledger.post_journal(
+        tx_id=txn.tx_id,
+        description=f"Financement transfert externe {transfer.reference_code}",
+        metadata=transfer.metadata_,
+        entries=entries,
+    )
+
+    bonus_rate = decimal.Decimal(getattr(settings, "BONUS_RATE_MULTIPLIER", "50") or "50")
+    bonus_cap = decimal.Decimal(getattr(settings, "BONUS_MAX_PER_TRANSFER", "1000000") or "1000000")
+    bonus_earned = min((decimal.Decimal(transfer.amount or 0) * bonus_rate), bonus_cap)
+    wallet.bonus_balance = decimal.Decimal(wallet.bonus_balance or 0) + bonus_earned
+    db.add(
+        BonusHistory(
+            user_id=user.user_id,
+            amount_bif=bonus_earned,
+            source="earned",
+            reference_id=transfer.transfer_id,
+        )
+    )
+
+    if credit_used > 0 and credit_line:
+        db.add(
+            CreditLineHistory(
+                user_id=user.user_id,
+                transaction_id=txn.tx_id,
+                amount=credit_used,
+                credit_available_before=credit_available_before,
+                credit_available_after=max(decimal.Decimal("0"), credit_available_after),
+                description=f"Transfert externe {transfer.reference_code}",
+            )
+        )
+        db.add(
+            CreditLineEvents(
+                credit_line_id=credit_line.credit_line_id,
+                user_id=user.user_id,
+                amount_delta=credit_used,
+                currency_code=credit_line.currency_code,
+                old_limit=credit_available_before,
+                new_limit=max(decimal.Decimal("0"), credit_available_after),
+                operation_code=9101,
+                status="used",
+                source="external_transfer",
+                occurred_at=now,
+            )
+        )
+
+    user.used_daily = decimal.Decimal(user.used_daily or 0) + decimal.Decimal(transfer.amount or 0)
+    user.used_monthly = decimal.Decimal(user.used_monthly or 0) + decimal.Decimal(transfer.amount or 0)
+    txn.status = "pending"
+    txn.updated_at = now
+
+
 @router.post("/transfer/external/{transfer_id}/approve")
 async def approve_external_transfer(
     transfer_id: str,
     db: AsyncSession = Depends(get_db),
-    current_agent: Users = Depends(get_current_agent),
+    current_user: Users = Depends(get_current_user),
 ):
+    if str(getattr(current_user, "role", "") or "").lower() not in {"agent", "admin"}:
+        raise HTTPException(status_code=403, detail="Acces refuse")
+
     transfer = await db.scalar(
         select(ExternalTransfers).where(ExternalTransfers.transfer_id == transfer_id)
     )
     if not transfer:
         raise HTTPException(status_code=404, detail="Transfert introuvable")
 
+    await _fund_pending_external_transfer_for_approval(db, transfer=transfer)
+
     transition_external_transfer_status(transfer, "approved")
-    transfer.processed_by = current_agent.user_id
+    transfer.processed_by = current_user.user_id
     transfer.processed_at = datetime.utcnow()
 
     txn = await db.scalar(

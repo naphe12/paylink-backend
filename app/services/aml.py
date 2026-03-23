@@ -103,7 +103,6 @@ async def update_risk_score(db: AsyncSession, user: Users, tx_amount: Decimal = 
     # Apply Business Rules
     if score >= FREEZE_THRESHOLD:
         if channel == "external":
-            await db.commit()
             await push_admin_notification(
                 "aml_high",
                 db=db,
@@ -111,7 +110,7 @@ async def update_risk_score(db: AsyncSession, user: Users, tx_amount: Decimal = 
                 severity="critical",
                 title="Revue AML requise",
                 message=(
-                    f"Transfert externe bloque pour revue AML pour "
+                    f"Transfert externe en attente de revue AML pour "
                     f"{user.full_name or user.email} (score {score})."
                 ),
                 metadata={
@@ -121,7 +120,7 @@ async def update_risk_score(db: AsyncSession, user: Users, tx_amount: Decimal = 
                 },
             )
             await db.commit()
-            raise HTTPException(423, "Transfert externe bloque pour revue AML manuelle.")
+            return score
 
         user.status = "frozen"
         await db.commit()
