@@ -95,21 +95,48 @@ async def _resolve_fx_rate(
     - sinon on prend le dernier FxConversions
     - fallback sur 1.0
     """
+    async def _resolve_exact_rate(source: str, target: str) -> decimal.Decimal | None:
+        if source == target:
+            return decimal.Decimal("1")
+
+        if source == "BIF" or target == "BIF":
+            custom = await db.scalar(
+                select(FxCustomRates)
+                .where(
+                    FxCustomRates.origin_currency == source,
+                    FxCustomRates.destination_currency == target,
+                    FxCustomRates.is_active.is_(True),
+                )
+                .order_by(FxCustomRates.updated_at.desc())
+            )
+            if custom and custom.rate:
+                return decimal.Decimal(custom.rate)
+
+        fx_row = await db.scalar(
+            select(FxConversions.rate_used)
+            .where(
+                FxConversions.from_currency == source,
+                FxConversions.to_currency == target,
+            )
+            .order_by(FxConversions.created_at.desc())
+            .limit(1)
+        )
+        if fx_row:
+            return decimal.Decimal(fx_row)
+        return None
+
     if origin == destination:
         return decimal.Decimal("1")
 
-    if origin == "BIF" or destination == "BIF":
-        custom = await db.scalar(
-            select(FxCustomRates)
-            .where(
-                FxCustomRates.origin_currency == origin,
-                FxCustomRates.destination_currency == destination,
-                FxCustomRates.is_active.is_(True),
-            )
-            .order_by(FxCustomRates.updated_at.desc())
-        )
-        if custom and custom.rate:
-            return decimal.Decimal(custom.rate)
+    exact_rate = await _resolve_exact_rate(origin, destination)
+    if exact_rate is not None:
+        return exact_rate
+
+    if origin != "EUR" and destination != "EUR":
+        to_eur_rate = await _resolve_exact_rate(origin, "EUR")
+        from_eur_rate = await _resolve_exact_rate("EUR", destination)
+        if to_eur_rate is not None and from_eur_rate is not None:
+            return to_eur_rate * from_eur_rate
 
     fx_row = await db.scalar(
         select(FxConversions.rate_used)

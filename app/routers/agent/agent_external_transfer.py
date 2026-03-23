@@ -496,12 +496,23 @@ async def list_external_users(
     """
     Liste tous les clients utilisables pour un transfert externe agent.
     """
+    wallet_currency_sq = (
+        select(Wallets.currency_code)
+        .where(
+            Wallets.user_id == Users.user_id,
+            Wallets.type.in_(["consumer", "personal"]),
+        )
+        .order_by(Wallets.created_at.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
     stmt = (
         select(
             Users.user_id,
             Users.full_name,
             Users.email,
             Users.phone_e164,
+            wallet_currency_sq.label("wallet_currency"),
         )
         .where(Users.role.in_(["client", "user"]))
         .order_by(Users.full_name.asc())
@@ -513,6 +524,7 @@ async def list_external_users(
             "full_name": r.full_name,
             "email": r.email,
             "phone": r.phone_e164,
+            "currency": str(r.wallet_currency or "EUR").upper(),
         }
         for r in rows
     ]
