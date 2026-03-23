@@ -653,7 +653,10 @@ async def _external_transfer_core(
         credit_used = min(credit_available_before, remaining_after_wallet)
         credit_available_after = credit_available_before - credit_used
         residual_after_credit = remaining_after_wallet - credit_used
-        wallet_after = -residual_after_credit if force_negative_wallet else decimal.Decimal("0")
+        if str(origin_currency or "").upper() == "EUR":
+            wallet_after = wallet_balance_before - total_required
+        else:
+            wallet_after = -residual_after_credit if force_negative_wallet else decimal.Decimal("0")
         wallet.available = wallet_after
         if credit_line:
             credit_line.used_amount = decimal.Decimal(credit_line.used_amount or 0) + credit_used
