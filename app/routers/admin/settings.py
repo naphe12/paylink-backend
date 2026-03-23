@@ -2,13 +2,13 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, update, insert
+from sqlalchemy import insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
-from app.models.general_settings import GeneralSettings
 from app.models.fx_custom_rates import FxCustomRates
+from app.models.general_settings import GeneralSettings
 
 router = APIRouter(prefix="/admin/settings", tags=["Admin Settings"])
 
@@ -26,6 +26,7 @@ async def get_general_settings(
     if not rows:
         raise HTTPException(status_code=404, detail="General settings not found")
     latest = rows[0]
+
     def serialize(item: GeneralSettings):
         return {
             "id": item.id,
@@ -63,21 +64,9 @@ async def update_general_settings(
             .where(GeneralSettings.id == row.id)
             .values(
                 {
-                    **(
-                        {"charge": charge}
-                        if charge is not None
-                        else {}
-                    ),
-                    **(
-                        {"fix_charge": fix_charge}
-                        if fix_charge is not None
-                        else {}
-                    ),
-                    **(
-                        {"coefficient": coefficient}
-                        if coefficient is not None
-                        else {}
-                    ),
+                    **({"charge": charge} if charge is not None else {}),
+                    **({"fix_charge": fix_charge} if fix_charge is not None else {}),
+                    **({"coefficient": coefficient} if coefficient is not None else {}),
                     **(
                         {"smstransfert_fees": smstransfert_fees}
                         if smstransfert_fees is not None
@@ -108,9 +97,7 @@ async def list_fx_custom_rates(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
 ):
-    rows = (
-        await db.execute(select(FxCustomRates))
-    ).scalars().all()
+    rows = (await db.execute(select(FxCustomRates))).scalars().all()
     return [
         {
             "destination_currency": r.destination_currency,
@@ -135,18 +122,20 @@ async def update_fx_custom_rate(
 ):
     row = await db.scalar(
         select(FxCustomRates).where(
-            FxCustomRates.destination_currency == currency
+            FxCustomRates.destination_currency == currency,
+            FxCustomRates.origin_currency == origin,
         )
     )
     if row:
         await db.execute(
             update(FxCustomRates)
-            .where(FxCustomRates.destination_currency == currency)
+            .where(
+                FxCustomRates.destination_currency == currency,
+                FxCustomRates.origin_currency == origin,
+            )
             .values(
                 rate=new_rate,
-                is_active=is_active
-                if is_active is not None
-                else row.is_active,
+                is_active=is_active if is_active is not None else row.is_active,
                 updated_at=datetime.utcnow(),
             )
         )
@@ -161,4 +150,4 @@ async def update_fx_custom_rate(
             )
         )
     await db.commit()
-    return {"message": f"Taux mis à jour pour {currency}", "rate": new_rate}
+    return {"message": f"Taux mis a jour pour {origin}->{currency}", "rate": new_rate}
