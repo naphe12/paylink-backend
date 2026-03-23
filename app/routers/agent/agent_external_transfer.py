@@ -502,7 +502,7 @@ async def list_external_users(
             Wallets.user_id == Users.user_id,
             Wallets.type.in_(["consumer", "personal"]),
         )
-        .order_by(Wallets.created_at.desc())
+        .order_by(Wallets.wallet_id.desc())
         .limit(1)
         .scalar_subquery()
     )
