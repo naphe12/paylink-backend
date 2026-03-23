@@ -23,7 +23,7 @@ async def list_credit_history(
 ):
     stmt = (
         select(CreditLineHistory, Users.full_name, Users.email)
-        .join(Users, Users.user_id == CreditLineHistory.user_id)
+        .outerjoin(Users, Users.user_id == CreditLineHistory.user_id)
         .order_by(CreditLineHistory.created_at.desc())
         .limit(limit)
     )
@@ -56,8 +56,8 @@ async def list_credit_events(
 ):
     stmt = (
         select(CreditLineEvents, Users.full_name, Users.email, CreditLines.currency_code)
-        .join(Users, Users.user_id == CreditLineEvents.user_id)
-        .join(CreditLines, CreditLines.credit_line_id == CreditLineEvents.credit_line_id)
+        .outerjoin(Users, Users.user_id == CreditLineEvents.user_id)
+        .outerjoin(CreditLines, CreditLines.credit_line_id == CreditLineEvents.credit_line_id)
         .order_by(CreditLineEvents.created_at.desc())
         .limit(limit)
     )
