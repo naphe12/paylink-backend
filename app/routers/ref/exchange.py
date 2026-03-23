@@ -13,14 +13,16 @@ from app.services.fx_provider import get_open_exchange_rate_to_eur
 router = APIRouter(prefix="/api/exchange-rate", tags=["exchange"])
 
 FEE_RULES = {
-    "BIF": 6.5,
+    "BIF": 6.25,
     "RWF": 6.0,
     "CDF": 5.0,
     "KES": 6.8,
 }
 
 
-async def _resolve_fee_percent(db: AsyncSession, destination: str) -> float:
+async def _resolve_fee_percent(db: AsyncSession, origin: str, destination: str) -> float:
+    if origin == "BIF" and destination == "BIF":
+        return 6.25
     settings_row = await db.scalar(
         select(GeneralSettings).order_by(GeneralSettings.created_at.desc())
     )
@@ -131,7 +133,7 @@ async def get_exchange_rate(
     if not origin or not destination:
         raise HTTPException(status_code=400, detail="Devise invalide")
 
-    fee_percent = await _resolve_fee_percent(db, destination)
+    fee_percent = await _resolve_fee_percent(db, origin, destination)
     rate, source = await _resolve_exchange_rate(db, origin, destination)
     if rate is None:
         raise HTTPException(

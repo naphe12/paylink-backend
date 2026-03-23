@@ -599,14 +599,17 @@ async def _external_transfer_core(
         credit_used_total = decimal.Decimal(user_locked.credit_used or 0)
         credit_available = max(credit_limit - credit_used_total, decimal.Decimal(0))
     credit_available_before = credit_available
-    settings_row = await db.scalar(
-        select(GeneralSettings).order_by(GeneralSettings.created_at.desc())
-    )
-    fee_rate = decimal.Decimal(getattr(settings_row, "charge", 0) or 0)
-    fee_amount = (amount * fee_rate / decimal.Decimal(100)).quantize(decimal.Decimal("0.01"))
-
     origin_currency = wallet.currency_code or "EUR"
     destination_currency = await _get_destination_currency(db, data.country_destination)
+    if str(origin_currency or "").upper() == "BIF" and str(destination_currency or "").upper() == "BIF":
+        fee_rate = decimal.Decimal("6.25")
+    else:
+        settings_row = await db.scalar(
+            select(GeneralSettings).order_by(GeneralSettings.created_at.desc())
+        )
+        fee_rate = decimal.Decimal(getattr(settings_row, "charge", 0) or 0)
+    fee_amount = (amount * fee_rate / decimal.Decimal(100)).quantize(decimal.Decimal("0.01"))
+
     fx_rate = await _resolve_fx_rate(db, origin_currency, destination_currency)
 
     total_required = amount + fee_amount
