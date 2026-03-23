@@ -1,5 +1,6 @@
 # app/routers/admin_users.py
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import update, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
@@ -10,6 +11,12 @@ from app.services.admin_notifications import push_admin_notification
 from app.services.push_notifications import send_push_notification
 
 router = APIRouter(prefix="/admin/users", tags=["Admin Users"])
+
+
+class ResolveAmlLockBody(BaseModel):
+    note: str | None = None
+    raise_kyc_tier_to_one: bool = True
+    reset_risk_score: bool = True
 
 @router.get("")
 @router.get("/")
@@ -131,6 +138,60 @@ async def unblock_external(user_id: str, db: AsyncSession = Depends(get_db), adm
     await db.execute(update(Users).where(Users.user_id==user_id).values(external_transfers_blocked=False))
     await db.commit()
     return {"message": "✅ Transferts externes rétablis"}
+
+
+@router.post("/{user_id}/resolve-aml-lock")
+async def resolve_aml_lock(
+    user_id: str,
+    body: ResolveAmlLockBody,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin)
+):
+    user = await db.scalar(select(Users).where(Users.user_id == user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+
+    updates = {
+        "status": "active",
+        "external_transfers_blocked": False,
+    }
+    if body.reset_risk_score:
+        updates["risk_score"] = 0
+    if body.raise_kyc_tier_to_one and int(getattr(user, "kyc_tier", 0) or 0) < 1:
+        updates["kyc_tier"] = 1
+
+    await db.execute(
+        update(Users)
+        .where(Users.user_id == user_id)
+        .values(**updates)
+    )
+    await db.commit()
+    await db.refresh(user)
+
+    await push_admin_notification(
+        "aml_high",
+        db=db,
+        user_id=user.user_id,
+        severity="info",
+        title="Blocage AML leve",
+        message=f"Blocage AML leve manuellement pour {user.full_name or user.email}.",
+        metadata={
+            "admin_id": str(admin.user_id),
+            "admin_email": admin.email,
+            "note": body.note or "",
+            "raise_kyc_tier_to_one": body.raise_kyc_tier_to_one,
+            "reset_risk_score": body.reset_risk_score,
+        },
+    )
+
+    return {
+        "message": "Blocage AML leve",
+        "user_id": str(user.user_id),
+        "status": getattr(user, "status", None),
+        "risk_score": int(getattr(user, "risk_score", 0) or 0),
+        "kyc_tier": int(getattr(user, "kyc_tier", 0) or 0),
+        "external_transfers_blocked": bool(getattr(user, "external_transfers_blocked", False)),
+    }
 
 
 @router.delete("/{user_id}")
