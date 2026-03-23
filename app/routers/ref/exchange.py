@@ -91,6 +91,12 @@ async def _resolve_exchange_rate(
     if origin == destination:
         return 1.0, "identity"
 
+    if destination == "EUR" and origin != "EUR":
+        official_rate, official_source = await _get_official_rate(origin, "EUR")
+        if official_rate:
+            return official_rate, official_source
+        return None, "missing_source_eur_webservice_rate"
+
     if destination == "BIF" and origin != "EUR":
         source_to_eur, source_to_eur_source = await _get_official_rate(origin, "EUR")
         eur_to_bif, eur_to_bif_source = await _get_internal_rate(db, "EUR", "BIF")
