@@ -47,6 +47,7 @@ class Wallets(Base):
             "merchant",
             "settlement",
             "reserve",
+            "system",
             "admin",
             name="wallet_type",
             schema="paylink",
