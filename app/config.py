@@ -109,6 +109,7 @@ class Settings(BaseSettings):
     TWILIO_SID: str | None = None
     TWILIO_TOKEN: str | None = None
     TWILIO_WHATSAPP_NUMBER: str | None = None
+    OPENEXCHANGERATES_APP_ID: str = ""
 
     class Config:
         env_file = ".env"

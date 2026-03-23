@@ -5,7 +5,6 @@ from datetime import datetime
 from datetime import timedelta
 from uuid import UUID
 
-import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, EmailStr
@@ -62,6 +61,7 @@ from app.models.fx_custom_rates import FxCustomRates
 from app.models.fxconversions import FxConversions
 from app.core.security import create_access_token
 from app.services.external_transfer_rules import transition_external_transfer_status
+from app.services.fx_provider import get_open_exchange_rate_to_eur
 
 router = APIRouter(prefix="/wallet/transfer", tags=["External Transfer"])
 logger = logging.getLogger(__name__)
@@ -130,20 +130,7 @@ async def _resolve_fx_rate(
         return decimal.Decimal("1")
 
     if destination == "BIF" and origin != "EUR":
-        try:
-            async with httpx.AsyncClient() as client:
-                res = await client.get(
-                    f"https://api.exchangerate.host/convert?from={origin}&to=EUR"
-                )
-            if res.status_code != 200:
-                raise HTTPException(status_code=500, detail="Erreur API ExchangeRate")
-            data = res.json()
-            source_to_eur = data.get("info", {}).get("rate")
-        except HTTPException:
-            raise
-        except Exception:
-            source_to_eur = None
-
+        source_to_eur = await get_open_exchange_rate_to_eur(origin)
         eur_to_bif = await _resolve_exact_rate("EUR", "BIF")
         if source_to_eur not in (None, 0) and eur_to_bif is not None:
             return decimal.Decimal(str(source_to_eur)) * eur_to_bif

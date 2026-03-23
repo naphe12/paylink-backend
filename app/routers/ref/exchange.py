@@ -1,6 +1,5 @@
 from datetime import datetime
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +8,7 @@ from app.core.database import get_db
 from app.models.fxconversions import FxConversions
 from app.models.fx_custom_rates import FxCustomRates
 from app.models.general_settings import GeneralSettings
+from app.services.fx_provider import get_open_exchange_rate_to_eur
 
 router = APIRouter(prefix="/api/exchange-rate", tags=["exchange"])
 
@@ -71,28 +71,11 @@ async def _get_internal_rate(db: AsyncSession, origin: str, destination: str) ->
 
 
 async def _get_official_rate(origin: str, destination: str) -> tuple[float | None, str]:
-    async def _fetch_rate(source: str, target: str) -> float | None:
-        url = f"https://api.exchangerate.host/convert?from={source}&to={target}"
-        async with httpx.AsyncClient() as client:
-            res = await client.get(url)
-            if res.status_code != 200:
-                raise HTTPException(status_code=500, detail="Erreur API ExchangeRate")
-            data = res.json()
-
-        info = data.get("info") or {}
-        rate = info.get("rate")
-        if rate in (None, 0):
-            return None
-        return float(rate)
-
-    direct_rate = await _fetch_rate(origin, destination)
-    if direct_rate:
-        return direct_rate, "official_rate"
-
-    reverse_rate = await _fetch_rate(destination, origin)
-    if reverse_rate:
-        return round(1 / reverse_rate, 8), "inverse_official_rate"
-
+    if destination == "EUR":
+        rate = await get_open_exchange_rate_to_eur(origin)
+        if rate:
+            return rate, "openexchangerates_to_eur"
+        return None, "openexchangerates_to_eur_unavailable"
     return None, "official_rate_unavailable"
 
 

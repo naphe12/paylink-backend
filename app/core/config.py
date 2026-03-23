@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     MAIL_FROM: str = os.getenv("MAIL_FROM", "no-reply@pesapaid.com")
     MAIL_FROM_NAME: str = os.getenv("MAIL_FROM_NAME", "PesaPaid App")
     BREVO_API_KEY:str= os.getenv("BREVO_API_KEY", "")
+    OPENEXCHANGERATES_APP_ID: str = os.getenv("OPENEXCHANGERATES_APP_ID", "")
     STRIPE_WEBHOOK_SECRET:str= os.getenv("STRIPE_WEBHOOK_SECRET", "")
     AGENT_EMAIL: str = os.getenv("AGENT_EMAIL", "")
     TELEGRAM_NOTIFY_CHAT_IDS: str = os.getenv("TELEGRAM_NOTIFY_CHAT_IDS", "")
