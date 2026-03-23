@@ -38,6 +38,19 @@ async def _build_debtor_payload(db: AsyncSession, user: Users, wallet: Wallets, 
     wallet_currency = str(wallet.currency_code or "").upper()
     credit_used = Decimal(credit_line.used_amount or 0) if credit_line else Decimal("0")
     outstanding_amount = Decimal(credit_line.outstanding_amount or 0) if credit_line else Decimal("0")
+    origins = []
+    if wallet_available < 0:
+        origins.append("wallet_negative")
+    if credit_used > 0:
+        origins.append("credit_line_used")
+    if origins == ["wallet_negative", "credit_line_used"]:
+        debt_origin_label = "Wallet negatif + credit utilise"
+    elif origins == ["wallet_negative"]:
+        debt_origin_label = "Wallet negatif"
+    elif origins == ["credit_line_used"]:
+        debt_origin_label = "Credit utilise"
+    else:
+        debt_origin_label = "Aucune dette"
     return {
         "user_id": str(user.user_id),
         "full_name": user.full_name,
@@ -53,6 +66,8 @@ async def _build_debtor_payload(db: AsyncSession, user: Users, wallet: Wallets, 
         "credit_available": float(outstanding_amount),
         "has_credit_line": bool(credit_line),
         "is_wallet_negative": wallet_available < 0,
+        "debt_origins": origins,
+        "debt_origin_label": debt_origin_label,
     }
 
 
@@ -443,7 +458,7 @@ async def repay_client_debt(
                 old_limit=old_outstanding,
                 new_limit=Decimal(credit_line.outstanding_amount or 0),
                 operation_code=9002,
-                status="repaid",
+                status="completed",
                 source="admin_repayment",
                 occurred_at=datetime.utcnow(),
             )
@@ -548,7 +563,7 @@ async def repay_credit_line(
         old_limit=old_outstanding,
         new_limit=new_outstanding,
         operation_code=9002,
-        status="repaid",
+        status="completed",
         source="admin",
         occurred_at=datetime.utcnow(),
     )
