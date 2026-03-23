@@ -11,7 +11,6 @@ from app.models.general_settings import GeneralSettings
 
 router = APIRouter(prefix="/api/exchange-rate", tags=["exchange"])
 
-# 🔹 Frais selon zone
 FEE_RULES = {
     "BIF": 6.5,
     "RWF": 6.0,
@@ -21,11 +20,6 @@ FEE_RULES = {
 
 
 async def _resolve_fee_percent(db: AsyncSession, destination: str) -> float:
-    """
-    Priority:
-    1) General settings charge (%)
-    2) Legacy destination-based fallback table
-    """
     settings_row = await db.scalar(
         select(GeneralSettings).order_by(GeneralSettings.created_at.desc())
     )
@@ -33,38 +27,26 @@ async def _resolve_fee_percent(db: AsyncSession, destination: str) -> float:
         return float(settings_row.charge)
     return float(FEE_RULES.get(destination, 2.5))
 
-@router.get("/")
-async def get_exchange_rate(
-    origin: str = Query("EUR"),
-    destination: str = Query(...),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    🔹 Vérifie si un taux est défini dans la base (marché parallèle ou custom)
-    🔹 Sinon, récupère le taux officiel via exchangerate.host
-    """
+
+def _normalize_currency_code(value: str | None, fallback: str | None = None) -> str:
+    raw = str(value or fallback or "").strip().upper()
+    return raw[:3]
+
+
+async def _get_custom_rate(
+    db: AsyncSession, origin: str, destination: str
+) -> FxCustomRates | None:
     result = await db.execute(
         select(FxCustomRates).where(
             FxCustomRates.origin_currency == origin,
             FxCustomRates.destination_currency == destination,
-            FxCustomRates.is_active.is_(True)
+            FxCustomRates.is_active.is_(True),
         )
     )
-    custom = result.scalar_one_or_none()
-    fee_percent = await _resolve_fee_percent(db, destination)
+    return result.scalar_one_or_none()
 
-    # 1️⃣ Taux interne (prioritaire)
-    if custom:
-        return {
-            "origin": origin,
-            "destination": destination,
-            "rate": float(custom.rate),
-            "fees_percent": fee_percent,
-            "source": custom.source,
-            "timestamp": custom.updated_at.isoformat() if custom.updated_at else None
-        }
 
-    # 2️⃣ Sinon API publique
+async def _get_official_rate(origin: str, destination: str) -> tuple[float | None, str]:
     url = f"https://api.exchangerate.host/convert?from={origin}&to={destination}"
     async with httpx.AsyncClient() as client:
         res = await client.get(url)
@@ -72,24 +54,77 @@ async def get_exchange_rate(
             raise HTTPException(status_code=500, detail="Erreur API ExchangeRate")
         data = res.json()
 
-    if not data.get("info"):
-        raise HTTPException(status_code=400, detail="Devise non supportée")
+    info = data.get("info") or {}
+    rate = info.get("rate")
+    if rate in (None, 0):
+        return None, "official_rate_unavailable"
+    return float(rate), "official_rate"
 
-    rate = data["info"]["rate"]
-    fee = fee_percent
+
+async def _resolve_exchange_rate(
+    db: AsyncSession, origin: str, destination: str
+) -> tuple[float | None, str]:
+    if origin == destination:
+        return 1.0, "identity"
+
+    custom = await _get_custom_rate(db, origin, destination)
+    if custom and custom.rate is not None:
+        return float(custom.rate), str(custom.source or "custom_rate")
+
+    official_rate, official_source = await _get_official_rate(origin, destination)
+    if official_rate:
+        return official_rate, official_source
+
+    reverse_custom = await _get_custom_rate(db, destination, origin)
+    if reverse_custom and reverse_custom.rate not in (None, 0):
+        return round(1 / float(reverse_custom.rate), 8), f"inverse_{reverse_custom.source or 'custom_rate'}"
+
+    reverse_official_rate, _ = await _get_official_rate(destination, origin)
+    if reverse_official_rate:
+        return round(1 / reverse_official_rate, 8), "inverse_official_rate"
+
+    if origin != "EUR" and destination != "EUR":
+        origin_to_eur, origin_to_eur_source = await _resolve_exchange_rate(db, origin, "EUR")
+        eur_to_destination, eur_to_destination_source = await _resolve_exchange_rate(
+            db, "EUR", destination
+        )
+        if origin_to_eur and eur_to_destination:
+            return (
+                origin_to_eur * eur_to_destination,
+                f"{origin_to_eur_source}_via_eur_{eur_to_destination_source}",
+            )
+
+    return None, "unsupported_currency_pair"
+
+
+@router.get("/")
+async def get_exchange_rate(
+    origin: str = Query("EUR"),
+    destination: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
+    origin = _normalize_currency_code(origin, "EUR")
+    destination = _normalize_currency_code(destination)
+    if not origin or not destination:
+        raise HTTPException(status_code=400, detail="Devise invalide")
+
+    fee_percent = await _resolve_fee_percent(db, destination)
+    rate, source = await _resolve_exchange_rate(db, origin, destination)
+    if rate is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Devise non supportee pour la paire {origin}/{destination}",
+        )
 
     return {
         "origin": origin,
         "destination": destination,
-        "rate": round(rate, 2),
-        "fees_percent": fee,
-        "source": "official_rate",
-        "timestamp": datetime.utcnow().isoformat()
+        "rate": round(rate, 8 if rate < 1 else 2),
+        "fees_percent": fee_percent,
+        "source": source,
+        "timestamp": datetime.utcnow().isoformat(),
     }
 
-# ==========================================================
-# 👨‍💼 Administration des taux
-# ==========================================================
 
 @router.get("/custom", response_model=list[dict])
 async def list_custom_rates(db: AsyncSession = Depends(get_db)):
@@ -101,16 +136,20 @@ async def list_custom_rates(db: AsyncSession = Depends(get_db)):
             "rate": float(r.rate),
             "source": r.source,
             "is_active": r.is_active,
-            "updated_at": r.updated_at
-        } for r in rows
+            "updated_at": r.updated_at,
+        }
+        for r in rows
     ]
 
+
 @router.put("/{currency_code}")
-async def update_custom_rate(currency_code: str, new_rate: float, db: AsyncSession = Depends(get_db)):
-    """
-    🔹 Met à jour ou crée un taux personnalisé
-    """
-    result = await db.execute(select(FxCustomRates).where(FxCustomRates.destination_currency == currency_code))
+async def update_custom_rate(
+    currency_code: str, new_rate: float, db: AsyncSession = Depends(get_db)
+):
+    currency_code = _normalize_currency_code(currency_code)
+    result = await db.execute(
+        select(FxCustomRates).where(FxCustomRates.destination_currency == currency_code)
+    )
     fx = result.scalar_one_or_none()
 
     if fx:
@@ -124,4 +163,4 @@ async def update_custom_rate(currency_code: str, new_rate: float, db: AsyncSessi
             insert(FxCustomRates).values(destination_currency=currency_code, rate=new_rate)
         )
     await db.commit()
-    return {"message": f"Taux mis à jour pour {currency_code}", "rate": new_rate}
+    return {"message": f"Taux mis a jour pour {currency_code}", "rate": new_rate}
