@@ -6,6 +6,7 @@ from sqlalchemy import insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.models.fxconversions import FxConversions
 from app.models.fx_custom_rates import FxCustomRates
 from app.models.general_settings import GeneralSettings
 
@@ -46,6 +47,29 @@ async def _get_custom_rate(
     return result.scalar_one_or_none()
 
 
+async def _get_internal_rate(db: AsyncSession, origin: str, destination: str) -> tuple[float | None, str]:
+    if origin == destination:
+        return 1.0, "identity"
+
+    custom = await _get_custom_rate(db, origin, destination)
+    if custom and custom.rate is not None:
+        return float(custom.rate), str(custom.source or "custom_rate")
+
+    fx_row = await db.scalar(
+        select(FxConversions.rate_used)
+        .where(
+            FxConversions.from_currency == origin,
+            FxConversions.to_currency == destination,
+        )
+        .order_by(FxConversions.created_at.desc())
+        .limit(1)
+    )
+    if fx_row not in (None, 0):
+        return float(fx_row), "internal_fx_conversion"
+
+    return None, "internal_rate_unavailable"
+
+
 async def _get_official_rate(origin: str, destination: str) -> tuple[float | None, str]:
     url = f"https://api.exchangerate.host/convert?from={origin}&to={destination}"
     async with httpx.AsyncClient() as client:
@@ -67,21 +91,20 @@ async def _resolve_exchange_rate(
     if origin == destination:
         return 1.0, "identity"
 
-    custom = await _get_custom_rate(db, origin, destination)
-    if custom and custom.rate is not None:
-        return float(custom.rate), str(custom.source or "custom_rate")
+    if destination == "BIF" and origin != "EUR":
+        source_to_eur, source_to_eur_source = await _get_official_rate(origin, "EUR")
+        eur_to_bif, eur_to_bif_source = await _get_internal_rate(db, "EUR", "BIF")
+        if source_to_eur and eur_to_bif:
+            return source_to_eur * eur_to_bif, f"{source_to_eur_source}_via_eur_{eur_to_bif_source}"
+        return None, "missing_source_eur_or_eur_bif_rate"
+
+    internal_rate, internal_source = await _get_internal_rate(db, origin, destination)
+    if internal_rate:
+        return internal_rate, internal_source
 
     official_rate, official_source = await _get_official_rate(origin, destination)
     if official_rate:
         return official_rate, official_source
-
-    reverse_custom = await _get_custom_rate(db, destination, origin)
-    if reverse_custom and reverse_custom.rate not in (None, 0):
-        return round(1 / float(reverse_custom.rate), 8), f"inverse_{reverse_custom.source or 'custom_rate'}"
-
-    reverse_official_rate, _ = await _get_official_rate(destination, origin)
-    if reverse_official_rate:
-        return round(1 / reverse_official_rate, 8), "inverse_official_rate"
 
     if origin != "EUR" and destination != "EUR":
         origin_to_eur, origin_to_eur_source = await _resolve_exchange_rate(db, origin, "EUR")

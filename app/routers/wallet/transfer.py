@@ -5,6 +5,7 @@ from datetime import datetime
 from datetime import timedelta
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, EmailStr
@@ -127,6 +128,29 @@ async def _resolve_fx_rate(
 
     if origin == destination:
         return decimal.Decimal("1")
+
+    if destination == "BIF" and origin != "EUR":
+        try:
+            async with httpx.AsyncClient() as client:
+                res = await client.get(
+                    f"https://api.exchangerate.host/convert?from={origin}&to=EUR"
+                )
+            if res.status_code != 200:
+                raise HTTPException(status_code=500, detail="Erreur API ExchangeRate")
+            data = res.json()
+            source_to_eur = data.get("info", {}).get("rate")
+        except HTTPException:
+            raise
+        except Exception:
+            source_to_eur = None
+
+        eur_to_bif = await _resolve_exact_rate("EUR", "BIF")
+        if source_to_eur not in (None, 0) and eur_to_bif is not None:
+            return decimal.Decimal(str(source_to_eur)) * eur_to_bif
+        raise HTTPException(
+            status_code=400,
+            detail=f"Taux introuvable pour la conversion {origin}->EUR puis EUR->BIF",
+        )
 
     exact_rate = await _resolve_exact_rate(origin, destination)
     if exact_rate is not None:
