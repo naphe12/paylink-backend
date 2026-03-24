@@ -1,5 +1,6 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import ProgrammingError
 
 from app.kyc_chat.parser import parse_kyc_message
 from app.kyc_chat.schemas import KycChatResponse, KycDraft
@@ -17,11 +18,17 @@ TIER_LIMITS = {
 
 async def _get_user_context(db: AsyncSession, user_id) -> tuple[Users | None, KycVerifications | None]:
     user = await db.scalar(select(Users).where(Users.user_id == user_id))
-    verification = await db.scalar(
-        select(KycVerifications)
-        .where(KycVerifications.user_id == user_id)
-        .order_by(KycVerifications.created_at.desc())
-    )
+    verification = None
+    try:
+        verification = await db.scalar(
+            select(KycVerifications)
+            .where(KycVerifications.user_id == user_id)
+            .order_by(KycVerifications.created_at.desc())
+        )
+    except ProgrammingError as exc:
+        # Some deployments do not have the optional paylink.kyc_verifications table yet.
+        if "kyc_verifications" not in str(getattr(exc, "orig", exc)).lower():
+            raise
     return user, verification
 
 
