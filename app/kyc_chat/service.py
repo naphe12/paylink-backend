@@ -17,7 +17,6 @@ TIER_LIMITS = {
 
 
 async def _get_user_context(db: AsyncSession, user_id) -> tuple[Users | None, KycVerifications | None]:
-    user = await db.scalar(select(Users).where(Users.user_id == user_id))
     verification = None
     try:
         verification = await db.scalar(
@@ -30,6 +29,7 @@ async def _get_user_context(db: AsyncSession, user_id) -> tuple[Users | None, Ky
         if "kyc_verifications" not in str(getattr(exc, "orig", exc)).lower():
             raise
         await db.rollback()
+    user = await db.scalar(select(Users).where(Users.user_id == user_id))
     return user, verification
 
 
