@@ -6,6 +6,7 @@ from app.credit_chat.schemas import CreditChatRequest, CreditChatResponse
 from app.credit_chat.service import cancel_credit_request, process_credit_message
 from app.dependencies.auth import get_current_user
 from app.models.users import Users
+from app.routers.agent._target_user import resolve_target_user_id
 
 
 router = APIRouter(prefix="/agent/credit-chat", tags=["Credit Agent"])
@@ -17,7 +18,11 @@ async def credit_chat_agent(
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user),
 ):
-    return await process_credit_message(db, user_id=current_user.user_id, message=payload.message)
+    return await process_credit_message(
+        db,
+        user_id=resolve_target_user_id(current_user, payload.target_user_id),
+        message=payload.message,
+    )
 
 
 @router.post("/cancel", response_model=CreditChatResponse)

@@ -1,5 +1,6 @@
 from decimal import Decimal
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -9,6 +10,7 @@ ChatStatus = Literal["NEED_INFO", "CONFIRM", "DONE", "ERROR", "CANCELLED"]
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=1000)
+    target_user_id: UUID | None = None
 
 
 class TransferDraft(BaseModel):

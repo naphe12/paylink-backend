@@ -1,5 +1,6 @@
 from decimal import Decimal
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -10,6 +11,7 @@ CreditIntent = Literal["capacity", "simulate_transfer", "pending_reason", "unkno
 
 class CreditChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=1000)
+    target_user_id: UUID | None = None
 
 
 class CreditDraft(BaseModel):

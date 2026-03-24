@@ -21,6 +21,7 @@ from app.services.idempotency_service import (
     compute_request_hash,
     store_idempotency_response,
 )
+from app.routers.agent._target_user import resolve_target_user_id
 
 
 router = APIRouter(prefix="/agent/cash-chat", tags=["Cash Agent"])
@@ -43,7 +44,11 @@ async def cash_chat_agent(
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user),
 ):
-    return await process_cash_message(db, user_id=current_user.user_id, message=payload.message)
+    return await process_cash_message(
+        db,
+        user_id=resolve_target_user_id(current_user, payload.target_user_id),
+        message=payload.message,
+    )
 
 
 @router.post("/cancel", response_model=CashChatResponse)

@@ -1,4 +1,5 @@
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -9,6 +10,7 @@ WalletIntent = Literal["balance", "limits", "recent_activity", "account_status",
 
 class WalletChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=1000)
+    target_user_id: UUID | None = None
 
 
 class WalletDraft(BaseModel):

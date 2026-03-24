@@ -1,4 +1,5 @@
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -9,6 +10,7 @@ EscrowChatIntent = Literal["latest_status", "why_pending", "next_step", "track_o
 
 class EscrowChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=1000)
+    target_user_id: UUID | None = None
 
 
 class EscrowDraft(BaseModel):
