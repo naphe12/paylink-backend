@@ -1,5 +1,6 @@
 from decimal import Decimal
 from difflib import SequenceMatcher
+import re
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -298,7 +299,17 @@ def _missing_fields_for_execution(draft: TransferDraft) -> list[str]:
     return missing
 
 
-def _build_suggestions(draft: TransferDraft, missing: list[str], beneficiaries: list[dict]) -> list[str]:
+def _find_short_phone_candidate(message: str) -> str | None:
+    matches = re.findall(r"(?<!\d)(\d{4,7})(?!\d)", str(message or ""))
+    return matches[-1] if matches else None
+
+
+def _build_suggestions(
+    draft: TransferDraft,
+    missing: list[str],
+    beneficiaries: list[dict],
+    raw_message: str | None = None,
+) -> list[str]:
     suggestions: list[str] = []
     if (
         missing == ["recipient_phone"]
@@ -316,6 +327,11 @@ def _build_suggestions(draft: TransferDraft, missing: list[str], beneficiaries: 
             )
         )
     if "recipient_phone" in missing:
+        short_phone = _find_short_phone_candidate(raw_message)
+        if short_phone:
+            suggestions.append(
+                f"Le numero {short_phone} est trop court. Utilise un numero complet sur 8 a 15 chiffres."
+            )
         suggestions.append("Ajoute le numero du beneficiaire pour l'execution automatique.")
     if "country_destination" in missing:
         suggestions.append("Precise le pays de destination, par exemple Burundi.")
@@ -361,7 +377,7 @@ async def process_chat_message(db: AsyncSession, *, user_id, message: str) -> Ch
             data=draft,
             missing_fields=missing_confirmation,
             executable=False,
-            suggestions=_build_suggestions(draft, missing_confirmation, beneficiaries),
+            suggestions=_build_suggestions(draft, missing_confirmation, beneficiaries, message),
             assumptions=assumptions,
             summary={
                 "wallet_currency": wallet_ctx["wallet_currency"],
@@ -387,7 +403,7 @@ async def process_chat_message(db: AsyncSession, *, user_id, message: str) -> Ch
         data=draft,
         missing_fields=missing_execution if not executable else [],
         executable=executable,
-        suggestions=_build_suggestions(draft, missing_execution, beneficiaries),
+        suggestions=_build_suggestions(draft, missing_execution, beneficiaries, message),
         assumptions=assumptions,
         summary={
             "wallet_currency": wallet_ctx["wallet_currency"],
