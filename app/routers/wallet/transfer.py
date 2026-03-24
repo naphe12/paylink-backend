@@ -640,16 +640,19 @@ async def _external_transfer_core(
     local_amount = (amount * fx_rate).quantize(decimal.Decimal("0.01"))
     wallet_after = wallet_balance_before
     credit_used = decimal.Decimal("0")
+    wallet_debit_amount = decimal.Decimal("0")
     if not insufficient_funds_review_required:
         if wallet_balance_before >= total_required:
             wallet_after = wallet_balance_before - total_required
             wallet.available = wallet_after
             credit_used = decimal.Decimal(0)
+            wallet_debit_amount = total_required
         else:
             wallet_consumed = max(wallet_balance_before, decimal.Decimal("0"))
             remaining_after_wallet = total_required - wallet_consumed
             credit_used = min(credit_available_before, remaining_after_wallet)
             credit_available_after = credit_available_before - credit_used
+            wallet_debit_amount = wallet_consumed
             residual_after_credit = remaining_after_wallet - credit_used
             if str(origin_currency or "").upper() == "EUR":
                 wallet_after = wallet_balance_before - total_required
@@ -690,7 +693,7 @@ async def _external_transfer_core(
         transfer_status = "pending" if requires_admin else "approved"
         txn_status = "pending"
 
-    debited = wallet_balance_before - wallet_after
+    debited = wallet_debit_amount
     movement = None
     if debited > 0:
         movement = await log_wallet_movement(
@@ -1025,14 +1028,18 @@ async def _fund_pending_external_transfer_for_approval(
     credit_used = min(credit_available_before, remaining_after_wallet)
     credit_available_after = credit_available_before - credit_used
     residual_after_credit = remaining_after_wallet - credit_used
+    wallet_debit_amount = decimal.Decimal("0")
     origin_currency = str(metadata.get("origin_currency") or wallet.currency_code or "EUR").upper()
 
     if wallet_balance_before >= total_required:
         wallet_after = wallet_balance_before - total_required
+        wallet_debit_amount = total_required
     elif origin_currency == "EUR":
         wallet_after = wallet_balance_before - total_required
+        wallet_debit_amount = wallet_consumed
     else:
         wallet_after = -residual_after_credit if residual_after_credit > 0 else decimal.Decimal("0")
+        wallet_debit_amount = wallet_consumed
 
     wallet.available = wallet_after
     if credit_line:
@@ -1042,7 +1049,7 @@ async def _fund_pending_external_transfer_for_approval(
         user.credit_limit = decimal.Decimal(credit_line.initial_amount or 0)
         user.credit_used = decimal.Decimal(credit_line.used_amount or 0)
 
-    debited = wallet_balance_before - wallet_after
+    debited = wallet_debit_amount
     movement = None
     if debited > 0:
         movement = await log_wallet_movement(
