@@ -1,3 +1,5 @@
+from datetime import date, datetime, time, timedelta
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +17,8 @@ async def list_app_errors(
     error_type: str | None = Query(None),
     path: str | None = Query(None),
     q: str | None = Query(None),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -47,6 +51,12 @@ async def list_app_errors(
             """
         )
         params["q"] = f"%{q}%"
+    if date_from:
+        clauses.append("created_at >= :created_at_from")
+        params["created_at_from"] = datetime.combine(date_from, time.min)
+    if date_to:
+        clauses.append("created_at < :created_at_to")
+        params["created_at_to"] = datetime.combine(date_to + timedelta(days=1), time.min)
 
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
