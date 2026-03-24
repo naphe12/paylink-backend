@@ -369,7 +369,7 @@ async def process_chat_message(db: AsyncSession, *, user_id, message: str) -> Ch
             )
         else:
             message_text = (
-                "Je peux preparer le transfert externe, mais il me manque encore des informations essentielles."
+                "Je peux preparer la demande de transfert, mais il me manque encore des informations essentielles."
             )
         return ChatResponse(
             status="NEED_INFO",
@@ -397,7 +397,7 @@ async def process_chat_message(db: AsyncSession, *, user_id, message: str) -> Ch
     return ChatResponse(
         status="CONFIRM",
         message=(
-            f"Je suis pret a preparer le transfert de {draft.amount} {draft.currency} "
+            f"Je suis pret a preparer la demande de transfert de {draft.amount} {draft.currency} "
             f"a {draft.recipient}{partner_text}{destination_text}."
         ),
         data=draft,

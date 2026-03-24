@@ -527,6 +527,22 @@ async def list_external_beneficiaries(
     ]
 
 
+@router.get("/external/mine", response_model=list[ExternalTransferRead])
+async def list_my_external_transfers(
+    limit: int = 10,
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user),
+):
+    safe_limit = max(1, min(int(limit or 10), 50))
+    result = await db.execute(
+        select(ExternalTransfers)
+        .where(ExternalTransfers.user_id == current_user.user_id)
+        .order_by(ExternalTransfers.created_at.desc())
+        .limit(safe_limit)
+    )
+    return result.scalars().all()
+
+
 async def _external_transfer_core(
     data: ExternalTransferCreate,
     background_tasks: BackgroundTasks,

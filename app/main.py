@@ -60,6 +60,15 @@ from app.routers.admin_flags import router as admin_flags_router
 from app.routers.admin_reports import router as admin_reports_router
 from app.routers.agent.agent import router as agent_router
 from app.routers.agent.chat import router as agent_chat_router
+from app.routers.agent.cash_chat import router as agent_cash_chat_router
+from app.routers.agent.credit_chat import router as agent_credit_chat_router
+from app.routers.agent.kyc_chat import router as agent_kyc_chat_router
+from app.routers.agent.transfer_support_chat import router as agent_transfer_support_chat_router
+from app.routers.agent.wallet_chat import router as agent_wallet_chat_router
+from app.routers.agent.wallet_support_chat import router as agent_wallet_support_chat_router
+from app.routers.agent.agent_onboarding_chat import router as agent_onboarding_chat_router
+from app.routers.agent.escrow_chat import router as agent_escrow_chat_router
+from app.routers.agent.p2p_chat import router as agent_p2p_chat_router
 from app.routers.agent.agent_external_transfer import router as agent_router_extern
 from app.routers.auth import auth
 from app.routers.auth.change_password import router as change_password_router
@@ -464,6 +473,15 @@ app.include_router(admin_error_logs_router.router)
 app.include_router(admin_wallet_analysis_router.router)
 app.include_router(agent_router, prefix="/agent", tags=["Agent Operations"])
 app.include_router(agent_chat_router)
+app.include_router(agent_cash_chat_router)
+app.include_router(agent_credit_chat_router)
+app.include_router(agent_kyc_chat_router)
+app.include_router(agent_transfer_support_chat_router)
+app.include_router(agent_wallet_chat_router)
+app.include_router(agent_wallet_support_chat_router)
+app.include_router(agent_onboarding_chat_router)
+app.include_router(agent_escrow_chat_router)
+app.include_router(agent_p2p_chat_router)
 app.include_router(agent_router_extern)
 app.include_router(debug.router)
 app.include_router(meta_router)

@@ -58,7 +58,7 @@ async def confirm_agent_chat(
     if missing_fields:
         return ChatResponse(
             status="NEED_INFO",
-            message="Confirmation recue, mais il manque encore des informations pour executer le transfert.",
+            message="Confirmation recue, mais il manque encore des informations pour executer la demande.",
             data=draft,
             missing_fields=missing_fields,
             executable=False,
@@ -120,6 +120,6 @@ async def confirm_agent_chat(
     )
     return {
         "status": "DONE",
-        "message": "Transfert cree avec succes.",
+        "message": "Demande creee avec succes.",
         "transfer": transfer_payload,
     }
