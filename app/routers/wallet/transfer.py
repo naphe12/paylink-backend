@@ -8,7 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -185,23 +185,28 @@ async def _list_external_transfer_agent_users(db: AsyncSession) -> list[Users]:
         .join(Users, Users.user_id == Agents.user_id, isouter=True)
         .where(
             Agents.active.is_(True),
-            Agents.email.is_not(None),
+            or_(
+                Agents.email.is_not(None),
+                Users.email.is_not(None),
+            ),
         )
     )
     agents: list[Users] = []
     seen_emails: set[str] = set()
     for agent_row, user_row in rows.all():
-        email = str(agent_row.email or getattr(user_row, "email", "") or "").strip().lower()
+        email = str(agent_row.email or "").strip().lower()
         if not email or email in seen_emails:
             continue
         seen_emails.add(email)
         agents.append(
-            user_row
-            if user_row is not None
-            else Users(
+            Users(
                 user_id=agent_row.user_id,
                 email=email,
-                full_name=str(agent_row.display_name or "Agent PesaPaid").strip() or "Agent PesaPaid",
+                full_name=(
+                    str(getattr(user_row, "full_name", "") or "").strip()
+                    or str(agent_row.display_name or "Agent PesaPaid").strip()
+                    or "Agent PesaPaid"
+                ),
             )
         )
     return agents
