@@ -73,6 +73,78 @@ async def _get_recent_beneficiaries(db: AsyncSession, user_id) -> list[dict]:
     return items
 
 
+async def _get_recent_chat_memories(db: AsyncSession, user_id) -> list[dict]:
+    transfers = (
+        await db.execute(
+            select(ExternalTransfers)
+            .where(ExternalTransfers.user_id == user_id)
+            .order_by(ExternalTransfers.created_at.desc())
+            .limit(50)
+        )
+    ).scalars().all()
+    memories: list[dict] = []
+    seen = set()
+    for transfer in transfers:
+        metadata = dict(getattr(transfer, "metadata_", {}) or {})
+        chat_memory = metadata.get("chat_memory") or {}
+        if not isinstance(chat_memory, dict):
+            continue
+        raw_message = str(chat_memory.get("raw_message") or "").strip()
+        recipient_alias = str(chat_memory.get("recipient_input") or "").strip()
+        recipient_name = str(chat_memory.get("recipient_name") or transfer.recipient_name or "").strip()
+        if not raw_message and not recipient_alias:
+            continue
+        key = (
+            normalize_text(raw_message),
+            normalize_text(recipient_alias),
+            normalize_text(recipient_name),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        memories.append(
+            {
+                "raw_message": raw_message,
+                "recipient_input": recipient_alias,
+                "recipient_name": recipient_name,
+                "recipient_phone": str(chat_memory.get("recipient_phone") or transfer.recipient_phone or "").strip(),
+                "partner_name": str(chat_memory.get("partner_name") or transfer.partner_name or "").strip(),
+                "country_destination": str(
+                    chat_memory.get("country_destination") or transfer.country_destination or ""
+                ).strip(),
+            }
+        )
+    return memories
+
+
+def _tokenize_name(value: str | None) -> set[str]:
+    normalized = normalize_text(value)
+    return {
+        token
+        for token in normalized.split()
+        if token and len(token) >= 2
+    }
+
+
+def _score_beneficiary_match(query: str, candidate: str) -> float:
+    query_norm = normalize_text(query)
+    candidate_norm = normalize_text(candidate)
+    sequence_score = SequenceMatcher(None, query_norm, candidate_norm).ratio()
+
+    query_tokens = _tokenize_name(query)
+    candidate_tokens = _tokenize_name(candidate)
+    overlap_score = 0.0
+    if query_tokens and candidate_tokens:
+        common = len(query_tokens & candidate_tokens)
+        overlap_score = common / max(len(query_tokens), len(candidate_tokens))
+
+    contains_score = 0.0
+    if query_norm and (query_norm in candidate_norm or candidate_norm in query_norm):
+        contains_score = 1.0
+
+    return max(sequence_score, overlap_score, contains_score * 0.96)
+
+
 def _resolve_beneficiary_from_history(
     draft: TransferDraft,
     beneficiaries: list[dict],
@@ -85,15 +157,13 @@ def _resolve_beneficiary_from_history(
     best = None
     best_score = 0.0
     for item in beneficiaries:
-        candidate = normalize_text(item["recipient_name"])
-        score = SequenceMatcher(None, recipient_norm, candidate).ratio()
-        if recipient_norm and (recipient_norm in candidate or candidate in recipient_norm):
-            score = max(score, 0.96)
+        candidate = str(item["recipient_name"] or "").strip()
+        score = _score_beneficiary_match(recipient_norm, candidate)
         if score > best_score:
             best = item
             best_score = score
 
-    if not best or best_score < 0.72:
+    if not best or best_score < 0.6:
         return draft, assumptions
 
     draft.recognized_beneficiary = True
@@ -114,6 +184,95 @@ def _apply_defaults(draft: TransferDraft) -> list[str]:
     if draft.country_destination == "Burundi" and not draft.partner_name:
         draft.partner_name = "Lumicash"
         assumptions.append("Partenaire par defaut applique pour Burundi: Lumicash.")
+    return assumptions
+
+
+def _learn_from_history(draft: TransferDraft, beneficiaries: list[dict]) -> list[str]:
+    assumptions: list[str] = []
+    if not beneficiaries:
+        return assumptions
+
+    if not draft.recipient and draft.partner_name and draft.country_destination:
+        for item in beneficiaries:
+            if (
+                str(item.get("partner_name") or "").strip() == str(draft.partner_name or "").strip()
+                and str(item.get("country_destination") or "").strip() == str(draft.country_destination or "").strip()
+                and item.get("recipient_name")
+            ):
+                assumptions.append(
+                    "J'ai reconnu votre couple partenaire/pays habituel, mais il me faut toujours le beneficiaire."
+                )
+                break
+
+    if draft.recipient and (not draft.partner_name or not draft.country_destination):
+        best = None
+        best_score = 0.0
+        for item in beneficiaries:
+            candidate = str(item.get("recipient_name") or "").strip()
+            if not candidate:
+                continue
+            score = _score_beneficiary_match(draft.recipient, candidate)
+            if score > best_score:
+                best = item
+                best_score = score
+
+        if best and best_score >= 0.6:
+            if not draft.partner_name and best.get("partner_name"):
+                draft.partner_name = str(best["partner_name"]).strip()
+                assumptions.append(f"Partenaire appris depuis vos envois precedents: {draft.partner_name}.")
+            if not draft.country_destination and best.get("country_destination"):
+                draft.country_destination = str(best["country_destination"]).strip()
+                assumptions.append(
+                    f"Pays appris depuis vos envois precedents: {draft.country_destination}."
+                )
+
+    return assumptions
+
+
+def _learn_from_memories(
+    draft: TransferDraft,
+    *,
+    raw_message: str,
+    memories: list[dict],
+) -> list[str]:
+    assumptions: list[str] = []
+    if not memories:
+        return assumptions
+
+    raw_norm = normalize_text(raw_message)
+    best = None
+    best_score = 0.0
+    for item in memories:
+        scores = [
+            _score_beneficiary_match(raw_norm, str(item.get("raw_message") or "")),
+            _score_beneficiary_match(raw_norm, str(item.get("recipient_input") or "")),
+        ]
+        if draft.recipient:
+            scores.append(_score_beneficiary_match(draft.recipient, str(item.get("recipient_input") or "")))
+            scores.append(_score_beneficiary_match(draft.recipient, str(item.get("recipient_name") or "")))
+        score = max(scores)
+        if score > best_score:
+            best = item
+            best_score = score
+
+    if not best or best_score < 0.72:
+        return assumptions
+
+    learned_from = str(best.get("recipient_input") or best.get("recipient_name") or "").strip()
+    if not draft.recipient and best.get("recipient_name"):
+        draft.recipient = str(best["recipient_name"]).strip()
+        assumptions.append(f"Beneficiaire appris depuis votre formulation habituelle: {draft.recipient}.")
+    if not draft.recipient_phone and best.get("recipient_phone"):
+        draft.recipient_phone = str(best["recipient_phone"]).strip()
+        assumptions.append(f"Numero appris depuis vos confirmations precedentes pour {learned_from}.")
+    if not draft.partner_name and best.get("partner_name"):
+        draft.partner_name = str(best["partner_name"]).strip()
+        assumptions.append(f"Partenaire appris depuis vos confirmations precedentes: {draft.partner_name}.")
+    if not draft.country_destination and best.get("country_destination"):
+        draft.country_destination = str(best["country_destination"]).strip()
+        assumptions.append(
+            f"Pays appris depuis vos confirmations precedentes: {draft.country_destination}."
+        )
     return assumptions
 
 
@@ -141,6 +300,21 @@ def _missing_fields_for_execution(draft: TransferDraft) -> list[str]:
 
 def _build_suggestions(draft: TransferDraft, missing: list[str], beneficiaries: list[dict]) -> list[str]:
     suggestions: list[str] = []
+    if (
+        missing == ["recipient_phone"]
+        and draft.amount is not None
+        and draft.currency
+        and draft.recipient
+        and draft.partner_name
+        and draft.country_destination
+    ):
+        suggestions.append(
+            (
+                f"J'ai compris {draft.amount} {draft.currency} pour {draft.recipient} "
+                f"via {draft.partner_name} vers {draft.country_destination}. "
+                "Il manque seulement le numero."
+            )
+        )
     if "recipient_phone" in missing:
         suggestions.append("Ajoute le numero du beneficiaire pour l'execution automatique.")
     if "country_destination" in missing:
@@ -158,21 +332,32 @@ async def process_chat_message(db: AsyncSession, *, user_id, message: str) -> Ch
     draft = parse_chat_message(message)
     wallet_ctx = await _get_wallet_context(db, user_id)
     beneficiaries = await _get_recent_beneficiaries(db, user_id)
+    memories = await _get_recent_chat_memories(db, user_id)
 
     if not draft.currency:
         draft.currency = wallet_ctx["wallet_currency"]
     draft.wallet_currency = wallet_ctx["wallet_currency"]
 
     assumptions = []
+    assumptions.extend(_learn_from_memories(draft, raw_message=message, memories=memories))
     draft, hist_assumptions = _resolve_beneficiary_from_history(draft, beneficiaries)
     assumptions.extend(hist_assumptions)
+    assumptions.extend(_learn_from_history(draft, beneficiaries))
     assumptions.extend(_apply_defaults(draft))
 
     missing_confirmation = _missing_fields_for_confirmation(draft)
     if missing_confirmation:
+        if missing_confirmation == ["recipient"]:
+            message_text = (
+                "Je reconnais le montant et la devise, mais je n'ai pas pu identifier clairement le beneficiaire."
+            )
+        else:
+            message_text = (
+                "Je peux preparer le transfert externe, mais il me manque encore des informations essentielles."
+            )
         return ChatResponse(
             status="NEED_INFO",
-            message="Je peux preparer le transfert externe, mais il me manque encore des informations essentielles.",
+            message=message_text,
             data=draft,
             missing_fields=missing_confirmation,
             executable=False,

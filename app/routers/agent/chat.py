@@ -1,4 +1,5 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, Header
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent_chat.schemas import ChatRequest, ChatResponse, ConfirmChatRequest
@@ -9,6 +10,7 @@ from app.agent_chat.service import (
 )
 from app.core.database import get_db
 from app.dependencies.auth import get_current_user
+from app.models.external_transfers import ExternalTransfers
 from app.models.users import Users
 from app.schemas.external_transfers import ExternalTransferCreate, ExternalTransferRead
 from app.routers.wallet.transfer import _external_transfer_core
@@ -87,6 +89,29 @@ async def confirm_agent_chat(
         db=db,
         current_user=current_user,
     )
+
+    transfer_id = getattr(transfer, "transfer_id", None)
+    if transfer_id is None and isinstance(transfer, dict):
+        transfer_id = transfer.get("transfer_id")
+    if transfer_id:
+        transfer_row = await db.scalar(
+            select(ExternalTransfers).where(ExternalTransfers.transfer_id == transfer_id)
+        )
+        if transfer_row:
+            metadata = dict(getattr(transfer_row, "metadata_", {}) or {})
+            metadata["chat_memory"] = {
+                "source": "agent_chat",
+                "raw_message": str(draft.raw_message or "").strip(),
+                "recipient_input": str(draft.recipient or "").strip(),
+                "recipient_name": str(transfer_row.recipient_name or draft.recipient or "").strip(),
+                "recipient_phone": str(transfer_row.recipient_phone or draft.recipient_phone or "").strip(),
+                "partner_name": str(transfer_row.partner_name or draft.partner_name or "").strip(),
+                "country_destination": str(
+                    transfer_row.country_destination or draft.country_destination or ""
+                ).strip(),
+            }
+            transfer_row.metadata_ = metadata
+            await db.commit()
 
     transfer_payload = (
         ExternalTransferRead.model_validate(transfer).model_dump(mode="json")
