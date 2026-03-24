@@ -536,7 +536,7 @@ async def list_external_users(
     ]
 
 
-@router.get("/beneficiaries", response_model=list[ExternalBeneficiaryRead])
+@router.get("/beneficiaries")
 async def list_external_beneficiaries_for_user(
     user_id: str,
     db: AsyncSession = Depends(get_db),
@@ -560,7 +560,7 @@ async def list_external_beneficiaries_for_user(
     return [
         {
             "recipient_name": r.recipient_name,
-            "recipient_phone": r.recipient_phone,
+            "recipient_phone": str(r.recipient_phone or "").strip() or None,
             "partner_name": r.partner_name,
             "country_destination": r.country_destination,
         }

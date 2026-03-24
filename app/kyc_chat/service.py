@@ -29,6 +29,7 @@ async def _get_user_context(db: AsyncSession, user_id) -> tuple[Users | None, Ky
         # Some deployments do not have the optional paylink.kyc_verifications table yet.
         if "kyc_verifications" not in str(getattr(exc, "orig", exc)).lower():
             raise
+        await db.rollback()
     return user, verification
 
 

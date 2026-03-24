@@ -10,7 +10,7 @@ class ExternalTransferBase(BaseModel):
     partner_name: str = Field(..., min_length=2, max_length=80, example="Lumicash")
     country_destination: str = Field(..., example="Burundi")
     recipient_name: str = Field(..., min_length=2, max_length=120, example="Jean Ndayishimiye")
-    recipient_phone: str = Field(..., min_length=8, max_length=20, pattern=r"^\+?[0-9]{8,15}$", example="+25761234567")
+    recipient_phone: str = Field(..., example="+25761234567")
     recipient_email: Optional[EmailStr] = Field(default=None, example="jean@example.com")
     amount: Decimal = Field(..., gt=Decimal("0"), le=Decimal("100000000"), example=100.00)
 
@@ -27,7 +27,13 @@ class ExternalTransferCreate(ExternalTransferBase):
     pass
 
 
-class ExternalTransferRead(ExternalTransferBase):
+class ExternalTransferRead(BaseModel):
+    partner_name: str
+    country_destination: str
+    recipient_name: str
+    recipient_phone: str | None = None
+    recipient_email: Optional[EmailStr] = None
+    amount: Decimal
     transfer_id: UUID
     user_id: UUID
     currency: str
@@ -38,13 +44,25 @@ class ExternalTransferRead(ExternalTransferBase):
     reference_code: Optional[str]
     created_at: datetime
 
+    @field_validator("recipient_phone", mode="before")
+    @classmethod
+    def normalize_recipient_phone(cls, value: str | None) -> str | None:
+        raw = str(value or "").strip()
+        return raw or None
+
     class Config:
         from_attributes = True
 
 
 class ExternalBeneficiaryRead(BaseModel):
     recipient_name: str
-    recipient_phone: str
+    recipient_phone: str | None = None
     recipient_email: Optional[EmailStr] = None
     partner_name: str
     country_destination: str
+
+    @field_validator("recipient_phone", mode="before")
+    @classmethod
+    def normalize_recipient_phone(cls, value: str | None) -> str | None:
+        raw = str(value or "").strip()
+        return raw or None

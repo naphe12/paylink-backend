@@ -505,7 +505,7 @@ async def _notify_external_transfer_task(
         )
 
 
-@router.get("/external/beneficiaries", response_model=list[ExternalBeneficiaryRead])
+@router.get("/external/beneficiaries")
 async def list_external_beneficiaries(
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user),
@@ -529,7 +529,7 @@ async def list_external_beneficiaries(
     return [
         {
           "recipient_name": r.recipient_name,
-          "recipient_phone": r.recipient_phone,
+          "recipient_phone": str(r.recipient_phone or "").strip() or None,
           "recipient_email": None,
           "partner_name": r.partner_name,
           "country_destination": r.country_destination,
@@ -539,7 +539,7 @@ async def list_external_beneficiaries(
     ]
 
 
-@router.get("/external/mine", response_model=list[ExternalTransferRead])
+@router.get("/external/mine")
 async def list_my_external_transfers(
     limit: int = 10,
     db: AsyncSession = Depends(get_db),
@@ -553,7 +553,25 @@ async def list_my_external_transfers(
         .limit(safe_limit)
     )
     return [
-        transfer
+        ExternalTransferRead.model_validate(
+            {
+                "transfer_id": transfer.transfer_id,
+                "user_id": transfer.user_id,
+                "partner_name": transfer.partner_name,
+                "country_destination": transfer.country_destination,
+                "recipient_name": transfer.recipient_name,
+                "recipient_phone": str(transfer.recipient_phone or "").strip() or None,
+                "recipient_email": None,
+                "amount": transfer.amount,
+                "currency": transfer.currency,
+                "rate": transfer.rate,
+                "local_amount": transfer.local_amount,
+                "credit_used": transfer.credit_used,
+                "status": transfer.status,
+                "reference_code": transfer.reference_code,
+                "created_at": transfer.created_at,
+            }
+        )
         for transfer in result.scalars().all()
         if _is_valid_external_phone(transfer.recipient_phone)
     ]
@@ -609,6 +627,8 @@ async def _external_transfer_core(
     amount = decimal.Decimal(data.amount)
     if amount <= decimal.Decimal("0"):
         raise HTTPException(status_code=400, detail="Montant invalide")
+    if not _is_valid_external_phone(data.recipient_phone):
+        raise HTTPException(status_code=400, detail="Numero beneficiaire invalide")
 
     user_locked = await db.scalar(
         select(Users).where(Users.user_id == current_user.user_id).with_for_update()

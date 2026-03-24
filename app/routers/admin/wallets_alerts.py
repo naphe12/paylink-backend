@@ -62,7 +62,7 @@ async def list_wallet_alerts(
     stmt = (
         select(
             Wallets.wallet_id,
-            Wallets.type,
+            cast(Wallets.type, String).label("wallet_type"),
             Wallets.currency_code,
             Wallets.available,
             Wallets.pending,
@@ -78,7 +78,7 @@ async def list_wallet_alerts(
     if min_available is not None:
         stmt = stmt.where(func.coalesce(Wallets.available, 0) <= min_available)
     if wallet_type:
-        stmt = stmt.where(Wallets.type == wallet_type)
+        stmt = stmt.where(cast(Wallets.type, String) == wallet_type)
     if user_id is not None:
         stmt = stmt.where(Wallets.user_id == user_id)
 
@@ -87,7 +87,7 @@ async def list_wallet_alerts(
     return [
         {
             "wallet_id": str(r.wallet_id),
-            "type": r.type,
+            "type": r.wallet_type,
             "currency": r.currency_code,
             "available": float(r.available or 0),
             "pending": float(r.pending or 0),
@@ -130,7 +130,7 @@ async def wallet_history_admin(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
 ):
-    wallet = await db.get(Wallets, wallet_id)
+    wallet = await db.scalar(select(Wallets.wallet_id).where(Wallets.wallet_id == wallet_id))
     if not wallet:
         raise HTTPException(404, "Wallet introuvable")
 
