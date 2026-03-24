@@ -19,6 +19,8 @@ class TransferDraft(BaseModel):
     recipient_phone: str | None = None
     partner_name: str | None = None
     country_destination: str | None = None
+    recognized_beneficiary: bool = False
+    wallet_currency: str | None = None
     raw_message: str
 
 
@@ -28,6 +30,9 @@ class ChatResponse(BaseModel):
     data: TransferDraft | None = None
     missing_fields: list[str] = Field(default_factory=list)
     executable: bool = False
+    suggestions: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    summary: dict | None = None
 
 
 class ConfirmChatRequest(BaseModel):

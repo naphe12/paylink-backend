@@ -1,21 +1,120 @@
 from decimal import Decimal
+from difflib import SequenceMatcher
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent_chat.parser import parse_chat_message
+from app.agent_chat.parser import normalize_text, parse_chat_message
 from app.agent_chat.schemas import ChatResponse, TransferDraft
+from app.models.external_transfers import ExternalTransfers
 from app.models.wallets import Wallets
+from app.models.credit_lines import CreditLines
 
 
 SUPPORTED_TRANSFER_PARTNERS = {"Lumicash", "Ecocash", "eNoti"}
 
 
-async def _get_wallet_currency(db: AsyncSession, user_id) -> str | None:
+async def _get_wallet_context(db: AsyncSession, user_id) -> dict:
     wallet = await db.scalar(select(Wallets).where(Wallets.user_id == user_id))
-    if not wallet or not wallet.currency_code:
-        return None
-    return str(wallet.currency_code).upper()
+    credit_line = await db.scalar(
+        select(CreditLines)
+        .where(CreditLines.user_id == user_id, CreditLines.deleted_at.is_(None))
+        .order_by(CreditLines.created_at.desc())
+    )
+    wallet_currency = str(getattr(wallet, "currency_code", "") or "").upper() or None
+    wallet_available = Decimal(getattr(wallet, "available", 0) or 0)
+    credit_available = (
+        max(Decimal(getattr(credit_line, "outstanding_amount", 0) or 0), Decimal("0"))
+        if credit_line
+        else Decimal("0")
+    )
+    return {
+        "wallet_currency": wallet_currency,
+        "wallet_available": wallet_available,
+        "credit_available": credit_available,
+        "total_capacity": wallet_available + credit_available,
+    }
+
+
+async def _get_recent_beneficiaries(db: AsyncSession, user_id) -> list[dict]:
+    rows = (
+        await db.execute(
+            select(
+                ExternalTransfers.recipient_name,
+                ExternalTransfers.recipient_phone,
+                ExternalTransfers.partner_name,
+                ExternalTransfers.country_destination,
+            )
+            .where(ExternalTransfers.user_id == user_id)
+            .order_by(ExternalTransfers.created_at.desc())
+            .limit(20)
+        )
+    ).all()
+    items = []
+    seen = set()
+    for row in rows:
+        key = (
+            str(row.recipient_name or "").strip().lower(),
+            str(row.recipient_phone or "").strip(),
+            str(row.partner_name or "").strip().lower(),
+            str(row.country_destination or "").strip().lower(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(
+            {
+                "recipient_name": str(row.recipient_name or "").strip(),
+                "recipient_phone": str(row.recipient_phone or "").strip(),
+                "partner_name": str(row.partner_name or "").strip(),
+                "country_destination": str(row.country_destination or "").strip(),
+            }
+        )
+    return items
+
+
+def _resolve_beneficiary_from_history(
+    draft: TransferDraft,
+    beneficiaries: list[dict],
+) -> tuple[TransferDraft, list[str]]:
+    assumptions: list[str] = []
+    if not draft.recipient:
+        return draft, assumptions
+
+    recipient_norm = normalize_text(draft.recipient)
+    best = None
+    best_score = 0.0
+    for item in beneficiaries:
+        candidate = normalize_text(item["recipient_name"])
+        score = SequenceMatcher(None, recipient_norm, candidate).ratio()
+        if recipient_norm and (recipient_norm in candidate or candidate in recipient_norm):
+            score = max(score, 0.96)
+        if score > best_score:
+            best = item
+            best_score = score
+
+    if not best or best_score < 0.72:
+        return draft, assumptions
+
+    draft.recognized_beneficiary = True
+    if not draft.recipient_phone and best.get("recipient_phone"):
+        draft.recipient_phone = best["recipient_phone"]
+        assumptions.append(f"Telephone repris du beneficiaire habituel {best['recipient_name']}.")
+    if not draft.partner_name and best.get("partner_name"):
+        draft.partner_name = best["partner_name"]
+        assumptions.append(f"Partenaire repris depuis l'historique: {best['partner_name']}.")
+    if not draft.country_destination and best.get("country_destination"):
+        draft.country_destination = best["country_destination"]
+        assumptions.append(f"Pays repris depuis l'historique: {best['country_destination']}.")
+    return draft, assumptions
+
+
+def _apply_defaults(draft: TransferDraft) -> list[str]:
+    assumptions: list[str] = []
+    if draft.country_destination == "Burundi" and not draft.partner_name:
+        draft.partner_name = "Lumicash"
+        assumptions.append("Partenaire par defaut applique pour Burundi: Lumicash.")
+    return assumptions
 
 
 def _missing_fields_for_confirmation(draft: TransferDraft) -> list[str]:
@@ -40,34 +139,77 @@ def _missing_fields_for_execution(draft: TransferDraft) -> list[str]:
     return missing
 
 
+def _build_suggestions(draft: TransferDraft, missing: list[str], beneficiaries: list[dict]) -> list[str]:
+    suggestions: list[str] = []
+    if "recipient_phone" in missing:
+        suggestions.append("Ajoute le numero du beneficiaire pour l'execution automatique.")
+    if "country_destination" in missing:
+        suggestions.append("Precise le pays de destination, par exemple Burundi.")
+    if "partner_name" in missing:
+        suggestions.append("Precise le partenaire, par exemple Lumicash ou Ecocash.")
+    if not draft.recognized_beneficiary and beneficiaries:
+        sample_names = ", ".join(item["recipient_name"] for item in beneficiaries[:3] if item["recipient_name"])
+        if sample_names:
+            suggestions.append(f"Beneficiaires habituels reconnus: {sample_names}.")
+    return suggestions[:4]
+
+
 async def process_chat_message(db: AsyncSession, *, user_id, message: str) -> ChatResponse:
     draft = parse_chat_message(message)
-    if not draft.currency:
-        draft.currency = await _get_wallet_currency(db, user_id)
+    wallet_ctx = await _get_wallet_context(db, user_id)
+    beneficiaries = await _get_recent_beneficiaries(db, user_id)
 
-    missing = _missing_fields_for_confirmation(draft)
-    if missing:
+    if not draft.currency:
+        draft.currency = wallet_ctx["wallet_currency"]
+    draft.wallet_currency = wallet_ctx["wallet_currency"]
+
+    assumptions = []
+    draft, hist_assumptions = _resolve_beneficiary_from_history(draft, beneficiaries)
+    assumptions.extend(hist_assumptions)
+    assumptions.extend(_apply_defaults(draft))
+
+    missing_confirmation = _missing_fields_for_confirmation(draft)
+    if missing_confirmation:
         return ChatResponse(
             status="NEED_INFO",
-            message="Je peux preparer le transfert, mais il me manque le montant, la devise ou le beneficiaire.",
+            message="Je peux preparer le transfert externe, mais il me manque encore des informations essentielles.",
             data=draft,
-            missing_fields=missing,
+            missing_fields=missing_confirmation,
             executable=False,
+            suggestions=_build_suggestions(draft, missing_confirmation, beneficiaries),
+            assumptions=assumptions,
+            summary={
+                "wallet_currency": wallet_ctx["wallet_currency"],
+                "wallet_available": str(wallet_ctx["wallet_available"]),
+                "credit_available": str(wallet_ctx["credit_available"]),
+            },
         )
 
+    missing_execution = _missing_fields_for_execution(draft)
     executable = (
-        not _missing_fields_for_execution(draft)
+        not missing_execution
         and str(draft.partner_name or "") in SUPPORTED_TRANSFER_PARTNERS
     )
     partner_text = f" via {draft.partner_name}" if draft.partner_name else ""
+    destination_text = f" vers {draft.country_destination}" if draft.country_destination else ""
+
     return ChatResponse(
         status="CONFIRM",
         message=(
-            f"Confirmer l'envoi de {draft.amount} {draft.currency} a {draft.recipient}{partner_text} ?"
+            f"Je suis pret a preparer le transfert de {draft.amount} {draft.currency} "
+            f"a {draft.recipient}{partner_text}{destination_text}."
         ),
         data=draft,
-        missing_fields=_missing_fields_for_execution(draft) if not executable else [],
+        missing_fields=missing_execution if not executable else [],
         executable=executable,
+        suggestions=_build_suggestions(draft, missing_execution, beneficiaries),
+        assumptions=assumptions,
+        summary={
+            "wallet_currency": wallet_ctx["wallet_currency"],
+            "wallet_available": str(wallet_ctx["wallet_available"]),
+            "credit_available": str(wallet_ctx["credit_available"]),
+            "total_capacity": str(wallet_ctx["total_capacity"]),
+        },
     )
 
 

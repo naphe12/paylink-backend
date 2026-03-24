@@ -1,20 +1,27 @@
 import re
+import unicodedata
 from decimal import Decimal, InvalidOperation
 
 from app.agent_chat.schemas import TransferDraft
 
 
 AMOUNT_PATTERNS = [
-    re.compile(r"(?P<currency>\$|€)\s*(?P<amount>\d+(?:[.,]\d+)?)", re.IGNORECASE),
-    re.compile(r"(?P<amount>\d+(?:[.,]\d+)?)\s*(?P<currency>\$|€|usd|eur|bif|xof|xaf|usdt|usdc)", re.IGNORECASE),
+    re.compile(r"(?P<currency>\$|EUR|USD|BIF|XOF|XAF|USDT|USDC|CFA|FCFA)\s*(?P<amount>\d+(?:[.,]\d+)?)", re.IGNORECASE),
+    re.compile(r"(?P<amount>\d+(?:[.,]\d+)?)\s*(?P<currency>\$|€|EUR|USD|BIF|XOF|XAF|USDT|USDC|CFA|FCFA)", re.IGNORECASE),
 ]
 PHONE_PATTERN = re.compile(r"(\+?\d{8,15})")
-PARTNER_PATTERN = re.compile(r"\b(?:via|par|sur)\s+([A-Za-z][A-Za-z .-]{1,40})", re.IGNORECASE)
-RECIPIENT_PATTERN = re.compile(
-    r"\b(?:a|à|to)\s+([A-Za-z][A-Za-zÀ-ÿ' -]{1,60}?)(?=\s+(?:via|par|sur|au|en)\b|$)",
+PARTNER_PATTERN = re.compile(
+    r"\b(?:via|par|sur)\s+(lumicash|ecocash|enoti|mtn(?: mobile money)?)\b",
     re.IGNORECASE,
 )
-COUNTRY_PATTERN = re.compile(r"\b(?:au|en|vers)\s+(burundi|rwanda|congo|rdc|kenya|ouganda|uganda|tanzanie)\b", re.IGNORECASE)
+RECIPIENT_PATTERN = re.compile(
+    r"\b(?:a|à|to)\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' -]{1,60}?)(?=\s+(?:via|par|sur|au|en|vers)\b|$)",
+    re.IGNORECASE,
+)
+COUNTRY_PATTERN = re.compile(
+    r"\b(?:au|en|vers)\s+(burundi|rwanda|congo|rdc|kenya|ouganda|uganda|tanzanie)\b",
+    re.IGNORECASE,
+)
 
 
 CURRENCY_ALIASES = {
@@ -27,6 +34,8 @@ CURRENCY_ALIASES = {
     "xaf": "XAF",
     "usdt": "USDT",
     "usdc": "USDC",
+    "cfa": "XOF",
+    "fcfa": "XAF",
 }
 
 PARTNER_ALIASES = {
@@ -49,13 +58,19 @@ COUNTRY_ALIASES = {
 }
 
 
+def normalize_text(value: str | None) -> str:
+    raw = str(value or "").strip().lower()
+    normalized = unicodedata.normalize("NFKD", raw)
+    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+
 def _parse_amount_and_currency(message: str) -> tuple[Decimal | None, str | None]:
     for pattern in AMOUNT_PATTERNS:
         match = pattern.search(message)
         if not match:
             continue
         raw_amount = str(match.group("amount") or "").replace(",", ".")
-        raw_currency = str(match.group("currency") or "").strip().lower()
+        raw_currency = normalize_text(match.group("currency"))
         try:
             amount = Decimal(raw_amount)
         except InvalidOperation:
@@ -73,8 +88,8 @@ def parse_chat_message(message: str) -> TransferDraft:
     phone_match = PHONE_PATTERN.search(text)
     country_match = COUNTRY_PATTERN.search(text)
 
-    partner_raw = str(partner_match.group(1) or "").strip().lower() if partner_match else ""
-    country_raw = str(country_match.group(1) or "").strip().lower() if country_match else ""
+    partner_raw = normalize_text(partner_match.group(1)) if partner_match else ""
+    country_raw = normalize_text(country_match.group(1)) if country_match else ""
 
     return TransferDraft(
         amount=amount,
