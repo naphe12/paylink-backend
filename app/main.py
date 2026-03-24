@@ -59,6 +59,7 @@ from app.routers.admin_dashboard import router as admin_dashboard_router
 from app.routers.admin_flags import router as admin_flags_router
 from app.routers.admin_reports import router as admin_reports_router
 from app.routers.agent.agent import router as agent_router
+from app.routers.agent.chat import router as agent_chat_router
 from app.routers.agent.agent_external_transfer import router as agent_router_extern
 from app.routers.auth import auth
 from app.routers.auth.change_password import router as change_password_router
@@ -462,6 +463,7 @@ app.include_router(admin_transactions_audit_router.router)
 app.include_router(admin_error_logs_router.router)
 app.include_router(admin_wallet_analysis_router.router)
 app.include_router(agent_router, prefix="/agent", tags=["Agent Operations"])
+app.include_router(agent_chat_router)
 app.include_router(agent_router_extern)
 app.include_router(debug.router)
 app.include_router(meta_router)
