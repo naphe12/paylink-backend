@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     # -------------------------------------------------
     # ENVIRONNEMENT
     # -------------------------------------------------
-    APP_ENV: str = Field(default="dev")  # dev|staging|prod
+    APP_ENV: str = Field(default="prod")  # dev|staging|prod
 
     # -------------------------------------------------
     # SANDBOX

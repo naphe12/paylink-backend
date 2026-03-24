@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.external_transfers import ExternalTransfers
 from app.models.transactions import Transactions
+from app.models.users import Users
 from app.transfer_support_chat.parser import parse_transfer_support_message
 from app.transfer_support_chat.schemas import TransferSupportChatResponse
 
@@ -90,6 +91,7 @@ def _status_message(status: str, *, review_reasons: list[str], metadata: dict, t
 async def process_transfer_support_message(db: AsyncSession, *, user_id, message: str) -> TransferSupportChatResponse:
     draft = parse_transfer_support_message(message)
     transfer = await _find_transfer(db, user_id=user_id, reference_code=draft.reference_code)
+    user = await db.scalar(select(Users).where(Users.user_id == user_id))
 
     if draft.intent == "unknown":
         return TransferSupportChatResponse(
@@ -123,10 +125,17 @@ async def process_transfer_support_message(db: AsyncSession, *, user_id, message
     )
 
     summary = {
+        "user_id": str(getattr(user, "user_id", "") or "") or None,
+        "user_name": str(getattr(user, "full_name", "") or "") or None,
+        "user_email": str(getattr(user, "email", "") or "") or None,
+        "user_phone": str(getattr(user, "phone_e164", "") or "") or None,
+        "transfer_id": str(getattr(transfer, "transfer_id", "") or "") or None,
+        "transaction_id": str(getattr(linked_tx, "tx_id", "") or "") or None,
         "reference_code": transfer.reference_code,
         "transfer_status": str(getattr(transfer, "status", "") or ""),
         "transaction_status": tx_status,
         "recipient_name": transfer.recipient_name,
+        "recipient_phone": str(getattr(transfer, "recipient_phone", "") or "") or None,
         "partner_name": transfer.partner_name,
         "country_destination": transfer.country_destination,
         "amount": str(getattr(transfer, "amount", "") or ""),
