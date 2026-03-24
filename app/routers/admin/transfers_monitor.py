@@ -108,8 +108,7 @@ async def list_external_transfers(
 
     if status:
         if status.lower() == "pending":
-            # si on demande pending, on renvoie tout sauf pending
-            stmt = stmt.where(Transactions.status != "pending")
+            stmt = stmt.where(Transactions.status.in_(("pending", "initiated")))
         else:
             stmt = stmt.where(Transactions.status == status)
 
