@@ -1,5 +1,6 @@
 import decimal
 import logging
+import re
 import uuid
 from datetime import datetime
 from datetime import timedelta
@@ -65,6 +66,11 @@ from app.services.fx_provider import get_open_exchange_rate_to_eur
 
 router = APIRouter(prefix="/wallet/transfer", tags=["External Transfer"])
 logger = logging.getLogger(__name__)
+EXTERNAL_TRANSFER_PHONE_RE = re.compile(r"^\+?[0-9]{8,15}$")
+
+
+def _is_valid_external_phone(value: str | None) -> bool:
+    return bool(EXTERNAL_TRANSFER_PHONE_RE.fullmatch(str(value or "").strip()))
 
 
 async def _get_destination_currency(db: AsyncSession, country: str) -> str:
@@ -529,6 +535,7 @@ async def list_external_beneficiaries(
           "country_destination": r.country_destination,
         }
         for r in rows
+        if _is_valid_external_phone(r.recipient_phone)
     ]
 
 
@@ -545,7 +552,11 @@ async def list_my_external_transfers(
         .order_by(ExternalTransfers.created_at.desc())
         .limit(safe_limit)
     )
-    return result.scalars().all()
+    return [
+        transfer
+        for transfer in result.scalars().all()
+        if _is_valid_external_phone(transfer.recipient_phone)
+    ]
 
 
 async def _external_transfer_core(

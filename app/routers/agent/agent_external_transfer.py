@@ -1,6 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 from datetime import date
+import re
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, Header, HTTPException, Query
@@ -30,6 +31,7 @@ from app.services.external_transfer_rules import (
 )
 
 router = APIRouter(prefix="/agent/external", tags=["Agent External Transfers"])
+EXTERNAL_TRANSFER_PHONE_RE = re.compile(r"^\+?[0-9]{8,15}$")
 
 
 class AgentExternalTransferCreate(BaseModel):
@@ -58,6 +60,10 @@ def _jsonify_metadata(value):
     if isinstance(value, list):
         return [_jsonify_metadata(v) for v in value]
     return value
+
+
+def _is_valid_external_phone(value: str | None) -> bool:
+    return bool(EXTERNAL_TRANSFER_PHONE_RE.fullmatch(str(value or "").strip()))
 
 
 async def _ensure_transfer_transaction(
@@ -559,4 +565,5 @@ async def list_external_beneficiaries_for_user(
             "country_destination": r.country_destination,
         }
         for r in rows
+        if _is_valid_external_phone(r.recipient_phone)
     ]
