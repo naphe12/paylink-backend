@@ -222,111 +222,117 @@ async def _notify_external_transfer(
     requires_admin: bool,
     fx_rate: decimal.Decimal,
     override_context: dict | None = None,
+    notify_agents: bool = True,
+    notify_telegram: bool = True,
+    notify_client: bool = True,
+    notify_recipient: bool = True,
 ) -> None:
-    agent_users = await _list_external_transfer_agent_users(db)
-    agent_mailer: MailjetEmailService | None = None
-    try:
-        agent_mailer = MailjetEmailService()
-    except Exception as exc:
-        logger.exception(
-            "Agent notification mailer initialization failed for external transfer %s: %s",
-            transfer.transfer_id,
-            exc,
+    if notify_agents:
+        agent_users = await _list_external_transfer_agent_users(db)
+        agent_mailer: MailjetEmailService | None = None
+        try:
+            agent_mailer = MailjetEmailService()
+        except Exception as exc:
+            logger.exception(
+                "Agent notification mailer initialization failed for external transfer %s: %s",
+                transfer.transfer_id,
+                exc,
+            )
+        explicit_agent_email = _normalize_optional_email(
+            (override_context or {}).get("notify_agent_email")
         )
-    explicit_agent_email = _normalize_optional_email(
-        (override_context or {}).get("notify_agent_email")
-    )
-    explicit_agent_name = str((override_context or {}).get("notify_agent_name") or "").strip()
-    if explicit_agent_email:
-        known_emails = {str(agent.email or "").strip().lower() for agent in agent_users if agent.email}
-        if explicit_agent_email.lower() not in known_emails:
-            agent_users.append(
-                Users(
-                    email=explicit_agent_email,
-                    full_name=explicit_agent_name or "Agent PesaPaid",
+        explicit_agent_name = str((override_context or {}).get("notify_agent_name") or "").strip()
+        if explicit_agent_email:
+            known_emails = {str(agent.email or "").strip().lower() for agent in agent_users if agent.email}
+            if explicit_agent_email.lower() not in known_emails:
+                agent_users.append(
+                    Users(
+                        email=explicit_agent_email,
+                        full_name=explicit_agent_name or "Agent PesaPaid",
+                    )
                 )
-            )
-    logger.info(
-        "External transfer notifications prepared transfer_id=%s agent_recipients=%s client_email=%s recipient_email=%s",
-        transfer.transfer_id,
-        [str(agent.email) for agent in agent_users if getattr(agent, "email", None)],
-        current_user.email,
-        data.recipient_email,
-    )
-    backend_base = str(getattr(settings, "BACKEND_URL", "") or "").strip()
-    for agent_user in agent_users:
-        if agent_mailer is None:
-            break
-        close_link = None
-        if backend_base and requires_admin:
-            close_token = create_access_token(
-                data={
-                    "sub": str(agent_user.user_id),
-                    "action": "external_transfer_close_by_agent_link",
-                    "transfer_id": str(transfer.transfer_id),
-                },
-                expires_delta=timedelta(hours=48),
-            )
-            close_link = (
-                f"{backend_base.rstrip('/')}/agent/external/{transfer.transfer_id}"
-                f"/close-by-link?token={close_token}"
-            )
-        try:
-            await run_in_threadpool(
-                agent_mailer.send_email,
-                str(agent_user.email),
-                f"Nouvelle demande de transfert #{transfer.reference_code}",
-                "external_transfer_request_agent.html",
-                client_name=current_user.full_name,
-                client_email=current_user.email,
-                client_phone=current_user.phone_e164 or "",
-                amount=amount,
-                currency=origin_currency,
-                payout_amount=f"{local_amount} {destination_currency}",
-                used_credit=f"{credit_used} {origin_currency}",
-                receiver_name=data.recipient_name,
-                receiver_phone=data.recipient_phone,
-                partner_name=data.partner_name,
-                country=data.country_destination,
-                transfer_id=transfer.reference_code,
-                dashboard_url=f"{settings.FRONTEND_URL}/dashboard/admin",
-                close_link=close_link,
-                year=datetime.utcnow().year,
-            )
-        except Exception as exc:
-            logger.exception(
-                "Agent notification email failed for external transfer %s to %s: %s",
-                transfer.transfer_id,
-                agent_user.email,
-                exc,
-            )
+        logger.info(
+            "External transfer notifications prepared transfer_id=%s agent_recipients=%s client_email=%s recipient_email=%s",
+            transfer.transfer_id,
+            [str(agent.email) for agent in agent_users if getattr(agent, "email", None)],
+            current_user.email,
+            data.recipient_email,
+        )
+        backend_base = str(getattr(settings, "BACKEND_URL", "") or "").strip()
+        for agent_user in agent_users:
+            if agent_mailer is None:
+                break
+            close_link = None
+            if backend_base and requires_admin:
+                close_token = create_access_token(
+                    data={
+                        "sub": str(agent_user.user_id),
+                        "action": "external_transfer_close_by_agent_link",
+                        "transfer_id": str(transfer.transfer_id),
+                    },
+                    expires_delta=timedelta(hours=48),
+                )
+                close_link = (
+                    f"{backend_base.rstrip('/')}/agent/external/{transfer.transfer_id}"
+                    f"/close-by-link?token={close_token}"
+                )
+            try:
+                await run_in_threadpool(
+                    agent_mailer.send_email,
+                    str(agent_user.email),
+                    f"Nouvelle demande de transfert #{transfer.reference_code}",
+                    "external_transfer_request_agent.html",
+                    client_name=current_user.full_name,
+                    client_email=current_user.email,
+                    client_phone=current_user.phone_e164 or "",
+                    amount=amount,
+                    currency=origin_currency,
+                    payout_amount=f"{local_amount} {destination_currency}",
+                    used_credit=f"{credit_used} {origin_currency}",
+                    receiver_name=data.recipient_name,
+                    receiver_phone=data.recipient_phone,
+                    partner_name=data.partner_name,
+                    country=data.country_destination,
+                    transfer_id=transfer.reference_code,
+                    dashboard_url=f"{settings.FRONTEND_URL}/dashboard/admin",
+                    close_link=close_link,
+                    year=datetime.utcnow().year,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Agent notification email failed for external transfer %s to %s: %s",
+                    transfer.transfer_id,
+                    agent_user.email,
+                    exc,
+                )
 
-    configured_chat_ids = _parse_telegram_notify_chat_ids()
-    if configured_chat_ids:
-        chat_ids = configured_chat_ids
-    else:
-        chat_ids = (await db.execute(select(TelegramUser.chat_id))).scalars().all()
-    telegram_message = (
-        "Nouveau transfert externe\n"
-        f"Client: {current_user.full_name}\n"
-        f"Montant: {amount} {origin_currency}\n"
-        f"Pays: {data.country_destination}\n"
-        f"Partenaire: {data.partner_name}\n"
-        f"Reference: {transfer.reference_code}\n"
-        f"Statut: {transfer.status}"
-    )
-    for chat_id in chat_ids:
-        try:
-            await send_telegram_message(int(chat_id), telegram_message)
-        except Exception as exc:
-            logger.exception(
-                "Telegram notification failed for transfer %s to chat_id=%s: %s",
-                transfer.transfer_id,
-                chat_id,
-                exc,
-            )
+    if notify_telegram:
+        configured_chat_ids = _parse_telegram_notify_chat_ids()
+        if configured_chat_ids:
+            chat_ids = configured_chat_ids
+        else:
+            chat_ids = (await db.execute(select(TelegramUser.chat_id))).scalars().all()
+        telegram_message = (
+            "Nouveau transfert externe\n"
+            f"Client: {current_user.full_name}\n"
+            f"Montant: {amount} {origin_currency}\n"
+            f"Pays: {data.country_destination}\n"
+            f"Partenaire: {data.partner_name}\n"
+            f"Reference: {transfer.reference_code}\n"
+            f"Statut: {transfer.status}"
+        )
+        for chat_id in chat_ids:
+            try:
+                await send_telegram_message(int(chat_id), telegram_message)
+            except Exception as exc:
+                logger.exception(
+                    "Telegram notification failed for transfer %s to chat_id=%s: %s",
+                    transfer.transfer_id,
+                    chat_id,
+                    exc,
+                )
 
-    if current_user.email:
+    if notify_client and current_user.email:
         try:
             await send_transaction_emails(
                 db,
@@ -353,7 +359,7 @@ async def _notify_external_transfer(
                 exc,
             )
 
-    if current_user.email:
+    if notify_client and current_user.email:
         receipt_payload = {
             "reference_code": transfer.reference_code,
             "sender_name": current_user.full_name or "",
@@ -401,7 +407,7 @@ async def _notify_external_transfer(
                 exc,
             )
 
-    if data.recipient_email:
+    if notify_recipient and data.recipient_email:
         try:
             await send_transaction_emails(
                 db,
@@ -441,6 +447,10 @@ async def _notify_external_transfer_task(
     requires_admin: bool,
     fx_rate: str,
     override_context: dict | None = None,
+    notify_agents: bool = True,
+    notify_telegram: bool = True,
+    notify_client: bool = True,
+    notify_recipient: bool = True,
 ) -> None:
     try:
         async with async_session_maker() as db:
@@ -471,6 +481,10 @@ async def _notify_external_transfer_task(
                 requires_admin=requires_admin,
                 fx_rate=decimal.Decimal(fx_rate),
                 override_context=override_context,
+                notify_agents=notify_agents,
+                notify_telegram=notify_telegram,
+                notify_client=notify_client,
+                notify_recipient=notify_recipient,
             )
     except Exception as exc:
         logger.exception(
@@ -600,8 +614,9 @@ async def _external_transfer_core(
         credit_available = max(credit_limit - credit_used_total, decimal.Decimal(0))
     credit_available_before = credit_available
     origin_currency = wallet.currency_code or "EUR"
+    is_bif_client = str(origin_currency or "").upper() == "BIF"
     destination_currency = await _get_destination_currency(db, data.country_destination)
-    if str(origin_currency or "").upper() == "BIF" and str(destination_currency or "").upper() == "BIF":
+    if is_bif_client and str(destination_currency or "").upper() == "BIF":
         fee_rate = decimal.Decimal("6.25")
     else:
         settings_row = await db.scalar(
@@ -614,8 +629,9 @@ async def _external_transfer_core(
 
     total_required = amount + fee_amount
     total_available = wallet_balance + credit_available
-    insufficient_funds_review_required = total_required > total_available and not override_balance_check
-    shortfall_amount = max(decimal.Decimal("0"), total_required - total_available)
+    approval_available = credit_available if is_bif_client else (wallet_balance + credit_available)
+    insufficient_funds_review_required = total_required > approval_available and not override_balance_check
+    shortfall_amount = max(decimal.Decimal("0"), total_required - approval_available)
     force_negative_wallet = override_balance_check and total_required > total_available
 
     used_daily = decimal.Decimal(user_locked.used_daily or 0)
@@ -675,8 +691,7 @@ async def _external_transfer_core(
         review_reasons.append("aml")
 
     requires_admin = (
-        credit_used > decimal.Decimal(0)
-        or aml_manual_review_required
+        aml_manual_review_required
         or insufficient_funds_review_required
     )
     requested_status = str(final_status_override or "").strip().lower()
@@ -762,6 +777,7 @@ async def _external_transfer_core(
         "user_id": str(current_user.user_id),
         "transfer_id": str(transfer.transfer_id),
         "credit_used_amount": str(credit_used),
+        "credit_available_after": str(credit_available_after),
         "debited_amount": str(debited),
         "transaction_id": str(txn.tx_id),
         "fee_rate": str(fee_rate),
@@ -781,6 +797,7 @@ async def _external_transfer_core(
         "funding_pending": bool(insufficient_funds_review_required),
         "required_credit_topup": str(shortfall_amount) if insufficient_funds_review_required else None,
         "total_required": str(total_required),
+        "recipient_email": data.recipient_email,
     }
     if override_context and isinstance(override_context, dict):
         metadata["override_context"] = {
@@ -900,6 +917,10 @@ async def _external_transfer_core(
         "requires_admin": requires_admin,
         "fx_rate": str(fx_rate),
         "override_context": override_context,
+        "notify_agents": transfer_status == "approved",
+        "notify_telegram": transfer_status == "approved",
+        "notify_client": True,
+        "notify_recipient": transfer_status == "approved",
     }
     background_tasks.add_task(_notify_external_transfer_task, **notification_kwargs)
     return payload_out if scoped_idempotency_key else transfer
@@ -1175,6 +1196,7 @@ async def _fund_pending_external_transfer_for_approval(
 @router.post("/transfer/external/{transfer_id}/approve")
 async def approve_external_transfer(
     transfer_id: str,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user),
 ):
@@ -1201,6 +1223,53 @@ async def approve_external_transfer(
         txn.updated_at = datetime.utcnow()
 
     await db.commit()
+
+    initiator = await db.scalar(select(Users).where(Users.user_id == transfer.user_id))
+    if initiator:
+        transfer_payload = {
+            "partner_name": transfer.partner_name,
+            "country_destination": transfer.country_destination,
+            "recipient_name": transfer.recipient_name,
+            "recipient_phone": transfer.recipient_phone,
+            "recipient_email": (transfer.metadata_ or {}).get("recipient_email"),
+            "amount": str(transfer.amount),
+        }
+        transfer_metadata = transfer.metadata_ or {}
+        requires_admin_notification = bool(
+            transfer.credit_used
+            or transfer_metadata.get("aml_manual_review_required")
+            or transfer_metadata.get("funding_pending")
+        )
+        background_tasks.add_task(
+            _notify_external_transfer_task,
+            current_user_id=str(initiator.user_id),
+            transfer_id=str(transfer.transfer_id),
+            data_payload=transfer_payload,
+            amount=str(transfer.amount),
+            origin_currency=str(
+                transfer_metadata.get("origin_currency")
+                or getattr(txn, "currency_code", None)
+                or "EUR"
+            ),
+            destination_currency=str(
+                transfer_metadata.get("destination_currency")
+                or transfer.currency
+                or "EUR"
+            ),
+            local_amount=str(transfer.local_amount or transfer.amount),
+            credit_used=str(
+                transfer_metadata.get("credit_used_amount")
+                or (transfer.amount if transfer.credit_used else "0")
+            ),
+            credit_available_after=str(transfer_metadata.get("credit_available_after") or "0"),
+            requires_admin=requires_admin_notification,
+            fx_rate=str(transfer.rate or transfer_metadata.get("fx_rate") or "1"),
+            override_context=transfer_metadata.get("override_context"),
+            notify_agents=True,
+            notify_telegram=True,
+            notify_client=False,
+            notify_recipient=True,
+        )
     return {"message": "Transfert valide"}
 
 

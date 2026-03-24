@@ -14,10 +14,7 @@ PARTNER_PATTERN = re.compile(
     r"\b(?:via|par|sur)\s+(lumicash|ecocash|enoti|mtn(?: mobile money)?)\b",
     re.IGNORECASE,
 )
-RECIPIENT_PATTERN = re.compile(
-    r"\b(?:a|à|to)\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' -]{1,60}?)(?=\s+(?:via|par|sur|au|en|vers)\b|$)",
-    re.IGNORECASE,
-)
+RECIPIENT_START_PATTERN = re.compile(r"\b(?:a|à|to|pour)\b", re.IGNORECASE)
 COUNTRY_PATTERN = re.compile(
     r"\b(?:au|en|vers)\s+(burundi|rwanda|congo|rdc|kenya|ouganda|uganda|tanzanie)\b",
     re.IGNORECASE,
@@ -57,6 +54,30 @@ COUNTRY_ALIASES = {
     "tanzanie": "Tanzanie",
 }
 
+RECIPIENT_STOP_WORDS = {
+    "via",
+    "par",
+    "sur",
+    "au",
+    "en",
+    "vers",
+    "avec",
+    "pour",
+}
+
+RECIPIENT_ALLOWED_PARTICLES = {
+    "de",
+    "du",
+    "des",
+    "la",
+    "le",
+    "van",
+    "von",
+    "bin",
+    "ibn",
+    "di",
+}
+
 
 def normalize_text(value: str | None) -> str:
     raw = str(value or "").strip().lower()
@@ -79,11 +100,53 @@ def _parse_amount_and_currency(message: str) -> tuple[Decimal | None, str | None
     return None, None
 
 
+def _clean_recipient_value(value: str | None) -> str | None:
+    raw = str(value or "").strip(" ,.;:-")
+    raw = re.sub(r"\s+", " ", raw).strip()
+    return raw or None
+
+
+def _extract_recipient_name(message: str) -> str | None:
+    start_match = RECIPIENT_START_PATTERN.search(message)
+    if not start_match:
+        return None
+
+    tail = message[start_match.end():].strip()
+    if not tail:
+        return None
+
+    tokens = re.split(r"\s+", tail)
+    captured: list[str] = []
+    for token in tokens:
+        cleaned = token.strip(" ,.;:-")
+        if not cleaned:
+            continue
+        normalized = normalize_text(cleaned)
+        if normalized in RECIPIENT_STOP_WORDS and captured:
+            break
+        if normalized in RECIPIENT_STOP_WORDS and not captured:
+            continue
+        if PHONE_PATTERN.fullmatch(cleaned):
+            break
+        if re.fullmatch(r"\d+(?:[.,]\d+)?", cleaned):
+            break
+
+        starts_like_name = bool(re.match(r"^[A-Za-zÀ-ÿ]", cleaned))
+        allowed_particle = normalized in RECIPIENT_ALLOWED_PARTICLES
+        if not starts_like_name and not allowed_particle:
+            break
+
+        captured.append(cleaned)
+        if len(" ".join(captured)) >= 80:
+            break
+
+    return _clean_recipient_value(" ".join(captured))
+
+
 def parse_chat_message(message: str) -> TransferDraft:
     text = str(message or "").strip()
     amount, currency = _parse_amount_and_currency(text)
 
-    recipient_match = RECIPIENT_PATTERN.search(text)
     partner_match = PARTNER_PATTERN.search(text)
     phone_match = PHONE_PATTERN.search(text)
     country_match = COUNTRY_PATTERN.search(text)
@@ -94,7 +157,7 @@ def parse_chat_message(message: str) -> TransferDraft:
     return TransferDraft(
         amount=amount,
         currency=currency,
-        recipient=str(recipient_match.group(1) or "").strip() if recipient_match else None,
+        recipient=_extract_recipient_name(text),
         recipient_phone=phone_match.group(1) if phone_match else None,
         partner_name=PARTNER_ALIASES.get(partner_raw) if partner_raw else None,
         country_destination=COUNTRY_ALIASES.get(country_raw) if country_raw else None,
