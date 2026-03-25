@@ -594,7 +594,7 @@ async def _sanitize_request_body(request: Request) -> str | None:
     return _truncate(raw_text, 4000)
 
 
-def _extract_user_id_from_request(request: Request) -> str | None:
+def _extract_user_id_from_request(request: Request | WebSocket) -> str | None:
     auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
     if not auth_header or not auth_header.lower().startswith("bearer "):
         return None
@@ -612,7 +612,7 @@ def _extract_user_id_from_request(request: Request) -> str | None:
 
 
 async def persist_app_error(
-    request: Request,
+    request: Request | WebSocket,
     exc: Exception,
     *,
     status_code: int,
@@ -622,6 +622,9 @@ async def persist_app_error(
 ) -> None:
     request_id = _get_request_id(request)
     user_id = _extract_user_id_from_request(request)
+    is_websocket = isinstance(request, WebSocket)
+    request_method = "WEBSOCKET" if is_websocket else _truncate(getattr(request, "method", None), 16) or "GET"
+    request_body = None if is_websocket else await _sanitize_request_body(request)
     payload = {
         "error_id": str(uuid.uuid4()),
         "request_id": request_id,
@@ -629,14 +632,14 @@ async def persist_app_error(
         "error_type": _truncate(error_type or exc.__class__.__name__, 255) or "Exception",
         "message": _truncate(str(exc), 4000) or "Internal Server Error",
         "request_path": _truncate(request.url.path, 500) or "",
-        "request_method": _truncate(request.method, 16) or "GET",
+        "request_method": request_method,
         "user_id": user_id,
         "client_ip": _truncate(request.client.host if request.client else None, 128),
         "handled": handled,
         "stack_trace": _truncate(stack_trace, 12000),
         "headers": json.dumps(_sanitize_headers(request), ensure_ascii=False),
         "query_params": json.dumps(_sanitize_query_params(request), ensure_ascii=False),
-        "request_body": await _sanitize_request_body(request),
+        "request_body": request_body,
     }
 
     try:
