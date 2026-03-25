@@ -266,7 +266,14 @@ async def list_balance_events(
     )
     wallet_stmt = (
         select(
-            WalletTransactions,
+            WalletTransactions.transaction_id,
+            WalletTransactions.user_id,
+            WalletTransactions.amount,
+            WalletTransactions.balance_after,
+            WalletTransactions.currency_code,
+            WalletTransactions.operation_type,
+            WalletTransactions.created_at,
+            cast(WalletTransactions.direction, String).label("direction"),
             Users.full_name,
             Users.email,
             Users.phone_e164,
@@ -308,26 +315,42 @@ async def list_balance_events(
         }
         for ev, full_name, email, phone in legacy_rows
     ]
-    for tx, full_name, email, phone in wallet_rows:
-        raw_amount = float(tx.amount or 0)
-        direction = str(getattr(tx, "direction", "") or "").lower()
+    for (
+        transaction_id,
+        wallet_user_id,
+        amount,
+        balance_after_raw,
+        currency_code,
+        operation_type,
+        created_at,
+        direction_raw,
+        full_name,
+        email,
+        phone,
+    ) in wallet_rows:
+        raw_amount = float(amount or 0)
+        direction = str(direction_raw or "").lower()
+        if direction == "in":
+            direction = "credit"
+        elif direction == "out":
+            direction = "debit"
         signed_delta = raw_amount if direction == "credit" else -raw_amount
-        balance_after = float(tx.balance_after) if tx.balance_after is not None else None
+        balance_after = float(balance_after_raw) if balance_after_raw is not None else None
         balance_before = balance_after - signed_delta if balance_after is not None else None
         merged.append(
             {
-                "event_id": f"wallet-{tx.transaction_id}",
-                "user_id": str(tx.user_id) if tx.user_id else None,
+                "event_id": f"wallet-{transaction_id}",
+                "user_id": str(wallet_user_id) if wallet_user_id else None,
                 "full_name": full_name,
                 "email": email,
                 "phone": phone,
                 "balance_before": balance_before,
                 "amount_delta": signed_delta,
                 "balance_after": balance_after,
-                "currency": tx.currency_code,
-                "source": tx.operation_type or "wallet_transaction",
-                "occurred_at": tx.created_at,
-                "created_at": tx.created_at,
+                "currency": currency_code,
+                "source": operation_type or "wallet_transaction",
+                "occurred_at": created_at,
+                "created_at": created_at,
             }
         )
     merged.sort(
@@ -359,7 +382,14 @@ async def list_user_balance_events(
     )
     wallet_stmt = (
         select(
-            WalletTransactions,
+            WalletTransactions.transaction_id,
+            WalletTransactions.user_id,
+            WalletTransactions.amount,
+            WalletTransactions.balance_after,
+            WalletTransactions.currency_code,
+            WalletTransactions.operation_type,
+            WalletTransactions.created_at,
+            cast(WalletTransactions.direction, String).label("direction"),
             Users.full_name,
             Users.email,
         )
@@ -386,25 +416,40 @@ async def list_user_balance_events(
         }
         for ev, full_name, email in legacy_rows
     ]
-    for tx, full_name, email in wallet_rows:
-        raw_amount = float(tx.amount or 0)
-        direction = str(getattr(tx, "direction", "") or "").lower()
+    for (
+        transaction_id,
+        wallet_user_id,
+        amount,
+        balance_after_raw,
+        currency_code,
+        operation_type,
+        created_at,
+        direction_raw,
+        full_name,
+        email,
+    ) in wallet_rows:
+        raw_amount = float(amount or 0)
+        direction = str(direction_raw or "").lower()
+        if direction == "in":
+            direction = "credit"
+        elif direction == "out":
+            direction = "debit"
         signed_delta = raw_amount if direction == "credit" else -raw_amount
-        balance_after = float(tx.balance_after) if tx.balance_after is not None else None
+        balance_after = float(balance_after_raw) if balance_after_raw is not None else None
         balance_before = balance_after - signed_delta if balance_after is not None else None
         merged.append(
             {
-                "event_id": f"wallet-{tx.transaction_id}",
-                "user_id": str(tx.user_id) if tx.user_id else None,
+                "event_id": f"wallet-{transaction_id}",
+                "user_id": str(wallet_user_id) if wallet_user_id else None,
                 "full_name": full_name,
                 "email": email,
                 "balance_before": balance_before,
                 "amount_delta": signed_delta,
                 "balance_after": balance_after,
-                "currency": tx.currency_code,
-                "source": tx.operation_type or "wallet_transaction",
-                "occurred_at": tx.created_at,
-                "created_at": tx.created_at,
+                "currency": currency_code,
+                "source": operation_type or "wallet_transaction",
+                "occurred_at": created_at,
+                "created_at": created_at,
             }
         )
     merged.sort(
