@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from datetime import timedelta
 from typing import Any
 
@@ -21,6 +22,7 @@ from app.services.telegram import send_message as send_telegram_message
 
 
 LINK_TOKEN_ACTION = "telegram_external_transfer_link"
+logger = logging.getLogger(__name__)
 
 
 async def ensure_telegram_external_transfer_schema(db: AsyncSession) -> None:
@@ -377,6 +379,7 @@ async def process_telegram_update(db: AsyncSession, update: dict[str, Any]) -> d
     message_text = str(message.get("text") or "").strip()
     if not chat_id or not message_text:
         return {"ok": True, "ignored": True}
+    logger.info("Telegram external transfer update chat_id=%s text=%s", chat_id, message_text)
     try:
         reply = await handle_telegram_external_transfer_message(
             db,
@@ -384,8 +387,20 @@ async def process_telegram_update(db: AsyncSession, update: dict[str, Any]) -> d
             message_text=message_text,
         )
     except HTTPException as exc:
+        logger.warning(
+            "Telegram external transfer business error chat_id=%s status=%s detail=%s",
+            chat_id,
+            exc.status_code,
+            exc.detail,
+        )
         reply = str(exc.detail or "Impossible de traiter cette demande Telegram.")
-    except Exception:
+    except Exception as exc:
+        logger.exception(
+            "Telegram external transfer unexpected error chat_id=%s text=%s error=%s",
+            chat_id,
+            message_text,
+            exc,
+        )
         reply = "Impossible de traiter cette demande Telegram pour le moment."
     await send_telegram_message(int(chat_id), reply)
     return {"ok": True, "chat_id": chat_id}
