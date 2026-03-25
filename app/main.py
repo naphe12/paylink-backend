@@ -94,11 +94,13 @@ from app.routers.tontines.tontines import router as tontine_router
 from app.routers.wallet import payments as wallet_payments
 from app.routers.wallet import transactions, wallet
 from app.routers.wallet.crypto_wallet import router as crypto_wallet_router
+from app.routers.telegram_external_transfer import router as telegram_external_transfer_router
 from app.routers.wallet.usdc_wallet import router as usdc_wallet_router
 from app.routers.wallet.transfer import router as transfer_router
 from app.routers.ws import router as ws_router
 from app.services.backoffice_risk import router as backoffice_risk_router
 from app.services.idempotency_service import ensure_idempotency_schema
+from app.services.telegram_external_transfer_service import ensure_telegram_external_transfer_schema
 from app.services.auth_sessions import ensure_auth_refresh_schema
 from app.services.sandbox_transition_worker import run_sandbox_auto_transitions
 from app.services.p2p_expiration_worker import run_p2p_expiration_worker
@@ -483,6 +485,7 @@ app.include_router(agent_onboarding_chat_router)
 app.include_router(agent_escrow_chat_router)
 app.include_router(agent_p2p_chat_router)
 app.include_router(agent_router_extern)
+app.include_router(telegram_external_transfer_router)
 app.include_router(debug.router)
 app.include_router(meta_router)
 app.include_router(test_email.router)
@@ -839,6 +842,7 @@ async def startup_event():
         await ensure_auth_refresh_schema(db)
         await ensure_idempotency_schema(db)
         await ensure_request_metrics_schema(db)
+        await ensure_telegram_external_transfer_schema(db)
         await db.commit()
         break
 

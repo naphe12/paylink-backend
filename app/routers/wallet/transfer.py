@@ -185,6 +185,10 @@ def _parse_telegram_notify_chat_ids() -> list[int]:
     return chat_ids
 
 
+def _is_truthy_flag(value) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 async def _list_external_transfer_agent_users(db: AsyncSession) -> list[Users]:
     rows = await db.execute(
         select(Agents, Users)
@@ -343,12 +347,17 @@ async def _notify_external_transfer(
             chat_ids = configured_chat_ids
         else:
             chat_ids = (await db.execute(select(TelegramUser.chat_id))).scalars().all()
+        context = dict(override_context or {})
+        source_label = str(context.get("source") or "").strip()
+        via_assistant = source_label == "agent_chat_web"
         telegram_message = (
-            "Nouveau transfert externe\n"
+            f"{'Nouvelle demande assistant transfert' if via_assistant else 'Nouveau transfert externe'}\n"
             f"Client: {current_user.full_name}\n"
             f"Montant: {amount} {origin_currency}\n"
             f"Pays: {data.country_destination}\n"
             f"Partenaire: {data.partner_name}\n"
+            f"Beneficiaire: {data.recipient_name}\n"
+            f"Telephone: {data.recipient_phone}\n"
             f"Reference: {transfer.reference_code}\n"
             f"Statut: {transfer.status}"
         )
@@ -990,7 +999,8 @@ async def _external_transfer_core(
         "fx_rate": str(fx_rate),
         "override_context": override_context,
         "notify_agents": transfer_status == "approved",
-        "notify_telegram": transfer_status == "approved",
+        "notify_telegram": transfer_status == "approved"
+        or _is_truthy_flag((override_context or {}).get("notify_telegram_on_create")),
         "notify_client": True,
         "notify_recipient": transfer_status == "approved",
     }

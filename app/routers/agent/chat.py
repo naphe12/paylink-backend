@@ -93,6 +93,10 @@ async def confirm_agent_chat(
         idempotency_key=idempotency_key,
         db=db,
         current_user=current_user,
+        override_context={
+            "source": "agent_chat_web",
+            "notify_telegram_on_create": "true",
+        },
     )
 
     transfer_id = getattr(transfer, "transfer_id", None)
@@ -125,6 +129,7 @@ async def confirm_agent_chat(
     )
     return {
         "status": "DONE",
-        "message": "Demande creee avec succes.",
+        "message": "Demande creee avec succes. Une notification Telegram a aussi ete preparee pour suivi.",
         "transfer": transfer_payload,
+        "notification_channels": ["telegram"],
     }
