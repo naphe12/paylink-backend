@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.models.agents import Agents
+from app.models.users import Users
 from app.services.mailjet_service import MailjetEmailService
 
 router = APIRouter(tags=["Debug"])
@@ -45,21 +46,58 @@ async def debug_agent_emails(
         Agents.user_id,
         Agents.display_name,
         Agents.email,
+        Users.email,
         Agents.active,
+    ).outerjoin(Users, Users.user_id == Agents.user_id).where(
+        or_(
+            Agents.email.is_not(None),
+            Users.email.is_not(None),
+        )
     ).order_by(Agents.display_name.asc())
     if active_only:
         stmt = stmt.where(Agents.active.is_(True))
     rows = (await db.execute(stmt)).all()
-    return [
-        {
-            "agent_id": str(agent_id),
-            "user_id": str(user_id) if user_id else None,
-            "display_name": display_name,
-            "email": email,
-            "active": bool(active),
-        }
-        for agent_id, user_id, display_name, email, active in rows
-    ]
+    seen = set()
+    payload = []
+    for agent_id, user_id, display_name, agent_email, user_email, active in rows:
+        normalized_agent = str(agent_email or "").strip().lower()
+        normalized_user = str(user_email or "").strip().lower()
+        normalized = normalized_agent or normalized_user
+        duplicate_of = normalized if normalized and normalized in seen else None
+        if normalized:
+            seen.add(normalized)
+        payload.append(
+            {
+                "agent_id": str(agent_id),
+                "user_id": str(user_id) if user_id else None,
+                "display_name": display_name,
+                "agent_email": agent_email,
+                "user_email": user_email,
+                "email_used": normalized or None,
+                "email_source": (
+                    "agents.email"
+                    if normalized_agent
+                    else "users.email"
+                    if normalized_user
+                    else None
+                ),
+                "normalized_email": normalized or None,
+                "active": bool(active),
+                "would_receive_notification": bool(active) and bool(normalized) and duplicate_of is None,
+                "excluded_reason": (
+                    None
+                    if (bool(active) and bool(normalized) and duplicate_of is None)
+                    else (
+                        "duplicate_email"
+                        if duplicate_of is not None
+                        else "missing_email"
+                        if not normalized
+                        else "inactive"
+                    )
+                ),
+            }
+        )
+    return payload
 
 
 @router.post("/debug/agents/send-email")
@@ -72,7 +110,13 @@ async def debug_send_email_to_agents(
     stmt = select(
         Agents.display_name,
         Agents.email,
+        Users.email,
         Agents.active,
+    ).outerjoin(Users, Users.user_id == Agents.user_id).where(
+        or_(
+            Agents.email.is_not(None),
+            Users.email.is_not(None),
+        )
     ).order_by(Agents.display_name.asc())
     if active_only:
         stmt = stmt.where(Agents.active.is_(True))
@@ -80,15 +124,47 @@ async def debug_send_email_to_agents(
 
     recipients = []
     seen = set()
-    for display_name, email, active in rows:
-        normalized = str(email or "").strip().lower()
-        if not normalized or normalized in seen:
+    skipped = []
+    for display_name, agent_email, user_email, active in rows:
+        normalized_agent = str(agent_email or "").strip().lower()
+        normalized_user = str(user_email or "").strip().lower()
+        normalized = normalized_agent or normalized_user
+        source = (
+            "agents.email"
+            if normalized_agent
+            else "users.email"
+            if normalized_user
+            else None
+        )
+        if not normalized:
+            skipped.append(
+                {
+                    "display_name": display_name,
+                    "agent_email": agent_email,
+                    "user_email": user_email,
+                    "active": bool(active),
+                    "reason": "missing_email",
+                }
+            )
+            continue
+        if normalized in seen:
+            skipped.append(
+                {
+                    "display_name": display_name,
+                    "email": normalized,
+                    "agent_email": agent_email,
+                    "user_email": user_email,
+                    "active": bool(active),
+                    "reason": "duplicate_email",
+                }
+            )
             continue
         seen.add(normalized)
         recipients.append(
             {
                 "display_name": display_name,
                 "email": normalized,
+                "source": source,
                 "active": bool(active),
             }
         )
@@ -125,6 +201,7 @@ async def debug_send_email_to_agents(
         return {
             "provider": mailer.provider,
             "count": len(results),
+            "skipped": skipped,
             "results": results,
         }
     except Exception as exc:

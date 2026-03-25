@@ -200,8 +200,23 @@ async def _list_external_transfer_agent_users(db: AsyncSession) -> list[Users]:
     agents: list[Users] = []
     seen_emails: set[str] = set()
     for agent_row, user_row in rows.all():
-        email = str(agent_row.email or "").strip().lower()
-        if not email or email in seen_emails:
+        agent_email = str(getattr(agent_row, "email", "") or "").strip().lower()
+        user_email = str(getattr(user_row, "email", "") or "").strip().lower()
+        email = agent_email or user_email
+        if not email:
+            logger.info(
+                "External transfer agent recipient skipped user_id=%s display_name=%s reason=missing_email",
+                agent_row.user_id,
+                agent_row.display_name,
+            )
+            continue
+        if email in seen_emails:
+            logger.info(
+                "External transfer agent recipient skipped user_id=%s display_name=%s email=%s reason=duplicate_email",
+                agent_row.user_id,
+                agent_row.display_name,
+                email,
+            )
             continue
         seen_emails.add(email)
         agents.append(
@@ -215,6 +230,11 @@ async def _list_external_transfer_agent_users(db: AsyncSession) -> list[Users]:
                 ),
             )
         )
+    logger.info(
+        "External transfer agent recipients resolved count=%s emails=%s",
+        len(agents),
+        [str(agent.email) for agent in agents if getattr(agent, "email", None)],
+    )
     return agents
 
 
@@ -242,7 +262,7 @@ async def _notify_external_transfer(
         agent_users = await _list_external_transfer_agent_users(db)
         agent_mailer: MailjetEmailService | None = None
         try:
-            agent_mailer = MailjetEmailService()
+            agent_mailer = MailjetEmailService(preferred_provider="brevo")
         except Exception as exc:
             logger.exception(
                 "Agent notification mailer initialization failed for external transfer %s: %s",

@@ -20,20 +20,22 @@ class MailjetEmailService:
         self.brevo_api_key = (settings.BREVO_API_KEY or "").strip()
         self.mailjet_api_key = (settings.MAILJET_API_KEY or "").strip()
         self.mailjet_secret_key = (settings.MAILJET_SECRET_KEY or "").strip()
-        preferred = str(preferred_provider or "").strip().lower()
+        configured_default = str(getattr(settings, "MAIL_PROVIDER", "") or "").strip().lower()
+        preferred = str(preferred_provider or configured_default or "").strip().lower()
 
-        if preferred == "mailjet":
-            if not (self.mailjet_api_key and self.mailjet_secret_key):
-                raise ValueError("MAILJET_API_KEY and MAILJET_SECRET_KEY are required for preferred_provider=mailjet.")
-            self.provider = "mailjet"
-        elif preferred == "brevo":
-            if not self.brevo_api_key:
-                raise ValueError("BREVO_API_KEY is required for preferred_provider=brevo.")
+        if preferred in {"mailjet", "brevo"}:
+            if preferred == "mailjet":
+                if not (self.mailjet_api_key and self.mailjet_secret_key):
+                    raise ValueError("MAILJET_API_KEY and MAILJET_SECRET_KEY are required for preferred_provider=mailjet.")
+                self.provider = "mailjet"
+            else:
+                if not self.brevo_api_key:
+                    raise ValueError("BREVO_API_KEY is required for preferred_provider=brevo.")
+                self.provider = "brevo"
+        elif self.brevo_api_key:
             self.provider = "brevo"
         elif self.mailjet_api_key and self.mailjet_secret_key:
             self.provider = "mailjet"
-        elif self.brevo_api_key:
-            self.provider = "brevo"
         else:
             raise ValueError("Configure Mailjet or Brevo credentials.")
 
