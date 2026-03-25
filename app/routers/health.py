@@ -20,6 +20,16 @@ router = APIRouter(tags=["Health"])
 async def health():
     return {"ok": True}
 
+@router.get("/version")
+async def version():
+    return {
+        "ok": True,
+        "env": settings.APP_ENV,
+        "version": settings.APP_VERSION,
+        "commit_sha": settings.APP_COMMIT_SHA,
+        "build_time": settings.APP_BUILD_TIME,
+    }
+
 @router.get("/health/db")
 async def health_db(db: AsyncSession = Depends(get_db)):
     await db.execute(text("SELECT 1"))

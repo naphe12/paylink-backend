@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     # ENVIRONNEMENT
     # -------------------------------------------------
     APP_ENV: str = Field(default="prod")  # dev|staging|prod
+    APP_VERSION: str = Field(default="dev")
+    APP_COMMIT_SHA: str | None = Field(default=None)
+    APP_BUILD_TIME: str | None = Field(default=None)
 
     # -------------------------------------------------
     # SANDBOX

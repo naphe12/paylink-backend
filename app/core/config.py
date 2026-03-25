@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     AUTH_REFRESH_COOKIE_PATH: str = os.getenv("AUTH_REFRESH_COOKIE_PATH", "/auth")
     AUTH_CSRF_HEADER_NAME: str = os.getenv("AUTH_CSRF_HEADER_NAME", "X-CSRF-Token")
     APP_ENV: str = os.getenv("APP_ENV", "dev")
+    APP_VERSION: str = os.getenv("APP_VERSION", "dev")
+    APP_COMMIT_SHA: str = os.getenv("APP_COMMIT_SHA", "")
+    APP_BUILD_TIME: str = os.getenv("APP_BUILD_TIME", "")
 
     # Config email
     MAIL_FROM: str = "no-reply@pesapaid.com"
