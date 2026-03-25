@@ -347,6 +347,7 @@ async def idempotency_cleanup_worker():
 
 
 async def ensure_request_metrics_schema(db) -> None:
+    await db.execute(text("CREATE SCHEMA IF NOT EXISTS paylink"))
     await db.execute(
         text(
             """
@@ -386,6 +387,12 @@ async def ensure_request_metrics_schema(db) -> None:
             """
         )
     )
+
+
+async def ensure_core_schemas(db) -> None:
+    await db.execute(text("CREATE SCHEMA IF NOT EXISTS paylink"))
+    await db.execute(text("CREATE SCHEMA IF NOT EXISTS escrow"))
+    await db.execute(text("CREATE SCHEMA IF NOT EXISTS p2p"))
 
 
 default_origins = {
@@ -842,6 +849,7 @@ async def ws_admin(
 @app.on_event("startup")
 async def startup_event():
     async for db in get_db():
+        await ensure_core_schemas(db)
         await ensure_auth_refresh_schema(db)
         await ensure_idempotency_schema(db)
         await ensure_request_metrics_schema(db)

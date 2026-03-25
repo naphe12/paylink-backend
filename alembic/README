@@ -1,0 +1,6 @@
+Single-database Alembic environment for Paylink backend.
+
+Current strategy:
+- existing schema is considered baseline
+- future schema changes must be added through migrations
+- runtime `CREATE TABLE IF NOT EXISTS` helpers should be moved here progressively
