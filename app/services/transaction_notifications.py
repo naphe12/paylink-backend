@@ -42,7 +42,7 @@ async def send_transaction_emails(
         logger.warning("No transaction email recipients resolved for subject=%s", subject)
         return
 
-    mailer = MailjetEmailService(preferred_provider="brevo")
+    mailer = MailjetEmailService()
     logger.info("Sending transaction emails provider=%s subject=%s recipients=%s", mailer.provider, subject, target_emails)
     for email in target_emails:
         print(f"[{mailer.provider}] sending transaction email to={email}")

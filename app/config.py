@@ -102,7 +102,8 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str | None = None
     # Compatibility alias for legacy mail helper expecting SMTP_PASS.
     SMTP_PASS: str | None = None
-    MAIL_PROVIDER: str = "brevo"
+    MAIL_PROVIDER: str = "resend"
+    RESEND_API_KEY: str | None = None
     BREVO_API_KEY: str | None = None
     MAILJET_API_KEY: str | None = None
     MAILJET_SECRET_KEY: str | None = None

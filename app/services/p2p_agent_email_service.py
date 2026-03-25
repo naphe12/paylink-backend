@@ -59,8 +59,7 @@ async def notify_agent_fiat_confirmation_needed(db: AsyncSession, trade) -> None
     )
 
     try:
-        # Force Mailjet for this flow (do not use Brevo here).
-        mailer = MailjetEmailService(preferred_provider="mailjet")
+        mailer = MailjetEmailService()
         send_fn = partial(
             mailer.send_email,
             seller_email,

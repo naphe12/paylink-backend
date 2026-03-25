@@ -2,12 +2,30 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.models.agents import Agents
 from app.models.users import Users
 from app.services.mailjet_service import MailjetEmailService
 
 router = APIRouter(tags=["Debug"])
+
+
+@router.get("/debug/email/config")
+def debug_email_config():
+    return {
+        "mail_provider": getattr(settings, "MAIL_PROVIDER", None),
+        "mail_from": getattr(settings, "MAIL_FROM", None),
+        "mail_from_name": getattr(settings, "MAIL_FROM_NAME", None),
+        "has_resend_api_key": bool(str(getattr(settings, "RESEND_API_KEY", "") or "").strip()),
+        "has_brevo_api_key": bool(str(getattr(settings, "BREVO_API_KEY", "") or "").strip()),
+        "has_mailjet_api_key": bool(str(getattr(settings, "MAILJET_API_KEY", "") or "").strip()),
+        "has_mailjet_secret_key": bool(str(getattr(settings, "MAILJET_SECRET_KEY", "") or "").strip()),
+        "smtp_host": getattr(settings, "SMTP_HOST", None),
+        "smtp_port": getattr(settings, "SMTP_PORT", None),
+        "has_smtp_user": bool(str(getattr(settings, "SMTP_USER", "") or "").strip()),
+        "has_smtp_pass": bool(str(getattr(settings, "SMTP_PASS", "") or "").strip()),
+    }
 
 
 @router.get("/send-email")

@@ -262,7 +262,7 @@ async def _notify_external_transfer(
         agent_users = await _list_external_transfer_agent_users(db)
         agent_mailer: MailjetEmailService | None = None
         try:
-            agent_mailer = MailjetEmailService(preferred_provider="brevo")
+            agent_mailer = MailjetEmailService()
         except Exception as exc:
             logger.exception(
                 "Agent notification mailer initialization failed for external transfer %s: %s",
