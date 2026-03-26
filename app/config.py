@@ -1,10 +1,16 @@
 from functools import lru_cache
 
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        extra="ignore",
+    )
+
     # -------------------------------------------------
     # JWT (compatibility for existing auth dependencies)
     # -------------------------------------------------
@@ -119,11 +125,6 @@ class Settings(BaseSettings):
     TWILIO_TOKEN: str | None = None
     TWILIO_WHATSAPP_NUMBER: str | None = None
     OPENEXCHANGERATES_APP_ID: str = ""
-
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
-
 
 @lru_cache()
 def get_settings() -> Settings:
