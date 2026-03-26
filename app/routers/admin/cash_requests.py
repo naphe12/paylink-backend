@@ -47,6 +47,17 @@ def _build_cash_request_reference(request_id, request_type) -> str:
     return f"{prefix}-{raw[:10]}"
 
 
+def _default_admin_cash_note(action: str, request_type: WalletCashRequestType | str | None = None) -> str:
+    normalized_type = str(getattr(request_type, "value", request_type) or "").strip().lower()
+    human_type = "cash in" if normalized_type == "deposit" else "cash out" if normalized_type == "withdraw" else "cash"
+    label = {
+        "direct_deposit": "Enregistrement admin",
+        "approve": "Validation admin",
+        "reject": "Rejet admin",
+    }.get(action, "Action admin")
+    return f"{label} {human_type}"
+
+
 class AdminCashDepositCreate(BaseModel):
     user_id: UUID
     amount: decimal.Decimal = Field(gt=decimal.Decimal("0"))
@@ -223,12 +234,7 @@ async def admin_cash_deposit_direct(
     admin=Depends(get_current_admin),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    note = (payload.note or "").strip()
-    if not note:
-        raise HTTPException(
-            status_code=400,
-            detail="Une note admin est obligatoire pour effectuer un depot direct.",
-        )
+    note = (payload.note or "").strip() or _default_admin_cash_note("direct_deposit", WalletCashRequestType.DEPOSIT)
 
     scoped_idempotency_key = None
     if idempotency_key and idempotency_key.strip():
@@ -349,6 +355,7 @@ async def approve_cash_request(
     admin=Depends(get_current_admin),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
+    note = (payload.note or "").strip() or _default_admin_cash_note("approve", None)
     scoped_idempotency_key = None
     if idempotency_key and idempotency_key.strip():
         raw_key = idempotency_key.strip()
@@ -356,7 +363,7 @@ async def approve_cash_request(
             {
                 "action": "approve_cash_request",
                 "request_id": str(request_id),
-                "note": payload.note,
+                "note": note,
                 "actor": str(admin.user_id),
             }
         )
@@ -379,6 +386,7 @@ async def approve_cash_request(
     request = await db.get(WalletCashRequests, request_id)
     if not request:
         raise HTTPException(status_code=404, detail="Demande introuvable")
+    note = (payload.note or "").strip() or _default_admin_cash_note("approve", request.type)
     transition_cash_request_status(request, WalletCashRequestStatus.APPROVED)
 
     wallet = await db.get(Wallets, request.wallet_id)
@@ -468,7 +476,7 @@ async def approve_cash_request(
             ],
         )
 
-    request.admin_note = payload.note
+    request.admin_note = note
     request.processed_by = admin.user_id
     request.processed_at = datetime.utcnow()
     await db.commit()
@@ -493,12 +501,7 @@ async def reject_cash_request(
     admin=Depends(get_current_admin),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    note = (payload.note or "").strip()
-    if not note:
-        raise HTTPException(
-            status_code=400,
-            detail="Une note admin est obligatoire pour rejeter une demande.",
-        )
+    note = (payload.note or "").strip() or _default_admin_cash_note("reject", None)
 
     scoped_idempotency_key = None
     if idempotency_key and idempotency_key.strip():
@@ -530,6 +533,7 @@ async def reject_cash_request(
     request = await db.get(WalletCashRequests, request_id)
     if not request:
         raise HTTPException(status_code=404, detail="Demande introuvable")
+    note = (payload.note or "").strip() or _default_admin_cash_note("reject", request.type)
     transition_cash_request_status(request, WalletCashRequestStatus.REJECTED)
     request.admin_note = note
     request.processed_by = admin.user_id
