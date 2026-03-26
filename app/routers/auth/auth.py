@@ -21,8 +21,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import create_access_token, verify_password
+from app.core.security import create_access_token, hash_password, verify_password
 from app.dependencies.auth import get_current_user, get_current_user_db,get_optional_current_user
+from app.models.user_auth import UserAuth
 from app.models.users import Users
 from app.schemas.users import UsersCreate, UsersRead
 from app.services.mailer import send_email
@@ -61,35 +62,10 @@ async def register_user(
     response: Response,
     db: AsyncSession = Depends(get_db),
 ):
-    existing_user = await db.scalar(select(Users).where(Users.email == user_in.email))
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email déjà enregistré")
-
-    paytag = None
-    if user_in.full_name:
-        paytag = "@" + user_in.full_name.strip().lower().replace(" ", "_")
-
-    user = Users(
-        full_name=user_in.full_name,
-        email=user_in.email,
-        phone_e164=user_in.phone_e164,
-        country_code=user_in.country_code,
-        status="active",
-        kyc_status="unverified",
-        role="client",
-        paytag=paytag,
-    )
-    db.add(user)
-    await db.flush()
-
-    auth_entry = UserAuth(
-        user_id=user.user_id,
-        password_hash=hash_password(user_in.password),
-        mfa_enabled=False,
-    )
-    db.add(auth_entry)
-
-    await ensure_user_financial_accounts(db, user=user)
+    try:
+        user = await create_client_user(db, payload=user_in)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     await db.commit()
     await db.refresh(user)
