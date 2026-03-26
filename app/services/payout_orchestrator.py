@@ -11,7 +11,6 @@ from sqlalchemy import select, text
 
 from app.core.database import async_session_maker
 from app.core.config import settings
-from app.models.telegram_user import TelegramUser
 from app.models.transaction_email_recipients import TransactionEmailRecipient
 from app.services.mailjet_service import MailjetEmailService
 from app.services.notifiers import EmailNotifier, NotificationMessage
@@ -243,6 +242,7 @@ async def _send_assignment_email(
 
 async def _send_assignment_telegram(
     *,
+    agent_user_id: str | None,
     order_id: str,
     assignment_id: str,
     agent_id: str,
@@ -256,9 +256,24 @@ async def _send_assignment_telegram(
     payout_method: str | None,
 ) -> None:
     async with async_session_maker() as db:
-        chat_ids = (await db.execute(select(TelegramUser.chat_id))).scalars().all()
+        row = None
+        if agent_user_id:
+            row = (
+                await db.execute(
+                    text(
+                        """
+                        SELECT chat_id
+                        FROM paylink.telegram_chat_links
+                        WHERE user_id = CAST(:user_id AS uuid)
+                        LIMIT 1
+                        """
+                    ),
+                    {"user_id": str(agent_user_id).strip()},
+                )
+            ).mappings().first()
 
-    if not chat_ids:
+    chat_id = str((row or {}).get("chat_id") or "").strip()
+    if not chat_id:
         return
 
     deposit_label = f"{usdc_amount} USDC" if usdc_amount is not None and usdc_amount > 0 else "Depot USDC detecte"
@@ -275,18 +290,17 @@ async def _send_assignment_telegram(
         f"Mode payout: {payout_method or '-'}"
     )
 
-    for chat_id in chat_ids:
-        try:
-            await send_telegram_message(int(chat_id), message)
-        except Exception:
-            logger.exception(
-                "Failed to send payout assignment telegram "
-                "(order_id=%s, assignment_id=%s, agent_id=%s, chat_id=%s)",
-                order_id,
-                assignment_id,
-                agent_id,
-                chat_id,
-            )
+    try:
+        await send_telegram_message(int(chat_id), message)
+    except Exception:
+        logger.exception(
+            "Failed to send payout assignment telegram "
+            "(order_id=%s, assignment_id=%s, agent_id=%s, chat_id=%s)",
+            order_id,
+            assignment_id,
+            agent_id,
+            chat_id,
+        )
 
 
 async def assign_agent_and_notify(order_id: str, amount_bif: float | Decimal) -> dict:
@@ -508,6 +522,7 @@ async def assign_agent_and_notify(order_id: str, amount_bif: float | Decimal) ->
         payout_method=payout_method,
     )
     await _send_assignment_telegram(
+        agent_user_id=agent_user_id,
         order_id=order_id,
         assignment_id=assignment_id,
         agent_id=agent_id,

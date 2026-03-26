@@ -49,12 +49,48 @@ async def analytics_overview(
         select(func.count(Wallets.wallet_id)).where(Wallets.available < 0)
     )
 
+    role_counts_row = (
+        await db.execute(
+            select(
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                cast(Users.role, Text).in_(["user", "client"]),
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("users"),
+                func.coalesce(
+                    func.sum(
+                        case((cast(Users.role, Text) == "admin", 1), else_=0)
+                    ),
+                    0,
+                ).label("admins"),
+                func.coalesce(
+                    func.sum(
+                        case((cast(Users.role, Text) == "agent", 1), else_=0)
+                    ),
+                    0,
+                ).label("agents"),
+            )
+        )
+    ).one()
+
     return {
         "total_users": total_users or 0,
         "active_today": active_today or 0,
         "transactions_24h": float(tx_today or 0),
         "transactions_7d": float(tx_week or 0),
         "negative_wallets": negative_wallets or 0,
+        "role_counts": {
+            "users": int(role_counts_row.users or 0),
+            "admins": int(role_counts_row.admins or 0),
+            "agents": int(role_counts_row.agents or 0),
+        },
     }
 
 

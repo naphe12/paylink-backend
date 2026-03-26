@@ -21,7 +21,6 @@ from app.models.credit_line_events import CreditLineEvents
 from app.models.credit_lines import CreditLines
 from app.models.countries import Countries
 from app.models.external_transfers import ExternalTransfers
-from app.models.telegram_user import TelegramUser
 from app.models.transactions import Transactions
 from app.models.users import Users
 from app.models.agents import Agents
@@ -242,6 +241,37 @@ async def _list_external_transfer_agent_users(db: AsyncSession) -> list[Users]:
     return agents
 
 
+async def _load_telegram_chat_ids_for_user_ids(
+    db: AsyncSession,
+    user_ids: list[str],
+) -> list[str]:
+    chat_ids: list[str] = []
+    seen_chat_ids: set[str] = set()
+    for user_id in user_ids:
+        candidate = str(user_id or "").strip()
+        if not candidate:
+            continue
+        row = (
+            await db.execute(
+                text(
+                    """
+                    SELECT chat_id
+                    FROM paylink.telegram_chat_links
+                    WHERE user_id = CAST(:user_id AS uuid)
+                    LIMIT 1
+                    """
+                ),
+                {"user_id": candidate},
+            )
+        ).mappings().first()
+        chat_id = str((row or {}).get("chat_id") or "").strip()
+        if not chat_id or chat_id in seen_chat_ids:
+            continue
+        seen_chat_ids.add(chat_id)
+        chat_ids.append(chat_id)
+    return chat_ids
+
+
 async def _notify_external_transfer(
     *,
     db: AsyncSession,
@@ -262,6 +292,7 @@ async def _notify_external_transfer(
     notify_client: bool = True,
     notify_recipient: bool = True,
 ) -> None:
+    agent_users: list[Users] = []
     if notify_agents:
         agent_users = await _list_external_transfer_agent_users(db)
         agent_mailer: MailjetEmailService | None = None
@@ -342,11 +373,17 @@ async def _notify_external_transfer(
                 )
 
     if notify_telegram:
-        configured_chat_ids = _parse_telegram_notify_chat_ids()
-        if configured_chat_ids:
-            chat_ids = configured_chat_ids
-        else:
-            chat_ids = (await db.execute(select(TelegramUser.chat_id))).scalars().all()
+        if not agent_users:
+            agent_users = await _list_external_transfer_agent_users(db)
+        linked_chat_ids = await _load_telegram_chat_ids_for_user_ids(
+            db,
+            [
+                str(getattr(agent_user, "user_id", "") or "").strip()
+                for agent_user in agent_users
+            ],
+        )
+        configured_chat_ids = [str(chat_id) for chat_id in _parse_telegram_notify_chat_ids()]
+        chat_ids = linked_chat_ids or configured_chat_ids
         context = dict(override_context or {})
         source_label = str(context.get("source") or "").strip()
         via_assistant = source_label == "agent_chat_web"
