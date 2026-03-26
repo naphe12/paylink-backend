@@ -5,9 +5,14 @@ from decimal import Decimal
 from uuid import uuid4
 
 from sqlalchemy import text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_maker
+from app.models.countries import Countries
+from app.models.users import Users
+from app.models.wallets import Wallets
+from app.services.ledger import LedgerService
 from app.services.fx_rate_service import resolve_stablecoin_bif_rate
 from app.services.paylink_ledger_service import PaylinkLedgerService
 
@@ -39,6 +44,63 @@ def _crypto_wallet_account_code(user_id: str, currency: str) -> str:
 
 def _bif_wallet_account_code(user_id: str) -> str:
     return f"USER_{user_id}_BIF"
+
+
+async def ensure_user_financial_accounts(
+    db: AsyncSession,
+    *,
+    user: Users,
+) -> dict:
+    normalized_user_id = str(user.user_id)
+    user_country_currency = None
+    if getattr(user, "country_code", None):
+        user_country_currency = await db.scalar(
+            select(Countries.currency_code).where(Countries.country_code == user.country_code)
+        )
+    base_currency = str(user_country_currency or "EUR").upper()
+
+    wallet = await db.scalar(
+        select(Wallets).where(
+            Wallets.user_id == user.user_id,
+            Wallets.type == "consumer",
+            Wallets.currency_code == base_currency,
+        )
+    )
+    if wallet is None:
+        wallet = await db.scalar(
+            select(Wallets).where(
+                Wallets.user_id == user.user_id,
+                Wallets.type == "consumer",
+            )
+        )
+    if wallet is None:
+        wallet = Wallets(
+            user_id=user.user_id,
+            type="consumer",
+            currency_code=base_currency,
+            available=Decimal("0"),
+            pending=Decimal("0"),
+        )
+        db.add(wallet)
+        await db.flush()
+
+    ledger = LedgerService(db)
+    wallet_account = await ledger.ensure_wallet_account(wallet)
+    usdc_account_code = await _get_or_create_crypto_wallet_account_code(db, normalized_user_id, USDC_CURRENCY)
+    usdt_account_code = await _get_or_create_crypto_wallet_account_code(db, normalized_user_id, USDT_CURRENCY)
+
+    bif_account_code = None
+    if base_currency == BIF_CURRENCY:
+        bif_account_code = await _get_or_create_bif_wallet_account_code(db, normalized_user_id)
+
+    return {
+        "wallet_id": str(wallet.wallet_id),
+        "wallet_currency_code": wallet.currency_code,
+        "wallet_ledger_account_code": str(wallet_account.code),
+        "usdc_ledger_account_code": usdc_account_code,
+        "usdt_ledger_account_code": usdt_account_code,
+        "bif_ledger_account_code": bif_account_code,
+    }
 
 
 async def _resolve_account_id(db: AsyncSession, account_code: str):

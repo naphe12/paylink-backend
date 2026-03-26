@@ -231,7 +231,7 @@ async def topup_wallet(
         description="Recharge manuelle",
     )
     wallet_account = await ledger.ensure_wallet_account(wallet)
-    cash_in_account = await ledger.get_account_by_code(settings.LEDGER_ACCOUNT_CASH_IN)
+    cash_in_account = await ledger.get_cash_in_account(wallet.currency_code)
     metadata = {
         "operation": "user_topup",
         "wallet_id": str(wallet.wallet_id),
@@ -667,7 +667,7 @@ async def topup_mobilemoney(
         description=f"Recharge {provider} {phone_number}",
     )
     wallet_account = await ledger.ensure_wallet_account(wallet)
-    cash_in_account = await ledger.get_account_by_code(settings.LEDGER_ACCOUNT_CASH_IN)
+    cash_in_account = await ledger.get_cash_in_account(wallet.currency_code)
     metadata = {
         "operation": "mobile_topup",
         "wallet_id": str(wallet.wallet_id),

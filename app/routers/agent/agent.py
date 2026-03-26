@@ -5,7 +5,7 @@ import json
 from uuid import UUID
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Header
+from fastapi import APIRouter, Depends, HTTPException, Query, Header, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import insert, update, select, func, or_
@@ -24,11 +24,13 @@ from app.models.agent_commissions import AgentCommissions
 from app.models.wallets import Wallets
 from app.models.transactions import Transactions
 from app.models.agents import Agents
+from app.schemas.users import UsersCreate, UsersRead
 from app.services.idempotency_service import (
     acquire_idempotency,
     compute_request_hash,
     store_idempotency_response,
 )
+from app.services.user_provisioning import create_client_user
 
 
 
@@ -62,6 +64,27 @@ class AgentQrScanRequest(BaseModel):
 class AgentQrConfirmRequest(BaseModel):
     tx_id: UUID
     pin: str | None = None
+
+
+@router.post(
+    "/clients",
+    response_model=UsersRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(agent_required)],
+)
+async def create_client_from_agent(
+    payload: UsersCreate,
+    db: AsyncSession = Depends(get_db),
+    current_agent: Users = Depends(get_current_user),
+):
+    await _require_agent(db, current_agent)
+    try:
+        user = await create_client_user(db, payload=payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    await db.refresh(user)
+    return UsersRead.model_validate(user, from_attributes=True)
 
 
 @router.post("/cash-in", dependencies=[Depends(agent_required)])

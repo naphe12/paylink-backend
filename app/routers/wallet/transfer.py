@@ -882,7 +882,7 @@ async def _external_transfer_core(
 
     sender_account = await ledger.ensure_wallet_account(wallet)
     try:
-        cash_out_account = await ledger.get_account_by_code(settings.LEDGER_ACCOUNT_CASH_OUT)
+        cash_out_account = await ledger.get_cash_out_account(wallet.currency_code)
     except LookupError as exc:
         raise HTTPException(
             status_code=500,
@@ -1211,7 +1211,7 @@ async def _fund_pending_external_transfer_for_approval(
 
     ledger = LedgerService(db)
     sender_account = await ledger.ensure_wallet_account(wallet)
-    cash_out_account = await ledger.get_account_by_code(settings.LEDGER_ACCOUNT_CASH_OUT)
+    cash_out_account = await ledger.get_cash_out_account(wallet.currency_code)
     entries = []
     if debited > 0:
         entries.append(

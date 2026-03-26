@@ -50,12 +50,52 @@ class LedgerService:
         return account
 
     async def get_account_by_code(self, code: str) -> LedgerAccounts:
+        normalized_code = str(code or "").strip()
+        candidate_codes = [normalized_code] if normalized_code else []
+
         account = await self.db.scalar(
-            select(LedgerAccounts).where(LedgerAccounts.code == code)
+            select(LedgerAccounts).where(LedgerAccounts.code.in_(candidate_codes))
         )
         if not account:
-            raise LookupError(f"Compte comptable '{code}' introuvable.")
+            raise LookupError(
+                f"Compte comptable '{normalized_code}' introuvable. "
+                f"Codes testes: {', '.join(candidate_codes) or '-'}."
+            )
         return account
+
+    async def get_cash_account(
+        self,
+        *,
+        direction: Literal["in", "out"],
+        currency_code: str,
+    ) -> LedgerAccounts:
+        normalized_direction = str(direction or "").strip().lower()
+        normalized_currency = str(currency_code or "").strip().upper()
+        if normalized_direction not in {"in", "out"}:
+            raise ValueError(f"Unknown cash direction '{direction}'.")
+
+        suffix = "IN" if normalized_direction == "in" else "OUT"
+        candidate_codes = [
+            f"LEDGER::CASH_{suffix}_{normalized_currency}",
+            f"LEDGER::CASH_{suffix}",
+        ]
+
+        account = await self.db.scalar(
+            select(LedgerAccounts).where(LedgerAccounts.code.in_(candidate_codes))
+        )
+        if not account:
+            raise LookupError(
+                "Compte de compensation cash introuvable "
+                f"(direction={normalized_direction}, currency={normalized_currency}). "
+                f"Codes testes: {', '.join(candidate_codes)}."
+            )
+        return account
+
+    async def get_cash_in_account(self, currency_code: str) -> LedgerAccounts:
+        return await self.get_cash_account(direction="in", currency_code=currency_code)
+
+    async def get_cash_out_account(self, currency_code: str) -> LedgerAccounts:
+        return await self.get_cash_account(direction="out", currency_code=currency_code)
 
     async def ensure_system_account(
         self,

@@ -295,7 +295,7 @@ async def admin_cash_deposit_direct(
         description=f"Depot cash direct admin ({note})",
     )
     wallet_account = await ledger.ensure_wallet_account(wallet)
-    cash_in = await ledger.get_account_by_code(settings.LEDGER_ACCOUNT_CASH_IN)
+    cash_in = await ledger.get_cash_in_account(wallet.currency_code)
     await ledger.post_journal(
         tx_id=None,
         description="Depot cash direct admin",
@@ -406,7 +406,7 @@ async def approve_cash_request(
             description="Validation dépôt cash",
         )
         wallet_account = await ledger.ensure_wallet_account(wallet)
-        cash_in = await ledger.get_account_by_code(settings.LEDGER_ACCOUNT_CASH_IN)
+        cash_in = await ledger.get_cash_in_account(wallet.currency_code)
         await ledger.post_journal(
             tx_id=None,
             description="Validation dépôt cash",
@@ -446,7 +446,7 @@ async def approve_cash_request(
             description="Validation retrait cash",
         )
         wallet_account = await ledger.ensure_wallet_account(wallet)
-        cash_out = await ledger.get_account_by_code(settings.LEDGER_ACCOUNT_CASH_OUT)
+        cash_out = await ledger.get_cash_out_account(wallet.currency_code)
         await ledger.post_journal(
             tx_id=None,
             description="Validation retrait cash",

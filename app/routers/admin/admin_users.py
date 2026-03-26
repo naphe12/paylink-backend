@@ -1,11 +1,14 @@
 # app/routers/admin_users.py
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import update, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.dependencies.auth import  get_current_admin
 from app.models.users import Users
+from app.schemas.users import UsersCreate, UsersRead
+from app.services.user_provisioning import create_client_user
+from app.services.wallet_service import ensure_user_financial_accounts
 from app.websocket_manager import notify_user
 from app.services.admin_notifications import push_admin_notification
 from app.services.push_notifications import send_push_notification
@@ -17,6 +20,21 @@ class ResolveAmlLockBody(BaseModel):
     note: str | None = None
     raise_kyc_tier_to_one: bool = True
     reset_risk_score: bool = True
+
+
+@router.post("/clients", response_model=UsersRead, status_code=status.HTTP_201_CREATED)
+async def create_client_from_admin(
+    payload: UsersCreate,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    try:
+        user = await create_client_user(db, payload=payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    await db.refresh(user)
+    return UsersRead.model_validate(user, from_attributes=True)
 
 @router.get("")
 @router.get("/")
@@ -243,3 +261,22 @@ async def request_kyc_upgrade(user_id: str, db: AsyncSession = Depends(get_db), 
         data={"type": "kyc_action"},
     )
     return {"message": "Demande envoyee a l'utilisateur"}
+
+
+@router.post("/{user_id}/repair-financial-accounts")
+async def repair_user_financial_accounts(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    user = await db.scalar(select(Users).where(Users.user_id == user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+
+    result = await ensure_user_financial_accounts(db, user=user)
+    await db.commit()
+    return {
+        "message": "Provisioning financier repare",
+        "user_id": str(user.user_id),
+        "result": result,
+    }

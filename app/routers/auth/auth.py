@@ -1,4 +1,3 @@
-import decimal
 from datetime import datetime, timedelta
 
 from fastapi import (
@@ -22,15 +21,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import create_access_token, hash_password, verify_password
+from app.core.security import create_access_token, verify_password
 from app.dependencies.auth import get_current_user, get_current_user_db,get_optional_current_user
-from app.models.user_auth import UserAuth
 from app.models.users import Users
-from app.models.wallets import Wallets
 from app.schemas.users import UsersCreate, UsersRead
 from app.services.mailer import send_email
 from app.services.mailjet_service import MailjetEmailService
 from app.services.auth_sessions import issue_refresh_session, revoke_refresh_session, rotate_refresh_session
+from app.services.user_provisioning import create_client_user
 
 router = APIRouter()
 
@@ -91,14 +89,7 @@ async def register_user(
     )
     db.add(auth_entry)
 
-    new_wallet = Wallets(
-        user_id=user.user_id,
-        type="consumer",
-        currency_code="EUR",
-        available=decimal.Decimal("0.00"),
-        pending=decimal.Decimal("0.00"),
-    )
-    db.add(new_wallet)
+    await ensure_user_financial_accounts(db, user=user)
 
     await db.commit()
     await db.refresh(user)
