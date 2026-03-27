@@ -5,7 +5,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, Header
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
-from sqlalchemy import cast, select, String, or_, desc, func, text
+from sqlalchemy import cast, select, String, or_, desc, func, text, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -103,6 +103,24 @@ def _build_cash_request_reference(request_id, request_type) -> str:
     return f"{prefix}-{raw[:10]}"
 
 
+def _primary_wallet_stmt(user_id):
+    wallet_priority = case(
+        (Wallets.type == "personal", 0),
+        (Wallets.type == "consumer", 1),
+        else_=2,
+    )
+    return (
+        select(Wallets)
+        .where(Wallets.user_id == user_id)
+        .order_by(wallet_priority, Wallets.wallet_id.asc())
+        .limit(1)
+    )
+
+
+async def _get_primary_wallet(db: AsyncSession, user_id):
+    return await db.scalar(_primary_wallet_stmt(user_id))
+
+
 async def _load_wallet_summary_row(db: AsyncSession, user_id):
     row = (
         await db.execute(
@@ -146,9 +164,8 @@ async def get_wallet(
 ):
     ledger = LedgerService(db)
     result = await db.execute(
-        select(Wallets)
+        _primary_wallet_stmt(current_user.user_id)
         .options(selectinload(Wallets.user))
-        .where(Wallets.user_id == current_user.user_id)
     )
     wallet = result.scalar_one_or_none()
 
@@ -201,7 +218,7 @@ async def topup_wallet(
 ):
     ledger = LedgerService(db)
     result = await db.execute(
-        select(Wallets).where(Wallets.user_id == current_user.user_id)
+        _primary_wallet_stmt(current_user.user_id)
     )
     wallet = result.scalar_one_or_none()
 
@@ -274,7 +291,7 @@ async def request_cash_deposit(
     current_user: Users = Depends(get_current_user),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    wallet = await db.scalar(select(Wallets).where(Wallets.user_id == current_user.user_id))
+    wallet = await _get_primary_wallet(db, current_user.user_id)
     if not wallet:
         raise HTTPException(status_code=404, detail="Portefeuille introuvable")
 
@@ -377,7 +394,7 @@ async def request_cash_withdraw(
     current_user: Users = Depends(get_current_user),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    wallet = await db.scalar(select(Wallets).where(Wallets.user_id == current_user.user_id))
+    wallet = await _get_primary_wallet(db, current_user.user_id)
     if not wallet:
         raise HTTPException(status_code=404, detail="Portefeuille introuvable")
 
@@ -536,7 +553,7 @@ async def transfer_money(
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Montant invalide")
 
-    sender_wallet = await db.scalar(select(Wallets).where(Wallets.user_id == current_user.user_id))
+    sender_wallet = await _get_primary_wallet(db, current_user.user_id)
     if not sender_wallet or sender_wallet.available < amount:
         raise HTTPException(status_code=400, detail="Solde insuffisant")
 
@@ -546,7 +563,7 @@ async def transfer_money(
     if not receiver_user:
         raise HTTPException(status_code=404, detail="Destinataire introuvable")
 
-    receiver_wallet = await db.scalar(select(Wallets).where(Wallets.user_id == receiver_user.user_id))
+    receiver_wallet = await _get_primary_wallet(db, receiver_user.user_id)
     if not receiver_wallet:
         raise HTTPException(status_code=404, detail="Portefeuille destinataire introuvable")
 
@@ -649,7 +666,7 @@ async def topup_mobilemoney(
     current_user: Users = Depends(get_current_user)
 ):
     ledger = LedgerService(db)
-    wallet = await db.scalar(select(Wallets).where(Wallets.user_id == current_user.user_id))
+    wallet = await _get_primary_wallet(db, current_user.user_id)
     if not wallet:
         raise HTTPException(status_code=404, detail="Portefeuille introuvable")
 
@@ -718,7 +735,7 @@ async def get_credit_status(
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user)
 ):
-    result = await db.execute(select(Wallets).where(Wallets.user_id == current_user.user_id))
+    result = await db.execute(_primary_wallet_stmt(current_user.user_id))
     wallet = result.scalar_one_or_none()
 
     credit_available = (current_user.credit_limit or 0) - (current_user.credit_used or 0)
@@ -823,7 +840,7 @@ async def get_bonus_balance(
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user)
 ):
-    result = await db.execute(select(Wallets).where(Wallets.user_id == current_user.user_id))
+    result = await db.execute(_primary_wallet_stmt(current_user.user_id))
     wallet = result.scalar_one()
     return {"bonus_balance": wallet.bonus_balance}
 
@@ -838,7 +855,7 @@ async def send_bonus(
     current_user: Users = Depends(get_current_user)
 ):
     # Trouver le wallet émetteur
-    sender_wallet = await db.scalar(select(Wallets).where(Wallets.user_id == current_user.user_id))
+    sender_wallet = await _get_primary_wallet(db, current_user.user_id)
     if sender_wallet.bonus_balance < amount_bif:
         raise HTTPException(400, "Solde bonus insuffisant")
 
@@ -849,7 +866,7 @@ async def send_bonus(
     if not recipient_user:
         raise HTTPException(404, "Destinataire introuvable")
 
-    recipient_wallet = await db.scalar(select(Wallets).where(Wallets.user_id == recipient_user.user_id))
+    recipient_wallet = await _get_primary_wallet(db, recipient_user.user_id)
 
     # Mise à jour des soldes
     sender_wallet.bonus_balance -= amount_bif
@@ -877,7 +894,7 @@ async def get_wallet_transactions(
 ):
     # 1. R?cup?rer le wallet du user
     wallet_result = await db.execute(
-        select(Wallets).where(Wallets.user_id == current_user.user_id)
+        _primary_wallet_stmt(current_user.user_id)
     )
     wallet = wallet_result.scalar_one_or_none()
 
@@ -1044,7 +1061,7 @@ async def send_money(
         raise HTTPException(423, "Votre compte est gelé pour raisons de sécurité.")
     # 1) Trouver le wallet du sender
     result = await db.execute(
-        select(Wallets).where(Wallets.user_id == current_user.user_id)
+        _primary_wallet_stmt(current_user.user_id)
     )
     sender_wallet = result.scalar_one_or_none()
     if not sender_wallet:
@@ -1061,7 +1078,7 @@ async def send_money(
         raise HTTPException(404, "Destinataire introuvable")
 
     result = await db.execute(
-        select(Wallets).where(Wallets.user_id == receiver.user_id)
+        _primary_wallet_stmt(receiver.user_id)
     )
     receiver_wallet = result.scalar_one_or_none()
 

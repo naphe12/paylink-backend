@@ -145,11 +145,12 @@ async def dashboard_timeseries(
     db: AsyncSession = Depends(get_db),
     me: Users = Depends(get_current_admin),
 ):
+    days = max(1, min(int(days), 365))
     q = text(
-        """
+        f"""
       WITH d AS (
         SELECT generate_series(
-          date_trunc('day', now()) - (:days::int || ' days')::interval,
+          date_trunc('day', now()) - INTERVAL '{days} days',
           date_trunc('day', now()),
           '1 day'::interval
         ) AS day
@@ -159,14 +160,14 @@ async def dashboard_timeseries(
                count(*) AS trades_count,
                avg(risk_score) AS avg_risk
         FROM p2p.trades
-        WHERE created_at >= now() - (:days::int || ' days')::interval
+        WHERE created_at >= now() - INTERVAL '{days} days'
         GROUP BY 1
       ),
       hits AS (
         SELECT date_trunc('day', created_at) AS day,
                count(*) AS hits_count
         FROM aml.hits
-        WHERE created_at >= now() - (:days::int || ' days')::interval
+        WHERE created_at >= now() - INTERVAL '{days} days'
         GROUP BY 1
       )
       SELECT d.day::date AS day,
@@ -179,7 +180,7 @@ async def dashboard_timeseries(
       ORDER BY d.day;
     """
     )
-    rows = (await db.execute(q, {"days": days})).mappings().all()
+    rows = (await db.execute(q)).mappings().all()
     return [dict(r) for r in rows]
 
 
@@ -189,8 +190,9 @@ async def risk_heatmap(
     db: AsyncSession = Depends(get_db),
     me: Users = Depends(get_current_admin),
 ):
+    days = max(1, min(int(days), 365))
     q = text(
-        """
+        f"""
       WITH base AS (
         SELECT date_trunc('day', created_at)::date AS day,
                CASE
@@ -202,7 +204,7 @@ async def risk_heatmap(
                END AS bucket,
                count(*) AS cnt
         FROM p2p.trades
-        WHERE created_at >= now() - (:days::int || ' days')::interval
+        WHERE created_at >= now() - INTERVAL '{days} days'
         GROUP BY 1,2
       )
       SELECT day, bucket, cnt
@@ -210,5 +212,5 @@ async def risk_heatmap(
       ORDER BY day, bucket;
     """
     )
-    rows = (await db.execute(q, {"days": days})).mappings().all()
+    rows = (await db.execute(q)).mappings().all()
     return [dict(r) for r in rows]
