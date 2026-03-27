@@ -15,6 +15,10 @@ from app.models.credit_lines import CreditLines
 SUPPORTED_TRANSFER_PARTNERS = {"Lumicash", "Ecocash", "eNoti"}
 
 
+def _fmt_decimal(value: Decimal) -> str:
+    return format(Decimal(value).normalize(), "f").rstrip("0").rstrip(".") if Decimal(value) != 0 else "0"
+
+
 async def _get_wallet_context(db: AsyncSession, user_id) -> dict:
     wallet = await db.scalar(select(Wallets).where(Wallets.user_id == user_id))
     credit_line = await db.scalar(
@@ -366,9 +370,9 @@ async def process_chat_message(db: AsyncSession, *, user_id, message: str) -> Ch
         return ChatResponse(
             status="INFO",
             message=(
-                f"Capacite financiere actuelle: wallet {wallet_available} {wallet_ctx['wallet_currency']}, "
-                f"credit disponible {credit_available} {wallet_ctx['wallet_currency']}, "
-                f"soit {total_capacity} {wallet_ctx['wallet_currency']} utilisables."
+                f"Capacite financiere actuelle: **wallet {_fmt_decimal(wallet_available)} {wallet_ctx['wallet_currency']}**, "
+                f"**credit disponible {_fmt_decimal(credit_available)} {wallet_ctx['wallet_currency']}**, "
+                f"soit **{_fmt_decimal(total_capacity)} {wallet_ctx['wallet_currency']} utilisables**."
             ),
             data=draft,
             executable=False,
@@ -377,9 +381,9 @@ async def process_chat_message(db: AsyncSession, *, user_id, message: str) -> Ch
             ],
             summary={
                 "wallet_currency": wallet_ctx["wallet_currency"],
-                "wallet_available": str(wallet_ctx["wallet_available"]),
-                "credit_available": str(wallet_ctx["credit_available"]),
-                "total_capacity": str(wallet_ctx["total_capacity"]),
+                "wallet_available": _fmt_decimal(wallet_ctx["wallet_available"]),
+                "credit_available": _fmt_decimal(wallet_ctx["credit_available"]),
+                "total_capacity": _fmt_decimal(wallet_ctx["total_capacity"]),
             },
             suggestions=[
                 "Exemple: wallet 10 EUR + credit disponible 50 EUR = capacite 60 EUR.",
@@ -413,8 +417,8 @@ async def process_chat_message(db: AsyncSession, *, user_id, message: str) -> Ch
             assumptions=assumptions,
             summary={
                 "wallet_currency": wallet_ctx["wallet_currency"],
-                "wallet_available": str(wallet_ctx["wallet_available"]),
-                "credit_available": str(wallet_ctx["credit_available"]),
+                "wallet_available": _fmt_decimal(wallet_ctx["wallet_available"]),
+                "credit_available": _fmt_decimal(wallet_ctx["credit_available"]),
             },
         )
 
@@ -439,9 +443,9 @@ async def process_chat_message(db: AsyncSession, *, user_id, message: str) -> Ch
         assumptions=assumptions,
         summary={
             "wallet_currency": wallet_ctx["wallet_currency"],
-            "wallet_available": str(wallet_ctx["wallet_available"]),
-            "credit_available": str(wallet_ctx["credit_available"]),
-            "total_capacity": str(wallet_ctx["total_capacity"]),
+            "wallet_available": _fmt_decimal(wallet_ctx["wallet_available"]),
+            "credit_available": _fmt_decimal(wallet_ctx["credit_available"]),
+            "total_capacity": _fmt_decimal(wallet_ctx["total_capacity"]),
         },
     )
 

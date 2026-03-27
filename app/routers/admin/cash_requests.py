@@ -347,6 +347,121 @@ async def admin_cash_deposit_direct(
     return response_payload
 
 
+@router.post("/withdraw")
+async def admin_cash_withdraw_direct(
+    payload: AdminCashDepositCreate,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    note = (payload.note or "").strip() or _default_admin_cash_note("direct_deposit", WalletCashRequestType.WITHDRAW)
+
+    scoped_idempotency_key = None
+    if idempotency_key and idempotency_key.strip():
+        raw_key = idempotency_key.strip()
+        payload_hash = compute_request_hash(
+            {
+                "user_id": str(payload.user_id),
+                "amount": str(payload.amount),
+                "note": note,
+                "actor": str(admin.user_id),
+                "operation": "admin_cash_withdraw_direct",
+            }
+        )
+        scoped_idempotency_key = f"admin_cash_withdraw_direct:{admin.user_id}:{raw_key}"
+        idem = await acquire_idempotency(
+            db,
+            key=scoped_idempotency_key,
+            request_hash=payload_hash,
+        )
+        if idem.conflict:
+            raise HTTPException(
+                status_code=409,
+                detail="Idempotency-Key deja utilisee avec un payload different.",
+            )
+        if idem.replay_payload is not None:
+            return idem.replay_payload
+        if idem.in_progress:
+            raise HTTPException(status_code=409, detail="Requete dupliquee en cours de traitement.")
+
+    user = await db.get(Users, payload.user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+
+    wallet = await db.scalar(
+        select(Wallets).where(
+            Wallets.user_id == payload.user_id,
+            Wallets.type == "consumer",
+        )
+    )
+    if not wallet:
+        wallet = await db.scalar(select(Wallets).where(Wallets.user_id == payload.user_id))
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Wallet introuvable")
+
+    ledger = LedgerService(db)
+    amount = decimal.Decimal(payload.amount)
+    if decimal.Decimal(wallet.available or 0) < amount:
+        raise HTTPException(status_code=400, detail="Solde insuffisant pour effectuer ce retrait")
+
+    wallet.available = decimal.Decimal(wallet.available or 0) - amount
+    movement = await log_wallet_movement(
+        db,
+        wallet=wallet,
+        user_id=user.user_id,
+        amount=amount,
+        direction="debit",
+        operation_type="cash_withdraw_admin_direct",
+        reference=str(admin.user_id),
+        description=f"Retrait cash direct admin ({note})",
+    )
+    wallet_account = await ledger.ensure_wallet_account(wallet)
+    cash_out = await ledger.get_cash_out_account(wallet.currency_code)
+    await ledger.post_journal(
+        tx_id=None,
+        description="Retrait cash direct admin",
+        metadata={
+            "operation": "cash_withdraw_admin_direct",
+            "target_user_id": str(user.user_id),
+            "wallet_id": str(wallet.wallet_id),
+            "processed_by": str(admin.user_id),
+            "note": note,
+            "movement_id": str(movement.transaction_id) if movement else None,
+        },
+        entries=[
+            LedgerLine(
+                account=wallet_account,
+                direction="debit",
+                amount=amount,
+                currency_code=wallet.currency_code,
+            ),
+            LedgerLine(
+                account=cash_out,
+                direction="credit",
+                amount=amount,
+                currency_code=wallet.currency_code,
+            ),
+        ],
+    )
+    response_payload = {
+        "message": "Retrait cash effectue",
+        "user_id": str(user.user_id),
+        "wallet_id": str(wallet.wallet_id),
+        "amount": float(amount),
+        "currency": wallet.currency_code,
+        "new_balance": float(wallet.available),
+    }
+    if scoped_idempotency_key:
+        await store_idempotency_response(
+            db,
+            key=scoped_idempotency_key,
+            status_code=200,
+            payload=response_payload,
+        )
+    await db.commit()
+    return response_payload
+
+
 @router.post("/{request_id}/approve", response_model=WalletCashRequestAdminRead)
 async def approve_cash_request(
     request_id: UUID,

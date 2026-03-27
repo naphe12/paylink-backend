@@ -24,6 +24,10 @@ STATUS_LABELS = {
 }
 
 
+def _fmt_decimal(value: Decimal) -> str:
+    return format(Decimal(value).normalize(), "f").rstrip("0").rstrip(".") if Decimal(value) != 0 else "0"
+
+
 def _build_suggestions() -> list[str]:
     return [
         "Demande le statut de ta derniere demande.",
@@ -128,9 +132,9 @@ async def process_transfer_support_message(db: AsyncSession, *, user_id, message
         return TransferSupportChatResponse(
             status="INFO",
             message=(
-                f"Capacite financiere actuelle: wallet {wallet_ctx['wallet_available']} {wallet_ctx['wallet_currency']}, "
-                f"credit disponible {wallet_ctx['credit_available']} {wallet_ctx['wallet_currency']}, "
-                f"soit {wallet_ctx['total_capacity']} {wallet_ctx['wallet_currency']} utilisables."
+                f"Capacite financiere actuelle: **wallet {_fmt_decimal(wallet_ctx['wallet_available'])} {wallet_ctx['wallet_currency']}**, "
+                f"**credit disponible {_fmt_decimal(wallet_ctx['credit_available'])} {wallet_ctx['wallet_currency']}**, "
+                f"soit **{_fmt_decimal(wallet_ctx['total_capacity'])} {wallet_ctx['wallet_currency']} utilisables**."
             ),
             data=draft,
             assumptions=[
@@ -142,9 +146,9 @@ async def process_transfer_support_message(db: AsyncSession, *, user_id, message
                 "user_email": str(getattr(user, "email", "") or "") or None,
                 "user_phone": str(getattr(user, "phone_e164", "") or "") or None,
                 "wallet_currency": wallet_ctx["wallet_currency"],
-                "wallet_available": str(wallet_ctx["wallet_available"]),
-                "credit_available": str(wallet_ctx["credit_available"]),
-                "total_capacity": str(wallet_ctx["total_capacity"]),
+                "wallet_available": _fmt_decimal(wallet_ctx["wallet_available"]),
+                "credit_available": _fmt_decimal(wallet_ctx["credit_available"]),
+                "total_capacity": _fmt_decimal(wallet_ctx["total_capacity"]),
             },
             suggestions=[
                 "Exemple: wallet 10 EUR + credit disponible 50 EUR = capacite 60 EUR.",
