@@ -28,6 +28,7 @@ async def _get_latest_credit_line(db: AsyncSession, user_id: UUID):
         .where(
             CreditLines.user_id == user_id,
             CreditLines.deleted_at.is_(None),
+            CreditLines.status == "active",
         )
         .order_by(CreditLines.created_at.desc())
     )

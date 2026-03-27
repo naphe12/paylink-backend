@@ -1,9 +1,13 @@
+from decimal import Decimal
+
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.credit_lines import CreditLines
 from app.models.external_transfers import ExternalTransfers
 from app.models.transactions import Transactions
 from app.models.users import Users
+from app.models.wallets import Wallets
 from app.transfer_support_chat.parser import parse_transfer_support_message
 from app.transfer_support_chat.schemas import TransferSupportChatResponse
 
@@ -51,6 +55,32 @@ async def _find_linked_transaction(db: AsyncSession, transfer_id):
     )
 
 
+async def _get_wallet_context(db: AsyncSession, user_id) -> dict:
+    wallet = await db.scalar(select(Wallets).where(Wallets.user_id == user_id))
+    credit_line = await db.scalar(
+        select(CreditLines)
+        .where(
+            CreditLines.user_id == user_id,
+            CreditLines.deleted_at.is_(None),
+            CreditLines.status == "active",
+        )
+        .order_by(desc(CreditLines.created_at))
+    )
+    wallet_currency = str(getattr(wallet, "currency_code", "") or "").upper() or "EUR"
+    wallet_available = Decimal(getattr(wallet, "available", 0) or 0)
+    credit_available = (
+        max(Decimal(getattr(credit_line, "outstanding_amount", 0) or 0), Decimal("0"))
+        if credit_line
+        else Decimal("0")
+    )
+    return {
+        "wallet_currency": wallet_currency,
+        "wallet_available": wallet_available,
+        "credit_available": credit_available,
+        "total_capacity": wallet_available + credit_available,
+    }
+
+
 def _status_message(status: str, *, review_reasons: list[str], metadata: dict, tx_status: str | None) -> tuple[str, list[str]]:
     normalized_status = str(status or "").lower()
     human_status = STATUS_LABELS.get(normalized_status, normalized_status or "inconnu")
@@ -92,11 +122,40 @@ async def process_transfer_support_message(db: AsyncSession, *, user_id, message
     draft = parse_transfer_support_message(message)
     transfer = await _find_transfer(db, user_id=user_id, reference_code=draft.reference_code)
     user = await db.scalar(select(Users).where(Users.user_id == user_id))
+    wallet_ctx = await _get_wallet_context(db, user_id)
+
+    if draft.intent == "capacity":
+        return TransferSupportChatResponse(
+            status="INFO",
+            message=(
+                f"Capacite financiere actuelle: wallet {wallet_ctx['wallet_available']} {wallet_ctx['wallet_currency']}, "
+                f"credit disponible {wallet_ctx['credit_available']} {wallet_ctx['wallet_currency']}, "
+                f"soit {wallet_ctx['total_capacity']} {wallet_ctx['wallet_currency']} utilisables."
+            ),
+            data=draft,
+            assumptions=[
+                "Regle appliquee: capacite financiere = solde wallet + ligne de credit disponible active.",
+            ],
+            summary={
+                "user_id": str(getattr(user, "user_id", "") or "") or None,
+                "user_name": str(getattr(user, "full_name", "") or "") or None,
+                "user_email": str(getattr(user, "email", "") or "") or None,
+                "user_phone": str(getattr(user, "phone_e164", "") or "") or None,
+                "wallet_currency": wallet_ctx["wallet_currency"],
+                "wallet_available": str(wallet_ctx["wallet_available"]),
+                "credit_available": str(wallet_ctx["credit_available"]),
+                "total_capacity": str(wallet_ctx["total_capacity"]),
+            },
+            suggestions=[
+                "Exemple: wallet 10 EUR + credit disponible 50 EUR = capacite 60 EUR.",
+                "Tu peux aussi demander pourquoi une demande est pending.",
+            ],
+        )
 
     if draft.intent == "unknown":
         return TransferSupportChatResponse(
             status="NEED_INFO",
-            message="Je peux suivre une demande de transfert et expliquer pourquoi elle est pending, approved ou bloquee.",
+            message="Je peux suivre une demande de transfert, expliquer pourquoi elle est pending, ou donner la capacite financiere actuelle.",
             data=draft,
             suggestions=_build_suggestions(),
         )

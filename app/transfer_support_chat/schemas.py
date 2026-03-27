@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 
 TransferSupportStatus = Literal["NEED_INFO", "INFO", "ERROR", "CANCELLED"]
-TransferSupportIntent = Literal["track_transfer", "pending_reason", "status_help", "unknown"]
+TransferSupportIntent = Literal["track_transfer", "pending_reason", "status_help", "capacity", "unknown"]
 
 
 class TransferSupportChatRequest(BaseModel):

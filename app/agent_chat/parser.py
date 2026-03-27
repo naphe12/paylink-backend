@@ -104,6 +104,21 @@ ACTION_WORDS = {
     "paie",
 }
 
+CAPACITY_WORDS = {
+    "capacite",
+    "capacité",
+    "credit",
+    "crédit",
+    "disponible",
+    "wallet",
+    "solde",
+    "financiere",
+    "financière",
+    "combien",
+    "peut",
+    "utiliser",
+}
+
 
 def _sorted_aliases(values: dict[str, str]) -> list[str]:
     return sorted(values.keys(), key=len, reverse=True)
@@ -240,6 +255,9 @@ def _extract_recipient_name(message: str) -> str | None:
 
 def parse_chat_message(message: str) -> TransferDraft:
     text = str(message or "").strip()
+    normalized_text = normalize_text(text)
+    if any(word in normalized_text for word in CAPACITY_WORDS):
+        return TransferDraft(intent="capacity", raw_message=text)
     amount, currency = _parse_amount_and_currency(text)
 
     partner_match = PARTNER_PATTERN.search(text)

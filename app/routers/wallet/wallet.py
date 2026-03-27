@@ -1312,6 +1312,7 @@ async def financial_summary(
         .where(
             CreditLines.user_id == current_user.user_id,
             CreditLines.deleted_at.is_(None),
+            CreditLines.status == "active",
         )
         .order_by(CreditLines.created_at.desc())
     )
@@ -1362,6 +1363,7 @@ async def financial_summary_admin(
         .where(
             CreditLines.user_id == user.user_id,
             CreditLines.deleted_at.is_(None),
+            CreditLines.status == "active",
         )
         .order_by(CreditLines.created_at.desc())
     )
