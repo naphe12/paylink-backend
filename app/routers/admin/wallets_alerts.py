@@ -1,16 +1,20 @@
 from decimal import Decimal
 from datetime import datetime
+from uuid import uuid4
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import String, cast, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel, Field
+from typing import Literal
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
 from app.models.users import Users
 from app.models.wallets import Wallets
 from app.models.wallet_transactions import WalletTransactions
+from app.services.wallet_history import log_wallet_movement
 from app.services.wallet_service import (
     _crypto_wallet_account_code,
     ensure_usdc_wallet_account,
@@ -54,6 +58,110 @@ def compute_alert_label(balance: Decimal) -> str:
     if balance < Decimal("10000"):
         return "warning"
     return "ok"
+
+
+WalletCorrectionScenario = Literal[
+    "credit_adjustment",
+    "debit_adjustment",
+    "set_available_balance",
+    "clear_negative_balance",
+]
+
+
+class WalletCorrectionPreviewRequest(BaseModel):
+    wallet_id: UUID
+    scenario: WalletCorrectionScenario
+    amount: Decimal | None = Field(default=None, gt=0)
+    target_balance: Decimal | None = None
+    reason: str = Field(..., min_length=3, max_length=300)
+    note: str | None = Field(default=None, max_length=500)
+
+
+def _wallet_correction_operation_type(scenario: WalletCorrectionScenario) -> str:
+    return {
+        "credit_adjustment": "admin_wallet_correction_credit",
+        "debit_adjustment": "admin_wallet_correction_debit",
+        "set_available_balance": "admin_wallet_correction_set_balance",
+        "clear_negative_balance": "admin_wallet_correction_clear_negative",
+    }[scenario]
+
+
+def _serialize_decimal(value: Decimal | None) -> float:
+    return float(value or 0)
+
+
+async def _load_wallet_with_user(db: AsyncSession, wallet_id: UUID):
+    row = await db.execute(
+        select(Wallets, Users)
+        .join(Users, Users.user_id == Wallets.user_id, isouter=True)
+        .where(Wallets.wallet_id == wallet_id)
+    )
+    result = row.first()
+    if not result:
+        raise HTTPException(404, "Wallet introuvable")
+    return result
+
+
+def _build_wallet_correction_preview(wallet: Wallets, payload: WalletCorrectionPreviewRequest) -> dict:
+    wallet_before = Decimal(wallet.available or 0)
+    pending = Decimal(wallet.pending or 0)
+    scenario = payload.scenario
+    if scenario == "credit_adjustment":
+        if payload.amount is None:
+            raise HTTPException(400, "Le montant est requis pour ce scenario.")
+        signed_delta = Decimal(payload.amount)
+    elif scenario == "debit_adjustment":
+        if payload.amount is None:
+            raise HTTPException(400, "Le montant est requis pour ce scenario.")
+        signed_delta = -Decimal(payload.amount)
+    elif scenario == "set_available_balance":
+        if payload.target_balance is None:
+            raise HTTPException(400, "Le solde cible est requis pour ce scenario.")
+        signed_delta = Decimal(payload.target_balance) - wallet_before
+    elif scenario == "clear_negative_balance":
+        if wallet_before >= 0:
+            raise HTTPException(400, "Le wallet n'est pas negatif. Ce scenario ne s'applique pas.")
+        signed_delta = abs(wallet_before)
+    else:
+        raise HTTPException(400, "Scenario non supporte.")
+
+    if signed_delta == 0:
+        raise HTTPException(400, "Aucune correction a appliquer: le delta calcule est nul.")
+
+    wallet_after = wallet_before + signed_delta
+    direction = "credit" if signed_delta > 0 else "debit"
+    operation_type = _wallet_correction_operation_type(scenario)
+    warnings: list[str] = []
+    if wallet_after < 0:
+        warnings.append("Le wallet restera negatif apres correction.")
+    if pending != 0:
+        warnings.append("La correction n'affecte pas le solde pending.")
+
+    implications = [
+        "Met a jour wallets.available.",
+        "Cree une ligne wallet_transactions avec reference admin.",
+        "Cree un client_balance_event pour tracer l'impact client.",
+        "Ne modifie ni pending, ni bonus_balance, ni ligne de credit.",
+        "La correction est historisee: en cas d'erreur, il faut une contre-correction.",
+    ]
+    return {
+        "wallet_id": str(wallet.wallet_id),
+        "user_id": str(wallet.user_id) if wallet.user_id else None,
+        "currency_code": wallet.currency_code,
+        "scenario": scenario,
+        "direction": direction,
+        "amount": _serialize_decimal(abs(signed_delta)),
+        "signed_delta": _serialize_decimal(signed_delta),
+        "wallet_before": _serialize_decimal(wallet_before),
+        "wallet_after": _serialize_decimal(wallet_after),
+        "pending_before": _serialize_decimal(pending),
+        "operation_type": operation_type,
+        "reason": payload.reason,
+        "note": payload.note,
+        "implications": implications,
+        "warnings": warnings,
+        "can_apply": True,
+    }
 
 
 @router.get("")
@@ -126,6 +234,73 @@ async def wallets_summary(
         "total_wallets": total_wallets or 0,
         "negative_wallets": negative_wallets or 0,
         "low_balance_wallets": low_balance_wallets or 0,
+    }
+
+
+@router.post("/corrections/preview")
+async def preview_wallet_correction(
+    payload: WalletCorrectionPreviewRequest,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    wallet, user = await _load_wallet_with_user(db, payload.wallet_id)
+    preview = _build_wallet_correction_preview(wallet, payload)
+    preview.update(
+        {
+            "user_name": getattr(user, "full_name", None),
+            "user_email": getattr(user, "email", None),
+            "wallet_type": str(getattr(wallet, "type", "") or ""),
+        }
+    )
+    return preview
+
+
+@router.post("/corrections/apply")
+async def apply_wallet_correction(
+    payload: WalletCorrectionPreviewRequest,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    wallet, user = await _load_wallet_with_user(db, payload.wallet_id)
+    preview = _build_wallet_correction_preview(wallet, payload)
+    signed_delta = Decimal(str(preview["signed_delta"]))
+    amount = abs(signed_delta)
+    wallet.available = Decimal(wallet.available or 0) + signed_delta
+    reference = f"ADMIN-WALLET-CORR-{uuid4().hex[:12].upper()}"
+    description = payload.reason.strip()
+    if payload.note:
+        description = f"{description} | {payload.note.strip()}"
+
+    movement = await log_wallet_movement(
+        db,
+        wallet=wallet,
+        user_id=wallet.user_id,
+        amount=amount,
+        direction=preview["direction"],
+        operation_type=preview["operation_type"],
+        reference=reference,
+        description=description,
+    )
+    await db.commit()
+
+    return {
+        "message": "Correction wallet appliquee.",
+        "reference": reference,
+        "movement_id": str(movement.transaction_id) if movement else None,
+        "preview": {
+            **preview,
+            "wallet_after": _serialize_decimal(Decimal(wallet.available or 0)),
+        },
+        "wallet": {
+            "wallet_id": str(wallet.wallet_id),
+            "user_id": str(wallet.user_id) if wallet.user_id else None,
+            "user_name": getattr(user, "full_name", None),
+            "user_email": getattr(user, "email", None),
+            "currency_code": wallet.currency_code,
+            "wallet_type": str(getattr(wallet, "type", "") or ""),
+            "available": _serialize_decimal(Decimal(wallet.available or 0)),
+            "pending": _serialize_decimal(Decimal(wallet.pending or 0)),
+        },
     }
 
 
