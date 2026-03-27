@@ -151,14 +151,14 @@ async def process_wallet_message(db: AsyncSession, *, user_id, message: str) -> 
             )
         latest = recent_movements[0]
         assumptions = [
-            f"{item['direction']} {item['amount']} {item['currency_code']} - {item['operation_type']}"
+            f"{item['created_at'] or '-'}: {item['direction']} {item['amount']} {item['currency_code']} - {item['operation_type']}"
             for item in recent_movements[:3]
         ]
         return WalletChatResponse(
             status="INFO",
             message=(
                 f"Dernier mouvement: {latest['direction']} {latest['amount']} {latest['currency_code']} "
-                f"sur {latest['operation_type']}."
+                f"sur {latest['operation_type']} le {latest['created_at'] or '-'}."
             ),
             data=draft,
             assumptions=assumptions,
@@ -193,14 +193,16 @@ async def process_wallet_message(db: AsyncSession, *, user_id, message: str) -> 
         if draft.scope in {"wallet", "both"}:
             assumptions.extend(
                 [
-                    f"Wallet: {str(getattr(item, 'direction', '') or '')} {item.amount} {item.currency_code} sur {item.operation_type}"
+                    f"Wallet [{item.created_at.isoformat() if getattr(item, 'created_at', None) else '-'}]: "
+                    f"{str(getattr(item, 'direction', '') or '')} {item.amount} {item.currency_code} sur {item.operation_type}"
                     for item in wallet_rows[:5]
                 ]
             )
         if draft.scope in {"credit_line", "both"}:
             assumptions.extend(
                 [
-                    f"Credit: {item.amount_delta} {item.currency_code} source={item.source or '-'} status={item.status or '-'}"
+                    f"Credit [{item.occurred_at.isoformat() if getattr(item, 'occurred_at', None) else '-'}]: "
+                    f"{item.amount_delta} {item.currency_code} source={item.source or '-'} status={item.status or '-'}"
                     for item in credit_rows[:5]
                 ]
             )
