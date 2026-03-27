@@ -21,6 +21,9 @@ class WalletCashRequestType(str, enum.Enum):
     DEPOSIT = "DEPOSIT"
     WITHDRAW = "WITHDRAW"
     EXTERNAL_TRANSFER = "EXTERNAL_TRANSFER"
+    DEPOSIT_LOWER = "deposit"
+    WITHDRAW_LOWER = "withdraw"
+    EXTERNAL_TRANSFER_LOWER = "external_transfer"
 
 
 class WalletCashRequestStatus(str, enum.Enum):
@@ -28,6 +31,10 @@ class WalletCashRequestStatus(str, enum.Enum):
     APPROVED = "approved"
     REJECTED = "rejected"
     COMPLETED = "completed"
+    PENDING_UPPER = "PENDING"
+    APPROVED_UPPER = "APPROVED"
+    REJECTED_UPPER = "REJECTED"
+    COMPLETED_UPPER = "COMPLETED"
 
 
 def normalize_wallet_cash_request_type(value: str | WalletCashRequestType | None) -> WalletCashRequestType | None:
@@ -92,16 +99,20 @@ class WalletCashRequests(Base):
     type = Column(
         Enum(
             WalletCashRequestType,
+            values_callable=lambda enum_cls: [item.value for item in enum_cls],
             name="wallet_cash_request_type",
             schema="paylink",
+            validate_strings=True,
         ),
         nullable=False,
     )
     status = Column(
         Enum(
             WalletCashRequestStatus,
+            values_callable=lambda enum_cls: [item.value for item in enum_cls],
             name="wallet_cash_request_status",
             schema="paylink",
+            validate_strings=True,
         ),
         nullable=False,
         server_default=WalletCashRequestStatus.PENDING.value,

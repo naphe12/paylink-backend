@@ -19,7 +19,9 @@ def _detect_intent(message: str) -> str:
     normalized = normalize_text(message)
     if "offre" in normalized or "mes offres" in normalized:
         return "offers_summary"
-    if "pourquoi" in normalized and ("bloque" in normalized or "pending" in normalized or "attente" in normalized):
+    if "pourquoi" in normalized and (
+        "bloque" in normalized or "pending" in normalized or "attente" in normalized or "litige" in normalized
+    ):
         return "why_blocked"
     if "prochaine etape" in normalized or "quoi faire" in normalized or "ensuite" in normalized:
         return "next_step"

@@ -33,6 +33,9 @@ def _build_suggestions() -> list[str]:
         "Demande le statut de ta derniere demande.",
         "Donne une reference comme EXT-AB12CD34.",
         "Demande pourquoi une demande est en pending.",
+        "Demande l'explication des statuts pending, approved et completed.",
+        "Demande la capacite financiere actuelle.",
+        "Suis la reference EXT-AB12CD34.",
     ]
 
 

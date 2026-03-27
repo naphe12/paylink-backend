@@ -1,60 +1,19 @@
-import unicodedata
-import re
-from datetime import date, datetime
-
+from app.services.assistant_semantic_parser import (
+    SemanticQuery,
+    extract_date_range,
+    extract_single_date,
+    has_any_term,
+    normalize_text,
+    tokenize,
+)
 from app.wallet_chat.schemas import WalletDraft
 
 
 BALANCE_WORDS = {"solde", "balance", "wallet", "portefeuille", "combien"}
 LIMIT_WORDS = {"limite", "limites", "plafond", "plafonds", "journalier", "mensuel"}
 ACTIVITY_WORDS = {"mouvement", "mouvements", "historique", "recent", "recents", "activite"}
-STATUS_WORDS = {"statut", "status", "compte", "gele", "bloque", "kyc"}
+STATUS_WORDS = {"statut", "status", "compte", "gele", "bloque", "kyc", "situation"}
 EXPLAIN_WORDS = {"expliquer", "explique", "explication", "details", "detail", "pourquoi"}
-DATE_PATTERNS = (
-    re.compile(r"\b(?P<y>\d{4})-(?P<m>\d{2})-(?P<d>\d{2})\b"),
-    re.compile(r"\b(?P<d>\d{2})/(?P<m>\d{2})/(?P<y>\d{4})\b"),
-)
-
-
-def normalize_text(value: str | None) -> str:
-    raw = str(value or "").strip().lower()
-    normalized = unicodedata.normalize("NFKD", raw)
-    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
-
-
-def _detect_intent(message: str) -> str:
-    normalized = normalize_text(message)
-    tokens = set(normalized.replace("?", " ").split())
-    if _extract_date(normalized) and (
-        ("wallet" in normalized or "portefeuille" in normalized or "ligne de credit" in normalized or "credit line" in normalized)
-        and (tokens & EXPLAIN_WORDS or tokens & ACTIVITY_WORDS)
-    ):
-        return "explain_movements_on_date"
-    if tokens & ACTIVITY_WORDS:
-        return "recent_activity"
-    if tokens & LIMIT_WORDS:
-        return "limits"
-    if tokens & STATUS_WORDS:
-        return "account_status"
-    if tokens & BALANCE_WORDS:
-        return "balance"
-    return "unknown"
-
-
-def _extract_date(normalized: str) -> date | None:
-    for pattern in DATE_PATTERNS:
-        match = pattern.search(normalized)
-        if not match:
-            continue
-        try:
-            return datetime(
-                year=int(match.group("y")),
-                month=int(match.group("m")),
-                day=int(match.group("d")),
-            ).date()
-        except ValueError:
-            return None
-    return None
 
 
 def _detect_scope(normalized: str) -> str:
@@ -69,12 +28,63 @@ def _detect_scope(normalized: str) -> str:
     return "both"
 
 
+def _build_wallet_semantic_query(message: str) -> SemanticQuery:
+    normalized = normalize_text(message)
+    tokens = tokenize(normalized)
+    exact_date = extract_single_date(normalized)
+    date_from, date_to = extract_date_range(normalized)
+    subject = _detect_scope(normalized)
+    query = SemanticQuery(
+        domain="wallet",
+        raw_message=str(message or "").strip(),
+        normalized_message=normalized,
+        tokens=tokens,
+        subject=subject,
+        exact_date=exact_date,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+    if "ligne de credit" in normalized or "credit line" in normalized:
+        query.matched_signals.append("credit_line_subject")
+    if "wallet" in normalized or "portefeuille" in normalized:
+        query.matched_signals.append("wallet_subject")
+    if tokens & EXPLAIN_WORDS:
+        query.explanation_mode = "causal"
+        query.matched_signals.append("explain_words")
+    elif tokens & ACTIVITY_WORDS:
+        query.explanation_mode = "descriptive"
+        query.matched_signals.append("activity_words")
+
+    if exact_date and subject in {"wallet", "credit_line", "both"} and (tokens & EXPLAIN_WORDS or tokens & ACTIVITY_WORDS):
+        query.action = "explain_movements_on_date"
+        return query
+    if subject == "credit_line":
+        query.action = "account_status"
+        return query
+    if tokens & ACTIVITY_WORDS:
+        query.action = "recent_activity"
+        return query
+    if tokens & LIMIT_WORDS:
+        query.action = "limits"
+        return query
+    if tokens & STATUS_WORDS:
+        query.action = "account_status"
+        return query
+    if has_any_term(normalized, BALANCE_WORDS):
+        query.action = "balance"
+        return query
+
+    return query
+
+
 def parse_wallet_message(message: str) -> WalletDraft:
     text = str(message or "").strip()
-    normalized = normalize_text(text)
+    query = _build_wallet_semantic_query(text)
     return WalletDraft(
-        intent=_detect_intent(text),
+        intent=query.action,
         raw_message=text,
-        target_date=_extract_date(normalized),
-        scope=_detect_scope(normalized),
+        target_date=query.exact_date,
+        scope=query.subject or "both",
+        semantic_hints=query.to_dict(),
     )

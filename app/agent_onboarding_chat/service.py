@@ -208,8 +208,12 @@ def _build_suggestions() -> list[str]:
     return [
         "Comment faire un cash-in ?",
         "Comment faire un cash-out ?",
+        "Comment scanner un client ?",
+        "Comment faire un transfert externe ?",
         "Que verifier avant une operation client ?",
         "Quelles erreurs frequentes eviter ?",
+        "Que faire pour un nouveau client ?",
+        "Que faire si le client n'a pas son KYC ?",
     ]
 
 

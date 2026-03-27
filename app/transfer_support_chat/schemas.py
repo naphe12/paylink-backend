@@ -17,6 +17,7 @@ class TransferSupportDraft(BaseModel):
     intent: TransferSupportIntent = "unknown"
     reference_code: str | None = None
     raw_message: str
+    semantic_hints: dict = Field(default_factory=dict)
 
 
 class TransferSupportChatResponse(BaseModel):
