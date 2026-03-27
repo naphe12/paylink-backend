@@ -56,6 +56,11 @@ async def _get_wallet_context(db: AsyncSession, user_id):
         "wallet_available": wallet_available,
         "wallet_pending": decimal.Decimal(getattr(wallet, "pending", 0) or 0),
         "bonus_balance": decimal.Decimal(getattr(wallet, "bonus_balance", 0) or 0),
+        "credit_line_status": str(getattr(credit_line, "status", "") or "none"),
+        "credit_line_currency": str(getattr(credit_line, "currency_code", "") or wallet_currency).upper(),
+        "credit_line_initial_amount": decimal.Decimal(getattr(credit_line, "initial_amount", 0) or 0),
+        "credit_line_used_amount": decimal.Decimal(getattr(credit_line, "used_amount", 0) or 0),
+        "credit_line_outstanding_amount": decimal.Decimal(getattr(credit_line, "outstanding_amount", 0) or 0),
         "credit_available": credit_available,
         "total_capacity": wallet_available + credit_available,
         "daily_limit": decimal.Decimal(getattr(user, "daily_limit", 0) or 0),
@@ -123,7 +128,11 @@ async def process_wallet_message(db: AsyncSession, *, user_id, message: str) -> 
             message=(
                 f"Solde wallet: {summary['wallet_available']} {summary['wallet_currency']}. "
                 f"En attente: {summary['wallet_pending']} {summary['wallet_currency']}. "
-                f"Bonus: {summary['bonus_balance']} {summary['wallet_currency']}."
+                f"Bonus: {summary['bonus_balance']} {summary['wallet_currency']}. "
+                f"Ligne de credit: statut {summary['credit_line_status']}, "
+                f"initial {summary['credit_line_initial_amount']} {summary['credit_line_currency']}, "
+                f"utilise {summary['credit_line_used_amount']} {summary['credit_line_currency']}, "
+                f"disponible {summary['credit_line_outstanding_amount']} {summary['credit_line_currency']}."
             ),
             data=draft,
             summary=summary,
@@ -171,6 +180,8 @@ async def process_wallet_message(db: AsyncSession, *, user_id, message: str) -> 
             message=(
                 f"Statut du compte: {summary['account_status']}. "
                 f"KYC: {summary['kyc_status']}. "
+                f"Ligne de credit: {summary['credit_line_status']} "
+                f"({summary['credit_line_outstanding_amount']} {summary['credit_line_currency']} disponible). "
                 f"Capacite totale actuelle: {summary['total_capacity']} {summary['wallet_currency']}."
             ),
             data=draft,
