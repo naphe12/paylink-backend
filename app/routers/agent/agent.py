@@ -460,8 +460,10 @@ async def agent_history(
             AgentTransactions,
             Users.full_name.label("client_name"),
             Users.phone_e164.label("client_phone"),
+            Transactions.currency_code.label("currency_code"),
         )
         .join(Users, Users.user_id == AgentTransactions.client_user_id)
+        .outerjoin(Transactions, Transactions.tx_id == AgentTransactions.related_tx)
         .where(*filters)
         .order_by(AgentTransactions.created_at.desc())
         .limit(limit)
@@ -473,13 +475,14 @@ async def agent_history(
     rows = await db.execute(stmt)
 
     operations = []
-    for tx, client_name, client_phone in rows.all():
+    for tx, client_name, client_phone, currency_code in rows.all():
         operations.append(
             {
                 "transaction_id": str(tx.transaction_id),
                 "direction": tx.direction,
                 "amount": float(tx.amount),
                 "commission": float(tx.commission),
+                "currency_code": str(currency_code or "").upper() or None,
                 "status": tx.status,
                 "client_name": client_name,
                 "client_phone": client_phone,
