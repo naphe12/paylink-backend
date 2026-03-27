@@ -54,6 +54,15 @@ from app.models.wallet_transactions import WalletTransactions
 router = APIRouter()
 
 
+def _normalize_wallet_direction(value: str | None) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"credit", "in"}:
+        return "credit"
+    if normalized in {"debit", "out"}:
+        return "debit"
+    return normalized or "credit"
+
+
 class FinancialSummary(BaseModel):
     wallet_available: decimal.Decimal
     wallet_pending: decimal.Decimal
@@ -905,11 +914,19 @@ async def get_wallet_transactions(
 
     # 2. R?cup?rer les mouvements du wallet (wallet_transactions) pour cet utilisateur
     tx_result = await db.execute(
-        select(WalletTransactions)
+        select(
+            WalletTransactions.transaction_id,
+            WalletTransactions.amount,
+            WalletTransactions.currency_code,
+            cast(WalletTransactions.direction, String).label("direction"),
+            WalletTransactions.description,
+            WalletTransactions.operation_type,
+            WalletTransactions.created_at,
+        )
         .where(WalletTransactions.wallet_id == wallet_id)
         .order_by(WalletTransactions.created_at.desc())
     )
-    txs = tx_result.scalars().all()
+    txs = tx_result.mappings().all()
 
     # 2bis. Pr?parer le statut depuis la table Transactions
     status_rows = (
@@ -927,10 +944,10 @@ async def get_wallet_transactions(
         )
     ).all()
 
-    def derive_status(entry: WalletTransactions):
-        direction_flag = str(entry.direction or "").lower()
+    def derive_status(entry):
+        direction_flag = _normalize_wallet_direction(entry["direction"])
         is_debit = direction_flag.startswith("debit")
-        target_amount = float(entry.amount)
+        target_amount = float(entry["amount"])
         best_status = None
         best_delta = None
 
@@ -945,8 +962,8 @@ async def get_wallet_transactions(
             if float(amount_db) != target_amount:
                 continue
 
-            if entry.created_at and created_db:
-                delta = abs((entry.created_at - created_db).total_seconds())
+            if entry["created_at"] and created_db:
+                delta = abs((entry["created_at"] - created_db).total_seconds())
                 if best_delta is not None and delta >= best_delta:
                     continue
                 best_delta = delta
@@ -957,21 +974,21 @@ async def get_wallet_transactions(
 
     response = []
     for tx in txs:
-        direction_flag = str(tx.direction or "").lower()
-        amount_val = float(tx.amount)
+        direction_flag = _normalize_wallet_direction(tx["direction"])
+        amount_val = float(tx["amount"])
         if direction_flag.startswith("debit"):
             amount_val = -amount_val
 
         status = derive_status(tx) or ""
 
         response.append({
-            "tx_id": str(tx.transaction_id),
+            "tx_id": str(tx["transaction_id"]),
             "amount": amount_val,
-            "currency_code": tx.currency_code,
+            "currency_code": tx["currency_code"],
             "direction": "in" if amount_val > 0 else "out",
-            "description": tx.description or tx.operation_type or "",
+            "description": tx["description"] or tx["operation_type"] or "",
             "status": status,
-            "created_at": tx.created_at,
+            "created_at": tx["created_at"],
         })
 
     return response
@@ -992,13 +1009,21 @@ async def get_balance_events(
         .limit(fetch_size)
     )
     wallet_stmt = (
-        select(WalletTransactions)
+        select(
+            WalletTransactions.transaction_id,
+            WalletTransactions.amount,
+            WalletTransactions.balance_after,
+            WalletTransactions.currency_code,
+            WalletTransactions.operation_type,
+            WalletTransactions.created_at,
+            cast(WalletTransactions.direction, String).label("direction"),
+        )
         .where(WalletTransactions.user_id == current_user.user_id)
         .order_by(desc(WalletTransactions.created_at))
         .limit(fetch_size)
     )
     legacy_rows = (await db.execute(legacy_stmt)).scalars().all()
-    wallet_rows = (await db.execute(wallet_stmt)).scalars().all()
+    wallet_rows = (await db.execute(wallet_stmt)).mappings().all()
 
     merged = [
         {
@@ -1014,21 +1039,21 @@ async def get_balance_events(
         for r in legacy_rows
     ]
     for tx in wallet_rows:
-        raw_amount = float(tx.amount or 0)
-        direction = str(getattr(tx, "direction", "") or "").lower()
+        raw_amount = float(tx["amount"] or 0)
+        direction = _normalize_wallet_direction(tx["direction"])
         signed_delta = raw_amount if direction == "credit" else -raw_amount
-        balance_after = float(tx.balance_after) if tx.balance_after is not None else None
+        balance_after = float(tx["balance_after"]) if tx["balance_after"] is not None else None
         balance_before = balance_after - signed_delta if balance_after is not None else None
         merged.append(
             {
-                "event_id": f"wallet-{tx.transaction_id}",
+                "event_id": f"wallet-{tx['transaction_id']}",
                 "balance_before": balance_before,
                 "amount_delta": signed_delta,
                 "balance_after": balance_after,
-                "currency": tx.currency_code,
-                "source": tx.operation_type or "wallet_transaction",
-                "occurred_at": tx.created_at,
-                "created_at": tx.created_at,
+                "currency": tx["currency_code"],
+                "source": tx["operation_type"] or "wallet_transaction",
+                "occurred_at": tx["created_at"],
+                "created_at": tx["created_at"],
             }
         )
 
