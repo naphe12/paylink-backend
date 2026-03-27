@@ -247,6 +247,7 @@ async def transfers_gains(
 async def list_balance_events(
     user_id: UUID | None = Query(None),
     q: str | None = Query(None, description="Recherche nom/email/téléphone"),
+    source: str | None = Query(None, description="Filtre exact sur la source"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -310,6 +311,7 @@ async def list_balance_events(
             "balance_after": float(ev.balance_after) if ev.balance_after is not None else None,
             "currency": getattr(ev, "currency", None) or getattr(ev, "currency_code", None),
             "source": ev.source,
+            "legacy_id": str(ev.legacy_id) if ev.legacy_id is not None else None,
             "occurred_at": ev.occurred_at,
             "created_at": ev.created_at,
         }
@@ -357,6 +359,13 @@ async def list_balance_events(
         key=lambda item: item.get("occurred_at") or item.get("created_at"),
         reverse=True,
     )
+    if source:
+        normalized_source = source.strip().lower()
+        merged = [
+            item
+            for item in merged
+            if str(item.get("source") or "").strip().lower() == normalized_source
+        ]
     return merged[offset : offset + limit]
 
 
