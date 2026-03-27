@@ -19,7 +19,14 @@ def _detect_intent(message: str) -> str:
     normalized = normalize_text(message)
     if "pourquoi" in normalized and ("pending" in normalized or "bloque" in normalized or "attente" in normalized):
         return "why_pending"
-    if "prochaine etape" in normalized or "quoi faire" in normalized or "ensuite" in normalized:
+    if (
+        "prochaine etape" in normalized
+        or "quoi faire" in normalized
+        or "que faire" in normalized
+        or "dois-je faire" in normalized
+        or "etape en cours" in normalized
+        or "ensuite" in normalized
+    ):
         return "next_step"
     if "reference" in normalized or "commande" in normalized or "order" in normalized or "suivi" in normalized:
         return "track_order"

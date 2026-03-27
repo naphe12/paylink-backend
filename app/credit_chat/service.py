@@ -58,12 +58,19 @@ async def _get_latest_pending_transfer(db: AsyncSession, user_id):
 def _build_suggestions(draft: CreditDraft, missing: list[str]) -> list[str]:
     suggestions: list[str] = []
     if draft.intent == "unknown":
-        suggestions.append("Demande la capacite, le credit disponible ou si un montant peut passer.")
+        suggestions.extend(
+            [
+                "Demande la capacite financiere actuelle.",
+                "Demande le credit disponible restant.",
+                "Demande si un montant peut passer, par exemple 200 USD.",
+                "Demande pourquoi une demande de transfert est pending.",
+            ]
+        )
     if "amount" in missing:
         suggestions.append("Precise le montant, par exemple 200 USD.")
     if "currency" in missing:
         suggestions.append("Precise la devise, par exemple BIF ou USD.")
-    return suggestions[:4]
+    return suggestions[:6]
 
 
 async def process_credit_message(db: AsyncSession, *, user_id, message: str) -> CreditChatResponse:

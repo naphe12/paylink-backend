@@ -51,6 +51,8 @@ def _build_suggestions(draft: KycDraft) -> list[str]:
             "Demande quels documents manquent.",
             "Demande les limites journalieres et mensuelles.",
             "Demande ce que debloque le niveau suivant.",
+            "Demande pourquoi ton dossier KYC est bloque.",
+            "Demande le statut exact de verification.",
         ]
     return []
 

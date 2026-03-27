@@ -12,6 +12,8 @@ def _build_suggestions() -> list[str]:
         "Pourquoi mon escrow est en attente ?",
         "Quelle est la prochaine etape de mon escrow ?",
         "Suis la commande 00000000-0000-0000-0000-000000000000",
+        "Explique l'etape en cours de mon escrow.",
+        "Que dois-je faire maintenant sur mon escrow ?",
     ]
 
 

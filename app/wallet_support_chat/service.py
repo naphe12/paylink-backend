@@ -19,6 +19,8 @@ def _build_suggestions() -> list[str]:
         "Je ne vois pas mon depot.",
         "Pourquoi mon retrait est bloque ?",
         "Pourquoi je ne peux plus envoyer ?",
+        "Quel est mon dernier mouvement wallet ?",
+        "Mon compte est-il gele ?",
     ]
 
 

@@ -26,6 +26,7 @@ class WalletDraft(BaseModel):
     raw_message: str
     target_date: date | None = None
     scope: Literal["wallet", "credit_line", "both"] = "both"
+    semantic_hints: dict = Field(default_factory=dict)
 
 
 class WalletChatResponse(BaseModel):

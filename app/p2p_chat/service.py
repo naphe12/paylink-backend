@@ -15,6 +15,8 @@ def _build_suggestions() -> list[str]:
         "Pourquoi mon trade P2P est bloque ?",
         "Quelle est la prochaine etape de mon trade ?",
         "Resume mes offres P2P",
+        "Suis le trade 00000000-0000-0000-0000-000000000000",
+        "Explique pourquoi mon trade est en litige.",
     ]
 
 
