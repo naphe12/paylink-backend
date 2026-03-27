@@ -718,6 +718,7 @@ async def _external_transfer_core(
         .where(
             CreditLines.user_id == current_user.user_id,
             CreditLines.deleted_at.is_(None),
+            CreditLines.status == "active",
         )
         .order_by(CreditLines.created_at.desc())
         .with_for_update()
@@ -1088,6 +1089,7 @@ async def _fund_pending_external_transfer_for_approval(
         .where(
             CreditLines.user_id == transfer.user_id,
             CreditLines.deleted_at.is_(None),
+            CreditLines.status == "active",
         )
         .order_by(CreditLines.created_at.desc())
         .with_for_update()
