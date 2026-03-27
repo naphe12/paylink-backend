@@ -1,3 +1,5 @@
+import enum
+
 from sqlalchemy import Column, Text, Numeric, TIMESTAMP, ForeignKey, Enum, CHAR
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -5,12 +7,13 @@ from sqlalchemy.sql import func, text
 
 from app.core.database import Base
 
-class WalletEntryDirectionEnum(str, Enum):
-    CREDIT = "CREDIT"
-    DEBIT = "DEBIT"
-    credit='credit'
-    debit = 'debit'
- 
+class WalletEntryDirectionEnum(str, enum.Enum):
+    IN = "in"
+    OUT = "out"
+    CREDIT = "credit"
+    DEBIT = "debit"
+    CREDIT_UPPER = "CREDIT"
+    DEBIT_UPPER = "DEBIT"
 
 
 
@@ -36,7 +39,13 @@ class WalletTransactions(Base):
 
     operation_type = Column(Text, nullable=False)
     direction = Column(
-        Enum("credit", "debit","DEBIT","CREDIT", name="wallet_entry_direction", schema="paylink"),
+        Enum(
+            WalletEntryDirectionEnum,
+            values_callable=lambda enum_cls: [item.value for item in enum_cls],
+            name="wallet_entry_direction",
+            schema="paylink",
+            validate_strings=True,
+        ),
         nullable=False,
     )
     amount = Column(Numeric(20, 6), nullable=False)
