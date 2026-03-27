@@ -14,7 +14,7 @@ class ChatRequest(BaseModel):
 
 
 class TransferDraft(BaseModel):
-    intent: Literal["external_transfer"] = "external_transfer"
+    intent: Literal["external_transfer", "capacity"] = "external_transfer"
     amount: Decimal | None = None
     currency: str | None = None
     recipient: str | None = None

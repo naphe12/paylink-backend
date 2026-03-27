@@ -17,7 +17,11 @@ async def _get_wallet_context(db: AsyncSession, user_id) -> dict:
     wallet = await db.scalar(select(Wallets).where(Wallets.user_id == user_id))
     credit_line = await db.scalar(
         select(CreditLines)
-        .where(CreditLines.user_id == user_id, CreditLines.deleted_at.is_(None))
+        .where(
+            CreditLines.user_id == user_id,
+            CreditLines.deleted_at.is_(None),
+            CreditLines.status == "active",
+        )
         .order_by(CreditLines.created_at.desc())
     )
     wallet_currency = str(getattr(wallet, "currency_code", "") or "").upper() or "EUR"

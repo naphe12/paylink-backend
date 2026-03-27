@@ -8,6 +8,7 @@ REFERENCE_PATTERN = re.compile(r"\bEXT-[A-Z0-9]{4,}\b", re.IGNORECASE)
 
 TRACK_WORDS = {"suivre", "suivi", "statut", "ou", "où", "demande", "transfert", "reference", "reference_code"}
 PENDING_WORDS = {"pending", "attente", "bloque", "bloquee", "bloquee", "raison", "pourquoi"}
+CAPACITY_WORDS = {"capacite", "capacite financiere", "credit", "disponible", "wallet", "solde", "utiliser", "peut"}
 
 
 def normalize_text(value: str | None) -> str:
@@ -26,6 +27,8 @@ def _extract_reference(message: str) -> str | None:
 def _detect_intent(message: str) -> str:
     normalized = normalize_text(message)
     tokens = set(normalized.replace("?", " ").split())
+    if any(word in normalized for word in CAPACITY_WORDS):
+        return "capacity"
     if ("pending" in normalized or "attente" in normalized) and ("pourquoi" in normalized or "raison" in normalized):
         return "pending_reason"
     if tokens & PENDING_WORDS and ("pourquoi" in normalized or "raison" in normalized or "bloque" in normalized):
