@@ -1,11 +1,19 @@
 from typing import Literal
+from datetime import date
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 
 WalletChatStatus = Literal["NEED_INFO", "INFO", "ERROR", "CANCELLED"]
-WalletIntent = Literal["balance", "limits", "recent_activity", "account_status", "unknown"]
+WalletIntent = Literal[
+    "balance",
+    "limits",
+    "recent_activity",
+    "account_status",
+    "explain_movements_on_date",
+    "unknown",
+]
 
 
 class WalletChatRequest(BaseModel):
@@ -16,6 +24,8 @@ class WalletChatRequest(BaseModel):
 class WalletDraft(BaseModel):
     intent: WalletIntent = "unknown"
     raw_message: str
+    target_date: date | None = None
+    scope: Literal["wallet", "credit_line", "both"] = "both"
 
 
 class WalletChatResponse(BaseModel):
