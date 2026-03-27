@@ -21,6 +21,15 @@ from app.services.wallet_service import (
 router = APIRouter(prefix="/admin/wallets", tags=["Admin Wallets"])
 
 
+def _normalize_wallet_direction(value: str | None) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"credit", "in"}:
+        return "credit"
+    if normalized in {"debit", "out"}:
+        return "debit"
+    return normalized or "unknown"
+
+
 async def _crypto_wallet_account_exists(db: AsyncSession, user_id: str, token_symbol: str) -> bool:
     account_code = _crypto_wallet_account_code(user_id, token_symbol)
     res = await db.execute(
@@ -138,7 +147,7 @@ async def wallet_history_admin(
         select(
             WalletTransactions.transaction_id,
             WalletTransactions.amount,
-            WalletTransactions.direction,
+            cast(WalletTransactions.direction, String).label("direction"),
             WalletTransactions.balance_after,
             WalletTransactions.operation_type,
             WalletTransactions.reference,
@@ -172,7 +181,7 @@ async def wallet_history_admin(
         {
             "transaction_id": str(r.transaction_id),
             "amount": float(r.amount),
-            "direction": r.direction,
+            "direction": _normalize_wallet_direction(r.direction),
             "balance_after": float(r.balance_after),
             "operation_type": r.operation_type,
             "reference": r.reference,
