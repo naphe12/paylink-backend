@@ -1,8 +1,10 @@
 import decimal
+from datetime import datetime, time, timedelta, timezone
 
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.credit_line_events import CreditLineEvents
 from app.models.credit_lines import CreditLines
 from app.models.users import Users
 from app.models.wallet_transactions import WalletTransactions
@@ -17,6 +19,8 @@ def _build_suggestions() -> list[str]:
         "Demande tes limites journalieres et mensuelles.",
         "Demande les derniers mouvements.",
         "Demande le statut de ton compte.",
+        "Explique les mouvements wallet du 2026-03-25.",
+        "Explique la ligne de credit du 2026-03-25.",
     ]
 
 
@@ -72,6 +76,39 @@ async def _get_wallet_context(db: AsyncSession, user_id):
             for item in recent_movements
         ],
     }
+
+
+async def _get_movements_for_date(db: AsyncSession, user_id, target_date):
+    start_dt = datetime.combine(target_date, time.min, tzinfo=timezone.utc)
+    end_dt = start_dt + timedelta(days=1)
+
+    wallet_rows = (
+        await db.execute(
+            select(WalletTransactions)
+            .where(
+                WalletTransactions.user_id == user_id,
+                WalletTransactions.created_at >= start_dt,
+                WalletTransactions.created_at < end_dt,
+            )
+            .order_by(desc(WalletTransactions.created_at))
+            .limit(20)
+        )
+    ).scalars().all()
+
+    credit_rows = (
+        await db.execute(
+            select(CreditLineEvents)
+            .where(
+                CreditLineEvents.user_id == user_id,
+                CreditLineEvents.occurred_at >= start_dt,
+                CreditLineEvents.occurred_at < end_dt,
+            )
+            .order_by(desc(CreditLineEvents.occurred_at))
+            .limit(20)
+        )
+    ).scalars().all()
+
+    return wallet_rows, credit_rows
 
 
 async def process_wallet_message(db: AsyncSession, *, user_id, message: str) -> WalletChatResponse:
@@ -140,9 +177,74 @@ async def process_wallet_message(db: AsyncSession, *, user_id, message: str) -> 
             summary=summary,
         )
 
+    if draft.intent == "explain_movements_on_date":
+        if not draft.target_date:
+            return WalletChatResponse(
+                status="NEED_INFO",
+                message="Precise la date demandee au format YYYY-MM-DD ou JJ/MM/YYYY.",
+                data=draft,
+                missing_fields=["target_date"],
+                summary=summary,
+            )
+
+        wallet_rows, credit_rows = await _get_movements_for_date(db, user_id, draft.target_date)
+        assumptions = []
+
+        if draft.scope in {"wallet", "both"}:
+            assumptions.extend(
+                [
+                    f"Wallet: {str(getattr(item, 'direction', '') or '')} {item.amount} {item.currency_code} sur {item.operation_type}"
+                    for item in wallet_rows[:5]
+                ]
+            )
+        if draft.scope in {"credit_line", "both"}:
+            assumptions.extend(
+                [
+                    f"Credit: {item.amount_delta} {item.currency_code} source={item.source or '-'} status={item.status or '-'}"
+                    for item in credit_rows[:5]
+                ]
+            )
+
+        if not assumptions:
+            return WalletChatResponse(
+                status="INFO",
+                message=f"Je ne vois aucun mouvement wallet ou ligne de credit pour le {draft.target_date.isoformat()}.",
+                data=draft,
+                summary={
+                    **summary,
+                    "target_date": draft.target_date.isoformat(),
+                    "wallet_movements_count": 0,
+                    "credit_line_events_count": 0,
+                },
+            )
+
+        wallet_count = len(wallet_rows)
+        credit_count = len(credit_rows)
+        scope_label = {
+            "wallet": "wallet",
+            "credit_line": "ligne de credit",
+            "both": "wallet et ligne de credit",
+        }[draft.scope]
+
+        return WalletChatResponse(
+            status="INFO",
+            message=(
+                f"Pour le {draft.target_date.isoformat()}, j'ai trouve {wallet_count} mouvement(s) wallet "
+                f"et {credit_count} evenement(s) de ligne de credit pour {scope_label}."
+            ),
+            data=draft,
+            assumptions=assumptions,
+            summary={
+                **summary,
+                "target_date": draft.target_date.isoformat(),
+                "wallet_movements_count": wallet_count,
+                "credit_line_events_count": credit_count,
+            },
+        )
+
     return WalletChatResponse(
         status="NEED_INFO",
-        message="Je peux t'aider sur le solde wallet, les limites, les mouvements recents ou le statut du compte.",
+        message="Je peux t'aider sur le solde wallet, les limites, les mouvements recents, le statut du compte, ou expliquer les mouvements wallet et ligne de credit a une date donnee.",
         data=draft,
         suggestions=_build_suggestions(),
         summary=summary,
