@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 # ✅ Import uniquement pour l'éditeur (pas au runtime)
 if TYPE_CHECKING:
@@ -38,7 +38,5 @@ class CountriesRead(CountriesBase):
     users: Optional[List["UsersRead"]] = None
     agents: Optional[List["AgentsRead"]] = None
 
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)
 

@@ -3,16 +3,16 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict
 
 
 class ExternalTransferBase(BaseModel):
-    partner_name: str = Field(..., min_length=2, max_length=80, example="Lumicash")
-    country_destination: str = Field(..., example="Burundi")
-    recipient_name: str = Field(..., min_length=2, max_length=120, example="Jean Ndayishimiye")
-    recipient_phone: str = Field(..., example="+25761234567")
-    recipient_email: Optional[EmailStr] = Field(default=None, example="jean@example.com")
-    amount: Decimal = Field(..., gt=Decimal("0"), le=Decimal("100000000"), example=100.00)
+    partner_name: str = Field(..., min_length=2, max_length=80, json_schema_extra={"example": "Lumicash"})
+    country_destination: str = Field(..., json_schema_extra={"example": "Burundi"})
+    recipient_name: str = Field(..., min_length=2, max_length=120, json_schema_extra={"example": "Jean Ndayishimiye"})
+    recipient_phone: str = Field(..., json_schema_extra={"example": "+25761234567"})
+    recipient_email: Optional[EmailStr] = Field(default=None, json_schema_extra={"example": "jean@example.com"})
+    amount: Decimal = Field(..., gt=Decimal("0"), le=Decimal("100000000"), json_schema_extra={"example": 100.00})
 
     @field_validator("country_destination")
     @classmethod
@@ -50,9 +50,7 @@ class ExternalTransferRead(BaseModel):
         raw = str(value or "").strip()
         return raw or None
 
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)
 
 class ExternalBeneficiaryRead(BaseModel):
     recipient_name: str

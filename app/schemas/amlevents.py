@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
     from app.schemas.transactions import TransactionsRead
@@ -48,5 +48,4 @@ class AmlEventsRead(AmlEventsBase):
     details: Optional[dict]
     tx: Optional["TransactionsRead"] = None
     user: Optional["UsersRead"] = None
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

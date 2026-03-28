@@ -2,6 +2,7 @@ import re
 import unicodedata
 from decimal import Decimal, InvalidOperation
 
+from app.services.assistant_intent_parser_llm import resolve_intent
 from app.credit_chat.schemas import CreditDraft
 
 
@@ -33,6 +34,12 @@ CURRENCY_ALIASES = {
 CAPACITY_WORDS = {"capacite", "credit", "reste", "disponible", "wallet", "solde"}
 SIMULATE_WORDS = {"si", "envoie", "transfert", "envoyer", "passe", "possible", "peut", "retrait"}
 PENDING_WORDS = {"pending", "attente", "bloque", "pourquoi"}
+CREDIT_INTENTS = {
+    "capacity": "Ask how much credit or capacity is available.",
+    "simulate_transfer": "Ask to simulate whether a transfer, withdrawal or send would be possible.",
+    "pending_reason": "Ask why a credit-related operation is pending or blocked.",
+    "unknown": "The request does not match another credit intent.",
+}
 
 
 def normalize_text(value: str | None) -> str:
@@ -73,8 +80,9 @@ def _detect_intent(message: str) -> str:
 def parse_credit_message(message: str) -> CreditDraft:
     text = str(message or "").strip()
     amount, currency = _parse_amount_and_currency(text)
+    resolved = resolve_intent(domain="credit", message=text, intents=CREDIT_INTENTS, heuristic_intent=_detect_intent(text))
     return CreditDraft(
-        intent=_detect_intent(text),
+        intent=resolved.intent,
         amount=amount,
         currency=currency,
         raw_message=text,

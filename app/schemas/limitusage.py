@@ -5,7 +5,7 @@ import decimal
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 #
 
@@ -47,5 +47,4 @@ class LimitUsageRead(LimitUsageBase):
     total_amount: decimal.Decimal
     limit: Optional["LimitsRead"] = None  # ✅ référence indirecte
     user: Optional["UsersRead"] = None
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

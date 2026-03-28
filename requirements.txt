@@ -74,3 +74,4 @@ fpdf2==2.7.6
 reportlab==4.2.5
 web3==7.14.1
 chardet==5.2.0
+pytest==9.0.2

@@ -43,6 +43,14 @@ from app.models.credit_line_history import CreditLineHistory
 from app.models.credit_line_events import CreditLineEvents
 from app.models.credit_lines import CreditLines
 from app.models.client_balance_events import ClientBalanceEvents
+from app.models.external_beneficiaries import ExternalBeneficiaries
+from app.models.ai_intents import AiIntents
+from app.models.ai_intent_slots import AiIntentSlots
+from app.models.ai_synonyms import AiSynonyms
+from app.models.ai_action_registry import AiActionRegistry
+from app.models.ai_pending_actions import AiPendingActions
+from app.models.ai_conversation_state import AiConversationState
+from app.models.ai_audit_logs import AiAuditLogs
 
 __all__ = [
     "AgentLocations",
@@ -89,4 +97,12 @@ __all__ = [
     "CreditLineEvents",
     "CreditLines",
     "ClientBalanceEvents",
+    "ExternalBeneficiaries",
+    "AiIntents",
+    "AiIntentSlots",
+    "AiSynonyms",
+    "AiActionRegistry",
+    "AiPendingActions",
+    "AiConversationState",
+    "AiAuditLogs",
 ]

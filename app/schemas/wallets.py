@@ -7,7 +7,7 @@ import decimal
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
     pass
@@ -45,7 +45,7 @@ from decimal import Decimal
 from uuid import UUID
 
 # app/schemas/wallets.py
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class WalletsRead(BaseModel):
@@ -60,9 +60,4 @@ class WalletsRead(BaseModel):
     user_country_code: Optional[str] = None
     user_country_currency_code: Optional[str] = None
 
-    class Config:
-        from_attributes = True  # Pydantic v2
-
-
-class WalletTopUp(BaseModel):
-    amount: decimal.Decimal
+    model_config = ConfigDict(from_attributes=True)

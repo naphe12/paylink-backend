@@ -7,7 +7,7 @@ import decimal
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
     from app.schemas.tontines import TontinesRead
@@ -49,5 +49,4 @@ class TontineContributionsRead(TontineContributionsBase):
     tontine: Optional["TontinesRead"] = None
     tx: Optional["TransactionsRead"] = None
     user: Optional["UsersRead"] = None
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

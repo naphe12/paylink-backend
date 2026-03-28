@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
     from app.schemas.provideraccounts import ProviderAccountsRead
@@ -48,5 +48,4 @@ class ReconFilesRead(ReconFilesBase):
     parsed_at: Optional[datetime]
     provider_account: Optional["ProviderAccountsRead"] = None
     recon_lines: list["ReconLinesRead"] = None
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

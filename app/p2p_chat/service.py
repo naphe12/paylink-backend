@@ -1,6 +1,7 @@
 from sqlalchemy import desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.legacy_adapters import handle_p2p_chat_with_ai
 from app.models.p2p_dispute import P2PDispute
 from app.models.p2p_offer import P2POffer
 from app.models.p2p_trade import P2PTrade
@@ -114,6 +115,18 @@ async def _load_trade_context(db: AsyncSession, *, user_id, trade_id: str | None
 
 
 async def process_p2p_message(db: AsyncSession, *, user_id, message: str) -> P2PChatResponse:
+    from app.models.users import Users
+
+    user_for_ai = await db.scalar(select(Users).where(Users.user_id == user_id))
+    if user_for_ai is not None:
+        ai_response, used_ai = await handle_p2p_chat_with_ai(
+            db,
+            current_user=user_for_ai,
+            message=message,
+        )
+        if used_ai:
+            return ai_response
+
     draft = parse_p2p_message(message)
     trade, dispute, last_history, offers = await _load_trade_context(db, user_id=user_id, trade_id=draft.trade_id)
 

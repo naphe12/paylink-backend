@@ -5,7 +5,7 @@ import decimal
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class AgentLocationsBase(BaseModel):
@@ -38,6 +38,4 @@ class AgentLocationsUpdate(BaseModel):
 class AgentLocationsRead(AgentLocationsBase):
     agent: Optional["AgentsRead"] = None  # type: ignore[name-defined]
 
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)

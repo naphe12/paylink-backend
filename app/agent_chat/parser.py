@@ -2,7 +2,8 @@ import re
 import unicodedata
 from decimal import Decimal, InvalidOperation
 
-from app.agent_chat.schemas import TransferDraft
+from app.services.assistant_intent_parser_llm import resolve_intent
+from app.agent_chat.schemas import AgentChatDraft
 
 
 AMOUNT_PATTERNS = [
@@ -117,6 +118,11 @@ CAPACITY_WORDS = {
     "combien",
     "peut",
     "utiliser",
+}
+AGENT_TRANSFER_INTENTS = {
+    "external_transfer": "Request or describe an external transfer to another person or country.",
+    "capacity": "Ask about available transfer capacity, credit or balance before sending.",
+    "unknown": "The request does not match another transfer intent.",
 }
 
 
@@ -253,11 +259,18 @@ def _extract_recipient_name(message: str) -> str | None:
     return _extract_recipient_from_free_form(message)
 
 
-def parse_chat_message(message: str) -> TransferDraft:
+def parse_chat_message(message: str) -> AgentChatDraft:
     text = str(message or "").strip()
     normalized_text = normalize_text(text)
-    if any(word in normalized_text for word in CAPACITY_WORDS):
-        return TransferDraft(intent="capacity", raw_message=text)
+    heuristic_intent = "capacity" if any(word in normalized_text for word in CAPACITY_WORDS) else "external_transfer"
+    resolved = resolve_intent(
+        domain="agent_external_transfer",
+        message=text,
+        intents=AGENT_TRANSFER_INTENTS,
+        heuristic_intent=heuristic_intent,
+    )
+    if resolved.intent == "capacity":
+        return AgentChatDraft(intent="capacity", raw_message=text)
     amount, currency = _parse_amount_and_currency(text)
 
     partner_match = PARTNER_PATTERN.search(text)
@@ -275,7 +288,7 @@ def parse_chat_message(message: str) -> TransferDraft:
     if not country_destination:
         country_destination = _find_alias_in_text(text, COUNTRY_ALIASES, COUNTRY_ALIASES_SORTED)
 
-    return TransferDraft(
+    return AgentChatDraft(
         amount=amount,
         currency=currency,
         recipient=_extract_recipient_name(text),

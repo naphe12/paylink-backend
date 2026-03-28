@@ -126,6 +126,18 @@ class Settings(BaseSettings):
     TWILIO_WHATSAPP_NUMBER: str | None = None
     OPENEXCHANGERATES_APP_ID: str = ""
 
+    # -------------------------------------------------
+    # ASSISTANT INTENT PARSER
+    # -------------------------------------------------
+    ASSISTANT_INTENT_PARSER_MODE: str = "heuristic"  # heuristic|hybrid|llm
+    ASSISTANT_INTENT_PARSER_PROVIDER: str = "disabled"  # disabled|ollama|openai_compatible
+    ASSISTANT_INTENT_PARSER_MODEL: str | None = None
+    ASSISTANT_INTENT_PARSER_BASE_URL: str | None = None
+    ASSISTANT_INTENT_PARSER_API_KEY: str | None = None
+    ASSISTANT_INTENT_PARSER_TIMEOUT_SECONDS: float = 4.0
+    ASSISTANT_INTENT_PARSER_MIN_CONFIDENCE: float = 0.55
+    AI_INTERNAL_TESTS_ENABLED: bool = False
+
 @lru_cache()
 def get_settings() -> Settings:
     return Settings()

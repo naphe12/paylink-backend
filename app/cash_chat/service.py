@@ -3,6 +3,7 @@ from decimal import Decimal
 from sqlalchemy import cast, func, select, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.legacy_adapters import handle_cash_chat_with_ai
 from app.cash_chat.parser import parse_cash_message
 from app.cash_chat.schemas import CashChatResponse, CashDraft
 from app.models.credit_lines import CreditLines
@@ -89,6 +90,18 @@ def _build_suggestions(draft: CashDraft, missing: list[str]) -> list[str]:
 
 
 async def process_cash_message(db: AsyncSession, *, user_id, message: str) -> CashChatResponse:
+    from app.models.users import Users
+
+    user_for_ai = await db.scalar(select(Users).where(Users.user_id == user_id))
+    if user_for_ai is not None:
+        ai_response, used_ai = await handle_cash_chat_with_ai(
+            db,
+            current_user=user_for_ai,
+            message=message,
+        )
+        if used_ai:
+            return ai_response
+
     draft = parse_cash_message(message)
     wallet_ctx = await _get_wallet_context(db, user_id)
     draft.wallet_currency = wallet_ctx["wallet_currency"]

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from uuid import UUID
 from decimal import Decimal
 from typing import Optional, List
@@ -44,9 +44,7 @@ class TradeOut(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)
 class FiatSentIn(BaseModel):
     proof_url: str
     note: Optional[str] = None

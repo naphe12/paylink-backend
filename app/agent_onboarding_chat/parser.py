@@ -1,6 +1,18 @@
 import unicodedata
 
+from app.services.assistant_intent_parser_llm import resolve_intent
 from app.agent_onboarding_chat.schemas import AgentOnboardingDraft
+
+
+AGENT_ONBOARDING_INTENTS = {
+    "cash_in": "Ask for help onboarding an agent to do cash-in or deposits.",
+    "cash_out": "Ask for help onboarding an agent to do cash-out or withdrawals.",
+    "scan_client": "Ask how to scan a client or use QR during onboarding.",
+    "external_transfer": "Ask how agent onboarding works for external transfers or partners.",
+    "client_checks": "Ask for customer verification, KYC or client checks during onboarding.",
+    "common_errors": "Ask about common onboarding errors, issues or blockers.",
+    "unknown": "The request does not match another onboarding intent.",
+}
 
 
 def normalize_text(value: str | None) -> str:
@@ -51,4 +63,10 @@ def _detect_scenario(message: str) -> str:
 
 def parse_agent_onboarding_message(message: str) -> AgentOnboardingDraft:
     text = str(message or "").strip()
-    return AgentOnboardingDraft(intent=_detect_intent(text), scenario=_detect_scenario(text), raw_message=text)
+    resolved = resolve_intent(
+        domain="agent_onboarding",
+        message=text,
+        intents=AGENT_ONBOARDING_INTENTS,
+        heuristic_intent=_detect_intent(text),
+    )
+    return AgentOnboardingDraft(intent=resolved.intent, scenario=_detect_scenario(text), raw_message=text)

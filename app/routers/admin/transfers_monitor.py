@@ -46,6 +46,18 @@ def serialize_decimal(value: Optional[Decimal]) -> float:
     return float(value or 0)
 
 
+def _extract_transfer_flags(metadata: dict | None) -> dict:
+    payload = dict(metadata or {})
+    return {
+        "review_reasons": list(payload.get("review_reasons") or []),
+        "aml_reason_codes": list(payload.get("aml_reason_codes") or []),
+        "aml_risk_score": payload.get("aml_risk_score"),
+        "aml_manual_review_required": bool(payload.get("aml_manual_review_required")),
+        "funding_pending": bool(payload.get("funding_pending")),
+        "required_credit_topup": payload.get("required_credit_topup"),
+    }
+
+
 @router.get("")
 @router.get("/")
 async def list_external_transfers(
@@ -86,6 +98,7 @@ async def list_external_transfers(
             ExternalTransfers.currency.label("local_currency"),
             ExternalTransfers.country_destination,
             ExternalTransfers.reference_code,
+            ExternalTransfers.metadata_.label("transfer_metadata"),
         )
         .join(Users, Users.user_id == Transactions.initiated_by, isouter=True)
         .join(
@@ -130,9 +143,81 @@ async def list_external_transfers(
             "local_amount": serialize_decimal(r.local_amount) if r.local_amount is not None else None,
             "local_currency": _resolve_local_currency(r.country_destination, r.local_currency),
             "reference_code": r.reference_code,
+            "transfer_metadata": dict(r.transfer_metadata or {}),
+            **_extract_transfer_flags(dict(r.transfer_metadata or {})),
         }
         for r in rows
     ]
+
+
+@router.get("/{transfer_ref}")
+async def get_external_transfer_detail(
+    transfer_ref: str,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    transfer_stmt = (
+        select(
+            Transactions,
+            Users,
+            ExternalTransfers,
+        )
+        .join(Users, Users.user_id == Transactions.initiated_by, isouter=True)
+        .join(
+            ExternalTransfers,
+            ExternalTransfers.transfer_id == Transactions.related_entity_id,
+            isouter=True,
+        )
+        .where(
+            or_(
+                cast(Transactions.tx_id, String) == transfer_ref,
+                ExternalTransfers.reference_code == transfer_ref,
+                cast(ExternalTransfers.transfer_id, String) == transfer_ref,
+            )
+        )
+        .order_by(Transactions.created_at.desc())
+        .limit(1)
+    )
+    row = (await db.execute(transfer_stmt)).first()
+    if row is None:
+        return {"detail": "Transfert introuvable."}
+
+    tx, user, transfer = row
+    if transfer is None:
+        return {"detail": "Transfert introuvable."}
+    metadata = dict(getattr(transfer, "metadata_", {}) or {})
+    return {
+        "tx_id": str(getattr(tx, "tx_id", "") or "") or None,
+        "transfer_id": str(transfer.transfer_id),
+        "reference_code": transfer.reference_code,
+        "transaction_status": str(getattr(tx, "status", "") or "") or None,
+        "transfer_status": str(getattr(transfer, "status", "") or ""),
+        "initiator": {
+            "user_id": str(getattr(user, "user_id", "") or "") or None,
+            "full_name": getattr(user, "full_name", None),
+            "email": getattr(user, "email", None),
+            "risk_score": getattr(user, "risk_score", None),
+            "kyc_tier": getattr(user, "kyc_tier", None),
+        },
+        "beneficiary": {
+            "recipient_name": transfer.recipient_name,
+            "recipient_phone": transfer.recipient_phone,
+            "partner_name": transfer.partner_name,
+            "country_destination": transfer.country_destination,
+        },
+        "amounts": {
+            "amount": serialize_decimal(transfer.amount),
+            "destination_currency": transfer.currency,
+            "local_amount": serialize_decimal(transfer.local_amount) if transfer.local_amount is not None else None,
+            "local_currency": _resolve_local_currency(transfer.country_destination, transfer.currency),
+            "rate": serialize_decimal(transfer.rate) if transfer.rate is not None else None,
+        },
+        "flags": _extract_transfer_flags(metadata),
+        "metadata": metadata,
+        "created_at": transfer.created_at.isoformat() if transfer.created_at else None,
+        "processed_at": transfer.processed_at.isoformat() if transfer.processed_at else None,
+        "processed_by": str(transfer.processed_by) if transfer.processed_by else None,
+    }
 
 
 @router.get("/summary")

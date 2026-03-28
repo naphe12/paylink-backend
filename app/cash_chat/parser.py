@@ -2,6 +2,7 @@ import re
 import unicodedata
 from decimal import Decimal, InvalidOperation
 
+from app.services.assistant_intent_parser_llm import resolve_intent
 from app.cash_chat.schemas import CashDraft
 
 
@@ -45,6 +46,13 @@ DEPOSIT_WORDS = {"depot", "deposer", "cashin", "cash-in", "cash in", "recharger"
 WITHDRAW_WORDS = {"retrait", "retirer", "cashout", "cash-out", "cash out"}
 CAPACITY_WORDS = {"capacite", "solde", "combien", "disponible", "wallet", "credit"}
 STATUS_WORDS = {"statut", "status", "demande", "pending", "approuvee", "approuve", "rejetee", "rejet", "completee", "complete"}
+CASH_INTENTS = {
+    "deposit": "Ask to deposit money, cash-in or recharge a wallet.",
+    "withdraw": "Ask to withdraw money or cash-out.",
+    "capacity": "Ask for available balance or capacity before a cash action.",
+    "request_status": "Ask for the status of a cash deposit or withdrawal request.",
+    "unknown": "The request does not match another cash intent.",
+}
 
 
 def normalize_text(value: str | None) -> str:
@@ -98,8 +106,9 @@ def parse_cash_message(message: str) -> CashDraft:
     text = str(message or "").strip()
     amount, currency = _parse_amount_and_currency(text)
     phone_match = PHONE_PATTERN.search(text)
+    resolved = resolve_intent(domain="cash", message=text, intents=CASH_INTENTS, heuristic_intent=_detect_intent(text))
     return CashDraft(
-        intent=_detect_intent(text),
+        intent=resolved.intent,
         amount=amount,
         currency=currency,
         mobile_number=phone_match.group(1) if phone_match else None,

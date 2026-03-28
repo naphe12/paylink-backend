@@ -3,6 +3,7 @@ from decimal import Decimal
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.legacy_adapters import handle_transfer_support_with_ai
 from app.models.credit_lines import CreditLines
 from app.models.external_transfers import ExternalTransfers
 from app.models.transactions import Transactions
@@ -22,6 +23,21 @@ STATUS_LABELS = {
     "cancelled": "annulee",
     "reversed": "annulee ou retournee",
 }
+AML_ALERT_THRESHOLD = 50
+AML_MANUAL_REVIEW_THRESHOLD = 60
+AML_AUTO_FREEZE_THRESHOLD = 80
+AML_REASON_LABELS = {
+    "AML_KYC_UNVERIFIED": "niveau KYC non verifie",
+    "AML_KYC_BASIC": "niveau KYC basique",
+    "AML_NEW_ACCOUNT_LT_7D": "compte tres recent",
+    "AML_NEW_ACCOUNT_LT_30D": "compte recent",
+    "AML_AMOUNT_GE_1000000": "montant tres eleve",
+    "AML_AMOUNT_GE_300000": "montant eleve",
+    "AML_EXTERNAL_CHANNEL": "canal transfert externe",
+    "AML_SCORE_ALERT": "alerte AML",
+    "AML_SCORE_MANUAL_REVIEW": "revue manuelle AML",
+    "AML_SCORE_CRITICAL": "score AML critique",
+}
 
 
 def _fmt_decimal(value: Decimal) -> str:
@@ -37,6 +53,37 @@ def _build_suggestions() -> list[str]:
         "Demande la capacite financiere actuelle.",
         "Suis la reference EXT-AB12CD34.",
     ]
+
+
+def _describe_aml_reason(metadata: dict) -> str:
+    aml_score = metadata.get("aml_risk_score")
+    manual_review = bool(metadata.get("aml_manual_review_required"))
+    if aml_score is None:
+        return "un controle AML manuel est en cours"
+    try:
+        score = int(aml_score)
+    except Exception:
+        return f"un controle AML manuel est en cours (score enregistre: {aml_score})"
+
+    if score >= AML_AUTO_FREEZE_THRESHOLD:
+        return f"le score AML est critique ({score}) et demande une intervention conformite prioritaire"
+    if score >= AML_MANUAL_REVIEW_THRESHOLD:
+        return f"le score AML ({score}) depasse le seuil de revue manuelle ({AML_MANUAL_REVIEW_THRESHOLD})"
+    if manual_review or score >= AML_ALERT_THRESHOLD:
+        return f"le score AML ({score}) a declenche une alerte de conformite (seuil {AML_ALERT_THRESHOLD})"
+    return f"une verification AML reste attachee au dossier (score {score})"
+
+
+def _describe_aml_reason_codes(metadata: dict) -> str | None:
+    reason_codes = [str(item) for item in (metadata.get("aml_reason_codes") or [])]
+    labels = [AML_REASON_LABELS.get(code) for code in reason_codes if AML_REASON_LABELS.get(code)]
+    if not labels:
+        return None
+    if len(labels) == 1:
+        return labels[0]
+    if len(labels) == 2:
+        return f"{labels[0]} et {labels[1]}"
+    return f"{', '.join(labels[:-1])} et {labels[-1]}"
 
 
 async def _find_transfer(db: AsyncSession, *, user_id, reference_code: str | None):
@@ -95,13 +142,28 @@ def _status_message(status: str, *, review_reasons: list[str], metadata: dict, t
 
     if normalized_status in {"pending", "initiated"}:
         if "insufficient_funds" in review_reasons and "aml" in review_reasons:
-            message = "La demande est en pending parce qu'elle attend a la fois une couverture de fonds et une verification AML."
+            shortfall = str(metadata.get("required_credit_topup") or "").strip()
+            funding_part = (
+                f"une couverture complementaire de {shortfall}" if shortfall else "une couverture de fonds"
+            )
+            message = f"La demande est en pending parce qu'elle attend a la fois {funding_part} et {_describe_aml_reason(metadata)}."
         elif "insufficient_funds" in review_reasons:
-            message = "La demande est en pending parce que la couverture disponible etait insuffisante au moment de la creation."
+            shortfall = str(metadata.get("required_credit_topup") or "").strip()
+            if shortfall:
+                message = f"La demande est en pending parce qu'il manque encore {shortfall} pour la financer."
+            else:
+                message = "La demande est en pending parce que la couverture disponible etait insuffisante au moment de la creation."
         elif "aml" in review_reasons or metadata.get("aml_manual_review_required"):
-            message = "La demande est en pending a cause d'un controle AML ou d'une revue manuelle."
+            message = f"La demande est en pending parce que {_describe_aml_reason(metadata)}."
+            detail = _describe_aml_reason_codes(metadata)
+            if detail:
+                message = f"{message} Signaux principaux: {detail}."
         elif metadata.get("funding_pending"):
-            message = "La demande est en pending parce qu'un financement complementaire est encore attendu avant validation."
+            shortfall = str(metadata.get("required_credit_topup") or "").strip()
+            if shortfall:
+                message = f"La demande est en pending parce qu'un financement complementaire de {shortfall} est encore attendu avant validation."
+            else:
+                message = "La demande est en pending parce qu'un financement complementaire est encore attendu avant validation."
         else:
             message = "La demande est en pending et attend encore une validation manuelle."
     elif normalized_status == "approved":
@@ -122,13 +184,31 @@ def _status_message(status: str, *, review_reasons: list[str], metadata: dict, t
         assumptions.append("Une intervention agent ou backoffice a deja ete enregistree sur cette demande.")
     if metadata.get("funding_pending"):
         assumptions.append("Le dossier comporte un financement en attente.")
+    if metadata.get("aml_risk_score") is not None:
+        assumptions.append(
+            f"Score AML enregistre: {metadata.get('aml_risk_score')} "
+            f"(alerte {AML_ALERT_THRESHOLD}, revue manuelle externe {AML_MANUAL_REVIEW_THRESHOLD})."
+        )
+    aml_reason_detail = _describe_aml_reason_codes(metadata)
+    if aml_reason_detail:
+        assumptions.append(f"Motifs AML enregistres: {aml_reason_detail}.")
     return message, assumptions
 
 
 async def process_transfer_support_message(db: AsyncSession, *, user_id, message: str) -> TransferSupportChatResponse:
+    user_for_ai = await db.scalar(select(Users).where(Users.user_id == user_id))
+    if user_for_ai is not None:
+        ai_response, used_ai = await handle_transfer_support_with_ai(
+            db,
+            current_user=user_for_ai,
+            message=message,
+        )
+        if used_ai:
+            return ai_response
+
     draft = parse_transfer_support_message(message)
     transfer = await _find_transfer(db, user_id=user_id, reference_code=draft.reference_code)
-    user = await db.scalar(select(Users).where(Users.user_id == user_id))
+    user = user_for_ai
     wallet_ctx = await _get_wallet_context(db, user_id)
 
     if draft.intent == "capacity":

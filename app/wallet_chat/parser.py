@@ -6,6 +6,7 @@ from app.services.assistant_semantic_parser import (
     normalize_text,
     tokenize,
 )
+from app.services.assistant_intent_parser_llm import resolve_intent
 from app.wallet_chat.schemas import WalletDraft
 
 
@@ -14,6 +15,14 @@ LIMIT_WORDS = {"limite", "limites", "plafond", "plafonds", "journalier", "mensue
 ACTIVITY_WORDS = {"mouvement", "mouvements", "historique", "recent", "recents", "activite"}
 STATUS_WORDS = {"statut", "status", "compte", "gele", "bloque", "kyc", "situation"}
 EXPLAIN_WORDS = {"expliquer", "explique", "explication", "details", "detail", "pourquoi"}
+WALLET_INTENTS = {
+    "balance": "Ask for wallet or account balance.",
+    "limits": "Ask for limits, ceilings, daily or monthly caps.",
+    "recent_activity": "Ask for recent wallet activity, transactions or movement history.",
+    "account_status": "Ask for account status, KYC status, blocked or frozen account state.",
+    "explain_movements_on_date": "Ask to explain movements or transactions on a specific date.",
+    "unknown": "The request does not match another wallet intent.",
+}
 
 
 def _detect_scope(normalized: str) -> str:
@@ -81,10 +90,12 @@ def _build_wallet_semantic_query(message: str) -> SemanticQuery:
 def parse_wallet_message(message: str) -> WalletDraft:
     text = str(message or "").strip()
     query = _build_wallet_semantic_query(text)
+    resolved = resolve_intent(domain="wallet", message=text, intents=WALLET_INTENTS, heuristic_intent=query.action)
+    query.action = resolved.intent
     return WalletDraft(
         intent=query.action,
         raw_message=text,
         target_date=query.exact_date,
         scope=query.subject or "both",
-        semantic_hints=query.to_dict(),
+        semantic_hints={**query.to_dict(), "intent_parser_source": resolved.source, "intent_confidence": resolved.confidence},
     )

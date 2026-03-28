@@ -7,7 +7,7 @@ import decimal
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
     from app.schemas.currencies import CurrenciesRead
@@ -63,5 +63,4 @@ class LoansRead(LoansBase):
     users: Optional["UsersRead"] = None
     currencies: Optional["CurrenciesRead"] = None
     loan_repayments: list["LoanRepaymentsRead"] = None
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

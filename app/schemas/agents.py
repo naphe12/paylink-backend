@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
     from app.schemas.agentlocations import AgentLocationsRead
@@ -34,5 +34,4 @@ class AgentsRead(AgentsBase):
     user: Optional["UsersRead"] = None
     locations: Optional[List["AgentLocationsRead"]] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

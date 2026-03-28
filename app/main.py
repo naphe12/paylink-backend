@@ -16,6 +16,7 @@ from jose import JWTError, jwt
 from sqlalchemy import text
 
 import app.schemas
+from app.ai.router import router as ai_router
 from app.api.ws_security import router as ws_security_router
 from app.api.ws_tracking import router as ws_tracking_router
 from app.api.ops_payout import router as ops_payout_router
@@ -100,6 +101,7 @@ from app.routers.wallet.transfer import router as transfer_router
 from app.routers.ws import router as ws_router
 from app.services.backoffice_risk import router as backoffice_risk_router
 from app.services.idempotency_service import ensure_idempotency_schema
+from app.services.ai_runtime_schema import ensure_ai_runtime_schema
 from app.services.telegram_external_transfer_service import ensure_telegram_external_transfer_schema
 from app.services.auth_sessions import ensure_auth_refresh_schema
 from app.services.sandbox_transition_worker import run_sandbox_auto_transitions
@@ -494,6 +496,7 @@ app.include_router(agent_p2p_chat_router)
 app.include_router(agent_router_extern)
 app.include_router(telegram_external_transfer_router)
 app.include_router(debug.router)
+app.include_router(ai_router)
 app.include_router(meta_router)
 app.include_router(test_email.router)
 app.include_router(health_router)
@@ -854,6 +857,7 @@ async def startup_event():
         await ensure_idempotency_schema(db)
         await ensure_request_metrics_schema(db)
         await ensure_telegram_external_transfer_schema(db)
+        await ensure_ai_runtime_schema(db)
         await db.commit()
         break
 

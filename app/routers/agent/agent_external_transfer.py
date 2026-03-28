@@ -16,6 +16,7 @@ from app.dependencies.auth import (
     get_current_user,  # ou une version spéciale pour les agents
 )
 from app.models.agent_transactions import AgentTransactions
+from app.models.external_beneficiaries import ExternalBeneficiaries
 from app.models.external_transfers import ExternalTransfers
 from app.models.transactions import Transactions
 from app.models.users import Users
@@ -64,6 +65,18 @@ def _jsonify_metadata(value):
 
 def _is_valid_external_phone(value: str | None) -> bool:
     return bool(EXTERNAL_TRANSFER_PHONE_RE.fullmatch(str(value or "").strip()))
+
+
+def _extract_transfer_risk_flags(metadata: dict | None) -> dict:
+    payload = dict(metadata or {})
+    return {
+        "review_reasons": list(payload.get("review_reasons") or []),
+        "aml_reason_codes": list(payload.get("aml_reason_codes") or []),
+        "aml_risk_score": payload.get("aml_risk_score"),
+        "aml_manual_review_required": bool(payload.get("aml_manual_review_required")),
+        "funding_pending": bool(payload.get("funding_pending")),
+        "required_credit_topup": payload.get("required_credit_topup"),
+    }
 
 
 async def _ensure_transfer_transaction(
@@ -357,6 +370,7 @@ async def get_pending_transfers(
 
     serialized = []
     for transfer, full_name, email in rows:
+        metadata = dict(transfer.metadata_ or {})
         serialized.append(
             {
                 "transfer_id": str(transfer.transfer_id),
@@ -372,12 +386,13 @@ async def get_pending_transfers(
                 "credit_used": bool(transfer.credit_used),
                 "status": transfer.status,
                 "reference_code": transfer.reference_code,
-                "metadata": transfer.metadata_,
+                "metadata": metadata,
                 "created_at": transfer.created_at,
                 "processed_by": str(transfer.processed_by) if transfer.processed_by else None,
                 "processed_at": transfer.processed_at,
                 "user_name": full_name,
                 "user_email": email,
+                **_extract_transfer_risk_flags(metadata),
             }
         )
     return serialized
@@ -546,24 +561,58 @@ async def list_external_beneficiaries_for_user(
     Bénéficiaires utilisés par un utilisateur pour ses transferts externes.
     """
     stmt = (
-        select(
-            ExternalTransfers.recipient_name,
-            ExternalTransfers.recipient_phone,
-            ExternalTransfers.partner_name,
-            ExternalTransfers.country_destination,
-        )
+        select(ExternalTransfers)
         .where(ExternalTransfers.user_id == user_id)
-        .distinct()
-        .order_by(ExternalTransfers.recipient_name.asc())
+        .order_by(ExternalTransfers.created_at.desc())
     )
-    rows = (await db.execute(stmt)).all()
-    return [
-        {
-            "recipient_name": r.recipient_name,
-            "recipient_phone": str(r.recipient_phone or "").strip() or None,
-            "partner_name": r.partner_name,
-            "country_destination": r.country_destination,
+    saved_stmt = (
+        select(ExternalBeneficiaries)
+        .where(
+            ExternalBeneficiaries.user_id == user_id,
+            ExternalBeneficiaries.is_active.is_(True),
+        )
+        .order_by(ExternalBeneficiaries.recipient_name.asc())
+    )
+    transfers = (await db.execute(stmt)).scalars().all()
+    saved = (await db.execute(saved_stmt)).scalars().all()
+    beneficiaries: dict[tuple[str, str, str], dict] = {}
+
+    for row in saved:
+        phone = str(row.recipient_phone or "").strip()
+        if not _is_valid_external_phone(phone):
+            continue
+        account_ref = str(row.recipient_email or "").strip().lower()
+        beneficiaries[(str(row.partner_name or "").strip().lower(), phone, account_ref)] = {
+            "recipient_name": row.recipient_name,
+            "recipient_phone": phone or None,
+            "account_ref": account_ref or None,
+            "recipient_email": str(row.recipient_email or "").strip().lower() or None,
+            "partner_name": row.partner_name,
+            "country_destination": row.country_destination,
+            "source": "saved_beneficiary",
         }
-        for r in rows
-        if _is_valid_external_phone(r.recipient_phone)
-    ]
+
+    for row in transfers:
+        phone = str(row.recipient_phone or "").strip()
+        if not _is_valid_external_phone(phone):
+            continue
+        metadata = dict(row.metadata_ or {})
+        account_ref = str(metadata.get("recipient_email") or "").strip().lower()
+        key = (str(row.partner_name or "").strip().lower(), phone, account_ref)
+        beneficiaries.setdefault(
+            key,
+            {
+                "recipient_name": row.recipient_name,
+                "recipient_phone": phone or None,
+                "account_ref": account_ref or None,
+                "recipient_email": str(metadata.get("recipient_email") or "").strip().lower() or None,
+                "partner_name": row.partner_name,
+                "country_destination": row.country_destination,
+                "source": "transfer_history",
+            },
+        )
+
+    return sorted(
+        beneficiaries.values(),
+        key=lambda item: (str(item.get("recipient_name") or "").lower(), str(item.get("partner_name") or "").lower()),
+    )

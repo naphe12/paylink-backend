@@ -1,5 +1,5 @@
 # schemas/telegram_user.py
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 class TelegramUserBase(BaseModel):
     chat_id: str
@@ -15,5 +15,4 @@ class TelegramUserCreate(TelegramUserBase):
 class TelegramUserOut(TelegramUserBase):
     id: int
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)

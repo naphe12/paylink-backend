@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 # 🧩 Schéma de base (commun à tous)
@@ -32,5 +32,4 @@ class UserAuthUpdate(BaseModel):
 # 📖 Schéma pour lecture (retour API)
 class UserAuthRead(UserAuthBase):
     password_hash: Optional[str] = None  # ⚠️ Facultatif, ne pas exposer publiquement
-    class Config:
-        from_attributes = True  # (ex-orm_mode = True pour Pydantic v2)
+    model_config = ConfigDict(from_attributes=True)

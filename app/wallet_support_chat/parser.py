@@ -1,5 +1,6 @@
 import unicodedata
 
+from app.services.assistant_intent_parser_llm import resolve_intent
 from app.wallet_support_chat.schemas import WalletSupportDraft
 
 
@@ -9,6 +10,15 @@ WITHDRAW_WORDS = {"retrait", "withdraw", "bloque", "blocke", "refuse", "pending"
 FROZEN_WORDS = {"gele", "geler", "frozen", "bloque", "suspendu", "suspendue"}
 SEND_WORDS = {"envoyer", "transfert", "payer", "plus", "impossible"}
 LATEST_WORDS = {"dernier", "latest", "mouvement", "operation", "transaction"}
+WALLET_SUPPORT_INTENTS = {
+    "balance_drop": "Ask why the wallet balance dropped or money disappeared.",
+    "missing_deposit": "Report a deposit or cash-in that is missing.",
+    "blocked_withdraw": "Report a blocked, refused or pending withdrawal.",
+    "frozen_account": "Report or ask about a frozen or suspended account.",
+    "cant_send": "Report being unable to send money or make a transfer.",
+    "latest_movement": "Ask for the latest wallet transaction or movement.",
+    "unknown": "The request does not match another wallet support intent.",
+}
 
 
 def normalize_text(value: str | None) -> str:
@@ -38,4 +48,10 @@ def _detect_intent(message: str) -> str:
 
 def parse_wallet_support_message(message: str) -> WalletSupportDraft:
     text = str(message or "").strip()
-    return WalletSupportDraft(intent=_detect_intent(text), raw_message=text)
+    resolved = resolve_intent(
+        domain="wallet_support",
+        message=text,
+        intents=WALLET_SUPPORT_INTENTS,
+        heuristic_intent=_detect_intent(text),
+    )
+    return WalletSupportDraft(intent=resolved.intent, raw_message=text)

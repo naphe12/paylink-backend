@@ -7,7 +7,7 @@ import decimal
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
     from app.schemas.amlevents import AmlEventsRead
@@ -90,9 +90,7 @@ class TransactionsRead(TransactionsBase):
     tontine_contributions: list["TontineContributionsRead"] = None
     tontine_payouts: list["TontinePayoutsRead"] = None
     bill_payments: list["BillPaymentsRead"] = None
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)
 class TransactionListItem(BaseModel):
     tx_id: str
     amount: float
@@ -101,12 +99,4 @@ class TransactionListItem(BaseModel):
     direction: str  # "sent" or "received"
     description: Optional[str]
 
-    class Config:
-        from_attributes = True
-
-# app/schemas/transactions.py
-class TransactionSend(BaseModel):
-    to_identifier: str  # email ou téléphone
-    amount: float
-    description: Optional[str] = None
-
+    model_config = ConfigDict(from_attributes=True)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
     from app.schemas.transactions import TransactionsRead
@@ -52,5 +52,4 @@ class DisputesRead(DisputesBase):
     evidence_url: Optional[str]
     users: Optional["UsersRead"] = None
     tx: Optional["TransactionsRead"] = None
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

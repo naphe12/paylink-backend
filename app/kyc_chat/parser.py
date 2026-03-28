@@ -1,5 +1,6 @@
 import unicodedata
 
+from app.services.assistant_intent_parser_llm import resolve_intent
 from app.kyc_chat.schemas import KycDraft
 
 
@@ -7,6 +8,13 @@ STATUS_WORDS = {"kyc", "statut", "status", "niveau", "tier", "identite"}
 MISSING_DOCS_WORDS = {"document", "documents", "piece", "pieces", "manque", "manquant", "requis"}
 LIMIT_WORDS = {"limite", "limites", "plafond", "plafonds", "journalier", "mensuel"}
 UPGRADE_WORDS = {"upgrade", "niveau", "suivant", "debloque", "change", "ameliore", "faire", "completer"}
+KYC_INTENTS = {
+    "status": "Ask for current KYC status, level or identity verification state.",
+    "missing_docs": "Ask which KYC documents are missing or required.",
+    "limits": "Ask about limits linked to KYC level.",
+    "upgrade_benefits": "Ask what changes after upgrading or completing KYC.",
+    "unknown": "The request does not match another KYC intent.",
+}
 
 
 def normalize_text(value: str | None) -> str:
@@ -39,7 +47,8 @@ def _detect_intent(message: str) -> str:
 
 def parse_kyc_message(message: str) -> KycDraft:
     text = str(message or "").strip()
+    resolved = resolve_intent(domain="kyc", message=text, intents=KYC_INTENTS, heuristic_intent=_detect_intent(text))
     return KycDraft(
-        intent=_detect_intent(text),
+        intent=resolved.intent,
         raw_message=text,
     )

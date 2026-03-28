@@ -2,6 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import ProgrammingError
 
+from app.ai.legacy_adapters import handle_kyc_chat_with_ai
 from app.kyc_chat.parser import parse_kyc_message
 from app.kyc_chat.schemas import KycChatResponse, KycDraft
 from app.models.kyc_verifications import KycVerifications
@@ -101,6 +102,16 @@ def _next_tier_message(current_tier: int) -> str:
 
 
 async def process_kyc_message(db: AsyncSession, *, user_id, message: str) -> KycChatResponse:
+    user_for_ai = await db.scalar(select(Users).where(Users.user_id == user_id))
+    if user_for_ai is not None:
+        ai_response, used_ai = await handle_kyc_chat_with_ai(
+            db,
+            current_user=user_for_ai,
+            message=message,
+        )
+        if used_ai:
+            return ai_response
+
     draft = parse_kyc_message(message)
     user, verification = await _get_user_context(db, user_id)
     if not user:
