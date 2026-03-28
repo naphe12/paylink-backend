@@ -32,7 +32,6 @@ from app.schemas.external_transfers import (
     ExternalTransferCreate,
     ExternalTransferRead,
 )
-from app.schemas.transactions import TransactionSend
 from app.services.aml import update_risk_score
 from app.services.ledger import LedgerLine, LedgerService
 from app.services.risk_engine import calculate_risk_score

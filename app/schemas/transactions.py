@@ -100,3 +100,9 @@ class TransactionListItem(BaseModel):
     description: Optional[str]
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class TransactionSend(BaseModel):
+    to_identifier: str
+    amount: decimal.Decimal
+    description: Optional[str] = None
