@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Text, text
+from sqlalchemy import Boolean, Column, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 
 from app.core.database import Base
@@ -13,3 +13,4 @@ class AiSynonyms(Base):
     canonical_value = Column(Text, nullable=False)
     synonym = Column(Text, nullable=False)
     language_code = Column(Text, nullable=False, server_default=text("'fr'"))
+    is_active = Column(Boolean, nullable=False, server_default=text("true"))

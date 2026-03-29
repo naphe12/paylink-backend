@@ -63,6 +63,15 @@ class AiSynonymCreate(BaseModel):
     canonical_value: str
     synonym: str
     language_code: str = "fr"
+    is_active: bool = True
+
+
+class AiSynonymUpdate(BaseModel):
+    domain: str
+    canonical_value: str
+    synonym: str
+    language_code: str = "fr"
+    is_active: bool = True
 
 
 class AiSynonymRead(BaseModel):
@@ -71,5 +80,6 @@ class AiSynonymRead(BaseModel):
     canonical_value: str
     synonym: str
     language_code: str
+    is_active: bool
 
     model_config = ConfigDict(from_attributes=True)

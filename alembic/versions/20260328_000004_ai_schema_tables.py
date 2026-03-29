@@ -77,7 +77,8 @@ def upgrade() -> None:
           domain text NOT NULL,
           canonical_value text NOT NULL,
           synonym text NOT NULL,
-          language_code text NOT NULL DEFAULT 'fr'
+          language_code text NOT NULL DEFAULT 'fr',
+          is_active boolean NOT NULL DEFAULT true
         )
         """
     )

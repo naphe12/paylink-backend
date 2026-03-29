@@ -29,7 +29,7 @@ class RuntimeMetadata:
 async def load_runtime_metadata(db: AsyncSession) -> RuntimeMetadata:
     intents_rows = (await db.execute(select(AiIntents).where(AiIntents.enabled.is_(True)))).scalars().all()
     slots_rows = (await db.execute(select(AiIntentSlots))).scalars().all()
-    synonyms_rows = (await db.execute(select(AiSynonyms))).scalars().all()
+    synonyms_rows = (await db.execute(select(AiSynonyms).where(AiSynonyms.is_active.is_(True)))).scalars().all()
     action_rows = (await db.execute(select(AiActionRegistry).where(AiActionRegistry.enabled.is_(True)))).scalars().all()
     prompt_rows = (
         await db.execute(select(AiPromptFragments).where(AiPromptFragments.enabled.is_(True)))

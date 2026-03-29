@@ -75,11 +75,13 @@ async def ensure_ai_runtime_schema(db: AsyncSession) -> None:
               domain text NOT NULL,
               canonical_value text NOT NULL,
               synonym text NOT NULL,
-              language_code text NOT NULL DEFAULT 'fr'
+              language_code text NOT NULL DEFAULT 'fr',
+              is_active boolean NOT NULL DEFAULT true
             )
             """
         )
     )
+    await db.execute(text("ALTER TABLE ia.ai_synonyms ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true"))
     await db.execute(
         text(
             """
@@ -421,3 +423,4 @@ async def ensure_ai_runtime_schema(db: AsyncSession) -> None:
             """
         )
     )
+    await db.execute(text("UPDATE ia.ai_synonyms SET is_active = true WHERE is_active IS NULL"))
