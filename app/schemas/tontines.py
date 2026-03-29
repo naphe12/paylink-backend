@@ -93,3 +93,25 @@ class TontineOut(BaseModel):
     members: list[TontineMemberOut] = Field(default=[], alias="tontine_members")
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class TontineDetailMember(BaseModel):
+    user_id: UUID
+    name: str | None = None
+    phone: str | None = None
+    is_online: bool = False
+
+
+class TontineDetailResponse(BaseModel):
+    tontine_id: UUID
+    owner_user: UUID
+    name: str
+    currency_code: str
+    periodicity_days: int
+    status: str
+    tontine_type: str | None = None
+    amount_per_member: float
+    current_round: int | None = None
+    next_rotation_at: datetime | None = None
+    common_pot: float | None = None
+    members: list[TontineDetailMember] = Field(default_factory=list)
