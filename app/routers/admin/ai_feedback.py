@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import String, cast, desc, or_, select
+from sqlalchemy import String, cast, delete, desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -19,6 +19,8 @@ from app.schemas.ai_feedback import (
     AiFeedbackAnnotationCreate,
     AiFeedbackAnnotationRead,
     AiFeedbackSuggestionRead,
+    AiSynonymCreate,
+    AiSynonymRead,
 )
 
 router = APIRouter(prefix="/admin/ai", tags=["Admin AI Feedback"])
@@ -27,6 +29,10 @@ router = APIRouter(prefix="/admin/ai", tags=["Admin AI Feedback"])
 def _normalize_feedback_synonym(raw_message: str) -> str | None:
     value = " ".join(str(raw_message or "").strip().lower().split())
     return value or None
+
+
+def _normalize_manual_synonym(value: str) -> str:
+    return " ".join(str(value or "").strip().lower().split())
 
 
 def _build_annotation_suggestions(
@@ -343,3 +349,87 @@ async def apply_ai_feedback_suggestion(
     await db.commit()
     await db.refresh(suggestion)
     return suggestion
+
+
+@router.get("/synonyms", response_model=list[AiSynonymRead])
+async def list_ai_synonyms(
+    domain: str | None = Query(None),
+    language_code: str | None = Query(None),
+    canonical_value: str | None = Query(None),
+    q: str | None = Query(None),
+    limit: int = Query(200, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+    _: Users = Depends(get_current_admin),
+):
+    stmt = select(AiSynonyms).order_by(AiSynonyms.domain, AiSynonyms.canonical_value, AiSynonyms.synonym).limit(limit)
+    if domain:
+        stmt = stmt.where(AiSynonyms.domain == str(domain).strip())
+    if language_code:
+        stmt = stmt.where(AiSynonyms.language_code == str(language_code).strip())
+    if canonical_value:
+        stmt = stmt.where(AiSynonyms.canonical_value.ilike(f"%{str(canonical_value).strip()}%"))
+    if q:
+        pattern = f"%{str(q).strip()}%"
+        stmt = stmt.where(
+            or_(
+                AiSynonyms.synonym.ilike(pattern),
+                AiSynonyms.canonical_value.ilike(pattern),
+                AiSynonyms.domain.ilike(pattern),
+                AiSynonyms.language_code.ilike(pattern),
+            )
+        )
+    rows = (await db.execute(stmt)).scalars().all()
+    return rows
+
+
+@router.post("/synonyms", response_model=AiSynonymRead)
+async def create_ai_synonym(
+    payload: AiSynonymCreate,
+    db: AsyncSession = Depends(get_db),
+    _: Users = Depends(get_current_admin),
+):
+    domain = str(payload.domain or "").strip()
+    canonical_value = str(payload.canonical_value or "").strip()
+    synonym = _normalize_manual_synonym(payload.synonym)
+    language_code = str(payload.language_code or "fr").strip() or "fr"
+
+    if not domain or not canonical_value or not synonym:
+        raise HTTPException(status_code=400, detail="domain, canonical_value et synonym sont requis.")
+
+    existing = (
+        await db.execute(
+            select(AiSynonyms).where(
+                AiSynonyms.domain == domain,
+                AiSynonyms.canonical_value == canonical_value,
+                AiSynonyms.synonym == synonym,
+                AiSynonyms.language_code == language_code,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+
+    row = AiSynonyms(
+        domain=domain,
+        canonical_value=canonical_value,
+        synonym=synonym,
+        language_code=language_code,
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return row
+
+
+@router.delete("/synonyms/{synonym_id}")
+async def delete_ai_synonym(
+    synonym_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    _: Users = Depends(get_current_admin),
+):
+    row = await db.get(AiSynonyms, synonym_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Synonyme introuvable.")
+    await db.execute(delete(AiSynonyms).where(AiSynonyms.id == synonym_id))
+    await db.commit()
+    return {"deleted": True, "id": str(synonym_id)}

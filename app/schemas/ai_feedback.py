@@ -56,3 +56,20 @@ class AiFeedbackSuggestionRead(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class AiSynonymCreate(BaseModel):
+    domain: str
+    canonical_value: str
+    synonym: str
+    language_code: str = "fr"
+
+
+class AiSynonymRead(BaseModel):
+    id: UUID
+    domain: str
+    canonical_value: str
+    synonym: str
+    language_code: str
+
+    model_config = ConfigDict(from_attributes=True)
