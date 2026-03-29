@@ -61,3 +61,7 @@ class WalletsRead(BaseModel):
     user_country_currency_code: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class WalletTopUp(BaseModel):
+    amount: Decimal
