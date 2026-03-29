@@ -6,7 +6,7 @@ from app.dependencies.auth import get_current_user
 from app.kyc_chat.schemas import KycChatRequest, KycChatResponse
 from app.kyc_chat.service import cancel_kyc_request, process_kyc_message
 from app.models.users import Users
-from app.routers.agent._target_user import resolve_target_user_id
+from app.routers.agent._target_user import resolve_target_user_context
 
 
 router = APIRouter(prefix="/agent/kyc-chat", tags=["KYC Agent"])
@@ -18,10 +18,16 @@ async def kyc_chat_agent(
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user),
 ):
+    target_context = await resolve_target_user_context(
+        db,
+        current_user,
+        payload.target_user_id,
+        payload.message,
+    )
     return await process_kyc_message(
         db,
-        user_id=resolve_target_user_id(current_user, payload.target_user_id),
-        message=payload.message,
+        user_id=target_context.user_id,
+        message=target_context.message,
     )
 
 

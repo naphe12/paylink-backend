@@ -51,6 +51,9 @@ from app.models.ai_action_registry import AiActionRegistry
 from app.models.ai_pending_actions import AiPendingActions
 from app.models.ai_conversation_state import AiConversationState
 from app.models.ai_audit_logs import AiAuditLogs
+from app.models.ai_feedback_annotations import AiFeedbackAnnotations
+from app.models.ai_feedback_suggestions import AiFeedbackSuggestions
+from app.models.ai_prompt_fragments import AiPromptFragments
 
 __all__ = [
     "AgentLocations",
@@ -105,4 +108,7 @@ __all__ = [
     "AiPendingActions",
     "AiConversationState",
     "AiAuditLogs",
+    "AiFeedbackAnnotations",
+    "AiFeedbackSuggestions",
+    "AiPromptFragments",
 ]

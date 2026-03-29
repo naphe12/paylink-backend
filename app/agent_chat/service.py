@@ -9,6 +9,7 @@ from app.ai.legacy_adapters import handle_agent_chat_with_ai
 from app.agent_chat.parser import normalize_text, parse_chat_message
 from app.agent_chat.schemas import AgentChatDraft, ChatResponse
 from app.models.external_transfers import ExternalTransfers
+from app.models.users import Users
 from app.models.wallets import Wallets
 from app.models.credit_lines import CreditLines
 

@@ -88,6 +88,23 @@ def _network_from_synonyms(message: str, metadata: RuntimeMetadata) -> str | Non
     return _best_synonym_match(message, metadata.synonyms.get("network", {}))
 
 
+def _intents_with_prompt_hints(metadata: RuntimeMetadata) -> dict[str, str]:
+    enriched: dict[str, str] = {}
+    for intent_code, description in AI_INTENTS.items():
+        fragments = metadata.prompt_fragments.get(intent_code, [])
+        hints = [
+            str(item.get("content") or "").strip()
+            for item in fragments
+            if str(item.get("fragment_type") or "").strip() == "feedback_hint"
+            and str(item.get("content") or "").strip()
+        ]
+        if hints:
+            enriched[intent_code] = f"{description} Extra guidance: {' | '.join(hints[:3])}"
+        else:
+            enriched[intent_code] = description
+    return enriched
+
+
 def _build_transfer_entities(message: str, metadata: RuntimeMetadata) -> dict[str, Any]:
     draft = parse_chat_message(message)
     sender_name = None
@@ -201,7 +218,7 @@ def parse_user_message(message: str, metadata: RuntimeMetadata) -> ParsedIntent:
     resolved = resolve_intent(
         domain="ai_gateway",
         message=message,
-        intents=AI_INTENTS,
+        intents=_intents_with_prompt_hints(metadata),
         heuristic_intent=synonym_intent or heuristic_intent,
     )
     intent_code = resolved.intent or synonym_intent or heuristic_intent or "unknown"

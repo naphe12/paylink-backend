@@ -34,6 +34,7 @@ from app.routers import backoffice_audit as backoffice_audit_router
 from app.routers import backoffice_monitoring as backoffice_monitoring_router
 from app.routers.admin import analytics as admin_analytics_router
 from app.routers.admin import agents as admin_agents_router
+from app.routers.admin import ai_feedback as admin_ai_feedback_router
 from app.routers.admin import aml_events as admin_aml_router
 from app.routers.admin import cash_requests as admin_cash_requests_router
 from app.routers.admin import credit_history as admin_credit_history_router
@@ -471,6 +472,7 @@ app.include_router(admin_settings_router.router)
 app.include_router(admin_kyc_router.router)
 app.include_router(admin_analytics_router.router)
 app.include_router(admin_agents_router.router)
+app.include_router(admin_ai_feedback_router.router)
 app.include_router(admin_mobilemoney_router.router)
 app.include_router(admin_tontine_arrears_router.router)
 app.include_router(admin_credit_lines_router.router)

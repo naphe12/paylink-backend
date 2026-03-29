@@ -6,7 +6,7 @@ from app.dependencies.auth import get_current_user
 from app.models.users import Users
 from app.p2p_chat.schemas import P2PChatRequest, P2PChatResponse
 from app.p2p_chat.service import cancel_p2p_request, process_p2p_message
-from app.routers.agent._target_user import resolve_target_user_id
+from app.routers.agent._target_user import resolve_target_user_context
 
 
 router = APIRouter(prefix="/agent/p2p-chat", tags=["P2P Agent"])
@@ -18,10 +18,16 @@ async def p2p_chat_agent(
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user),
 ):
+    target_context = await resolve_target_user_context(
+        db,
+        current_user,
+        payload.target_user_id,
+        payload.message,
+    )
     return await process_p2p_message(
         db,
-        user_id=resolve_target_user_id(current_user, payload.target_user_id),
-        message=payload.message,
+        user_id=target_context.user_id,
+        message=target_context.message,
     )
 
 

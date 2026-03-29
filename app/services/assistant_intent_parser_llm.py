@@ -129,7 +129,11 @@ def _call_openai_compatible(prompt: str) -> dict | None:
     return _extract_json_object(message.get("content"))
 
 
-def classify_intent_with_llm(domain: str, message: str, intents: dict[str, str]) -> IntentResolution | None:
+def classify_intent_with_llm(
+    domain: str,
+    message: str,
+    intents: dict[str, str],
+) -> IntentResolution | None:
     if not _llm_is_configured():
         return None
 
@@ -157,7 +161,12 @@ def classify_intent_with_llm(domain: str, message: str, intents: dict[str, str])
     return IntentResolution(intent=intent, source=f"llm:{provider}", confidence=confidence)
 
 
-def resolve_intent(domain: str, message: str, intents: dict[str, str], heuristic_intent: str) -> IntentResolution:
+def resolve_intent(
+    domain: str,
+    message: str,
+    intents: dict[str, str],
+    heuristic_intent: str,
+) -> IntentResolution:
     mode = _normalized_mode()
     llm_result = classify_intent_with_llm(domain=domain, message=message, intents=intents) if mode in {"hybrid", "llm"} else None
 

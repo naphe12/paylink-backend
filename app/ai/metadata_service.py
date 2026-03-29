@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.ai_action_registry import AiActionRegistry
 from app.models.ai_intent_slots import AiIntentSlots
 from app.models.ai_intents import AiIntents
+from app.models.ai_prompt_fragments import AiPromptFragments
 from app.models.ai_synonyms import AiSynonyms
 
 
@@ -16,11 +17,13 @@ class RuntimeMetadata:
         slots: dict[str, list[dict]],
         synonyms: dict[str, dict[str, str]],
         actions: dict[str, dict],
+        prompt_fragments: dict[str, list[dict]],
     ) -> None:
         self.intents = intents
         self.slots = slots
         self.synonyms = synonyms
         self.actions = actions
+        self.prompt_fragments = prompt_fragments
 
 
 async def load_runtime_metadata(db: AsyncSession) -> RuntimeMetadata:
@@ -28,6 +31,9 @@ async def load_runtime_metadata(db: AsyncSession) -> RuntimeMetadata:
     slots_rows = (await db.execute(select(AiIntentSlots))).scalars().all()
     synonyms_rows = (await db.execute(select(AiSynonyms))).scalars().all()
     action_rows = (await db.execute(select(AiActionRegistry).where(AiActionRegistry.enabled.is_(True)))).scalars().all()
+    prompt_rows = (
+        await db.execute(select(AiPromptFragments).where(AiPromptFragments.enabled.is_(True)))
+    ).scalars().all()
 
     intents = {
         row.intent_code: {
@@ -65,5 +71,19 @@ async def load_runtime_metadata(db: AsyncSession) -> RuntimeMetadata:
         }
         for row in action_rows
     }
-    return RuntimeMetadata(intents=intents, slots=dict(slots), synonyms=dict(synonyms), actions=actions)
-
+    prompt_fragments: dict[str, list[dict]] = defaultdict(list)
+    for row in prompt_rows:
+        prompt_fragments[str(row.intent_code)].append(
+            {
+                "fragment_type": row.fragment_type,
+                "content": row.content,
+                "language_code": row.language_code,
+            }
+        )
+    return RuntimeMetadata(
+        intents=intents,
+        slots=dict(slots),
+        synonyms=dict(synonyms),
+        actions=actions,
+        prompt_fragments=dict(prompt_fragments),
+    )

@@ -9,7 +9,7 @@ from app.transfer_support_chat.service import (
     cancel_transfer_support_request,
     process_transfer_support_message,
 )
-from app.routers.agent._target_user import resolve_target_user_id
+from app.routers.agent._target_user import resolve_target_user_context
 
 
 router = APIRouter(prefix="/agent/transfer-support-chat", tags=["Transfer Support Agent"])
@@ -21,10 +21,16 @@ async def transfer_support_chat_agent(
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user),
 ):
+    target_context = await resolve_target_user_context(
+        db,
+        current_user,
+        payload.target_user_id,
+        payload.message,
+    )
     return await process_transfer_support_message(
         db,
-        user_id=resolve_target_user_id(current_user, payload.target_user_id),
-        message=payload.message,
+        user_id=target_context.user_id,
+        message=target_context.message,
     )
 
 

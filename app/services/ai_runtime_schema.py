@@ -148,8 +148,61 @@ async def ensure_ai_runtime_schema(db: AsyncSession) -> None:
             """
         )
     )
+    await db.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS ia.ai_feedback_annotations (
+              id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+              audit_log_id uuid NOT NULL REFERENCES ia.ai_audit_logs(id) ON DELETE CASCADE,
+              reviewer_user_id uuid NULL REFERENCES paylink.users(user_id) ON DELETE SET NULL,
+              status text NOT NULL DEFAULT 'reviewed',
+              expected_intent text NULL,
+              expected_entities_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+              parser_was_correct boolean NULL,
+              resolver_was_correct boolean NULL,
+              final_resolution_notes text NULL,
+              created_at timestamptz NOT NULL DEFAULT now(),
+              updated_at timestamptz NOT NULL DEFAULT now()
+            )
+            """
+        )
+    )
+    await db.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS ia.ai_feedback_suggestions (
+              id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+              annotation_id uuid NOT NULL REFERENCES ia.ai_feedback_annotations(id) ON DELETE CASCADE,
+              suggestion_type text NOT NULL,
+              target_key text NOT NULL,
+              proposed_value jsonb NOT NULL,
+              applied boolean NOT NULL DEFAULT false,
+              applied_at timestamptz NULL,
+              created_at timestamptz NOT NULL DEFAULT now()
+            )
+            """
+        )
+    )
+    await db.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS ia.ai_prompt_fragments (
+              id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+              intent_code text NOT NULL REFERENCES ia.ai_intents(intent_code) ON DELETE CASCADE,
+              fragment_type text NOT NULL DEFAULT 'feedback_hint',
+              content text NOT NULL,
+              language_code text NOT NULL DEFAULT 'fr',
+              enabled boolean NOT NULL DEFAULT true,
+              created_at timestamptz NOT NULL DEFAULT now()
+            )
+            """
+        )
+    )
     await db.execute(text("CREATE INDEX IF NOT EXISTS idx_ai_pending_actions_user_status ON ia.ai_pending_actions (user_id, status, expires_at DESC)"))
     await db.execute(text("CREATE INDEX IF NOT EXISTS idx_ai_audit_logs_user_created_at ON ia.ai_audit_logs (user_id, created_at DESC)"))
+    await db.execute(text("CREATE INDEX IF NOT EXISTS idx_ai_feedback_annotations_audit_log_id ON ia.ai_feedback_annotations (audit_log_id, created_at DESC)"))
+    await db.execute(text("CREATE INDEX IF NOT EXISTS idx_ai_feedback_suggestions_annotation_id ON ia.ai_feedback_suggestions (annotation_id, created_at DESC)"))
+    await db.execute(text("CREATE INDEX IF NOT EXISTS idx_ai_prompt_fragments_intent_code ON ia.ai_prompt_fragments (intent_code, created_at DESC)"))
     await db.execute(
         text(
             """
