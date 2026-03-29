@@ -56,6 +56,7 @@ from app.models.ai_feedback_suggestions import AiFeedbackSuggestions
 from app.models.ai_prompt_fragments import AiPromptFragments
 from app.models.payment_intents import PaymentIntents
 from app.models.payment_events import PaymentEvents
+from app.models.operator_work_item import OperatorWorkItem
 
 __all__ = [
     "AgentLocations",
@@ -115,4 +116,5 @@ __all__ = [
     "AiPromptFragments",
     "PaymentIntents",
     "PaymentEvents",
+    "OperatorWorkItem",
 ]

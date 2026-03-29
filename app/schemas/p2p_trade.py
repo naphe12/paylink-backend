@@ -6,6 +6,11 @@ from decimal import Decimal
 from typing import Optional, List
 
 from app.models.p2p_enums import TradeStatus, PaymentMethod, TokenCode, OfferSide
+from app.schemas.dispute_codes import (
+    P2PDisputeReasonCode,
+    P2PDisputeResolutionCode,
+    ProofTypeCode,
+)
 
 class TradeCreate(BaseModel):
     offer_id: UUID
@@ -51,3 +56,14 @@ class FiatSentIn(BaseModel):
 
 class DisputeOpenIn(BaseModel):
     reason: str = Field(min_length=5)
+    reason_code: Optional[P2PDisputeReasonCode] = None
+    proof_type: Optional[ProofTypeCode] = None
+    proof_ref: Optional[str] = Field(default=None, min_length=1, max_length=500)
+
+
+class DisputeResolveIn(BaseModel):
+    outcome: str = Field(pattern="^(buyer_wins|seller_wins)$")
+    resolution: str = Field(min_length=3)
+    resolution_code: Optional[P2PDisputeResolutionCode] = None
+    proof_type: Optional[ProofTypeCode] = None
+    proof_ref: Optional[str] = Field(default=None, min_length=1, max_length=500)

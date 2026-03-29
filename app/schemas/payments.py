@@ -7,6 +7,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.operator_workflow import OperatorWorkflowRead
+
 
 class MobileMoneyDepositIntentCreate(BaseModel):
     amount: Decimal
@@ -68,6 +70,7 @@ class PaymentIntentUserLiteRead(BaseModel):
 
 class PaymentIntentAdminRead(PaymentIntentRead):
     user: PaymentIntentUserLiteRead
+    operator_workflow: OperatorWorkflowRead | None = None
 
 
 class PaymentEventRead(BaseModel):

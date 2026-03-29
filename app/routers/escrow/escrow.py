@@ -9,10 +9,11 @@ from app.models.escrow_order import EscrowOrder
 from services.escrow_service import EscrowService
 from app.core.database import get_db
 from app.config import settings
-from app.dependencies.auth import get_current_user_db
+from app.dependencies.auth import get_current_admin, get_current_user_db
 from app.models.users import Users
 from app.security.rate_limit import rate_limit
 from app.services.audit_service import audit_log
+from app.services.escrow_dispute_service import EscrowDisputeService
 from app.services.risk_decision_log import log_risk_decision
 from app.services.risk_service import RiskService
 from app.services.escrow_tracking_ws import (
@@ -32,6 +33,7 @@ from app.services.escrow_order_rules import transition_escrow_order_status
 import math
 
 from app.models.escrow_enums import EscrowOrderStatus
+from app.dependencies.step_up import get_admin_step_up_method, require_admin_step_up
 from services.escrow_ledger_hooks import (
     post_funded_usdc_deposit_journal,
     post_swap_usdc_to_usdt_journal,
@@ -39,6 +41,7 @@ from services.escrow_ledger_hooks import (
     on_fiat_in_confirmed,
     on_payout_confirmed,
 )
+from app.schemas.escrow_order import EscrowRefundConfirmIn, EscrowRefundRequestIn
 
 router = APIRouter(prefix="/escrow", tags=["Escrow"])
 DAILY_USDC_LIMIT = 5000
@@ -718,6 +721,78 @@ async def retry_order_payment(
             "order_id": str(refreshed.id),
             "escrow_status": refreshed.status,
             "expires_at": refreshed.expires_at,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/orders/{order_id}/refund/request", response_model=dict)
+async def request_escrow_refund(
+    order_id: str,
+    data: EscrowRefundRequestIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    me: Users = Depends(require_admin_step_up("escrow_refund_request")),
+):
+    try:
+        order = await EscrowService.get_order(db, order_id)
+        updated = await EscrowDisputeService.request_refund(
+            db,
+            order,
+            actor_user_id=str(me.user_id),
+            actor_role=str(getattr(me, "role", "") or "ADMIN"),
+            reason=data.reason,
+            reason_code=data.reason_code,
+            proof_type=data.proof_type,
+            proof_ref=data.proof_ref,
+            step_up_method=get_admin_step_up_method(request),
+        )
+        return {
+            "status": "OK",
+            "order_id": str(updated.id),
+            "escrow_status": str(getattr(updated.status, "value", updated.status)),
+            "reason": data.reason,
+            "reason_code": data.reason_code,
+            "proof_type": data.proof_type,
+            "proof_ref": data.proof_ref,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/orders/{order_id}/refund/confirm", response_model=dict)
+async def confirm_escrow_refund(
+    order_id: str,
+    data: EscrowRefundConfirmIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    me: Users = Depends(require_admin_step_up("escrow_refund_confirm")),
+):
+    try:
+        order = await EscrowService.get_order(db, order_id)
+        updated = await EscrowDisputeService.confirm_refund(
+            db,
+            order,
+            actor_user_id=str(me.user_id),
+            actor_role=str(getattr(me, "role", "") or "ADMIN"),
+            resolution=data.resolution,
+            resolution_code=data.resolution_code,
+            proof_type=data.proof_type,
+            proof_ref=data.proof_ref,
+            step_up_method=get_admin_step_up_method(request),
+        )
+        return {
+            "status": "OK",
+            "order_id": str(updated.id),
+            "escrow_status": str(getattr(updated.status, "value", updated.status)),
+            "resolution": data.resolution,
+            "resolution_code": data.resolution_code,
+            "proof_type": data.proof_type,
+            "proof_ref": data.proof_ref,
         }
     except HTTPException:
         raise

@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import String, cast, desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,6 +9,7 @@ from app.dependencies.auth import get_current_admin
 from app.models.payment_events import PaymentEvents
 from app.models.payment_intents import PaymentIntents
 from app.models.users import Users
+from app.dependencies.step_up import get_admin_step_up_method, require_admin_step_up
 from app.schemas.payments import (
     PaymentEventRead,
     PaymentIntentAdminDetailRead,
@@ -19,6 +20,7 @@ from app.schemas.payments import (
     PaymentIntentUserLiteRead,
 )
 from app.services.payments_service import admin_reconcile_payment_intent, admin_update_payment_intent_status
+from app.services.operator_workflow_service import fetch_operator_workflow_map
 
 
 router = APIRouter(prefix="/admin/payments", tags=["Admin Payments"])
@@ -57,7 +59,7 @@ async def list_admin_payment_intents(
         )
 
     rows = (await db.execute(stmt)).all()
-    return [
+    items = [
         PaymentIntentAdminRead(
             **PaymentIntentRead.model_validate(intent).model_dump(),
             user=PaymentIntentUserLiteRead(
@@ -68,6 +70,15 @@ async def list_admin_payment_intents(
             ),
         )
         for intent, user in rows
+    ]
+    workflow_map = await fetch_operator_workflow_map(
+        db,
+        entity_type="payment_intent",
+        entity_ids=[str(item.intent_id) for item in items],
+    )
+    return [
+        item.model_copy(update={"operator_workflow": workflow_map.get(str(item.intent_id))})
+        for item in items
     ]
 
 
@@ -96,6 +107,11 @@ async def get_admin_payment_intent_detail(
             .order_by(desc(PaymentEvents.created_at))
         )
     ).scalars().all()
+    workflow_map = await fetch_operator_workflow_map(
+        db,
+        entity_type="payment_intent",
+        entity_ids=[str(intent.intent_id)],
+    )
 
     return PaymentIntentAdminDetailRead(
         intent=PaymentIntentAdminRead(
@@ -106,6 +122,7 @@ async def get_admin_payment_intent_detail(
                 email=user.email,
                 phone_e164=user.phone_e164,
             ),
+            operator_workflow=workflow_map.get(str(intent.intent_id)),
         ),
         events=[PaymentEventRead.model_validate(item) for item in events],
     )
@@ -115,8 +132,9 @@ async def get_admin_payment_intent_detail(
 async def manual_reconcile_admin_payment_intent(
     intent_id: UUID,
     payload: PaymentIntentManualReconcileCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    current_admin: Users = Depends(get_current_admin),
+    current_admin: Users = Depends(require_admin_step_up("payment_manual_reconcile")),
 ):
     await admin_reconcile_payment_intent(
         db,
@@ -124,6 +142,7 @@ async def manual_reconcile_admin_payment_intent(
         admin_user_id=current_admin.user_id,
         provider_reference=payload.provider_reference,
         note=payload.note,
+        step_up_method=get_admin_step_up_method(request),
     )
     return await get_admin_payment_intent_detail(intent_id, db, current_admin)
 
@@ -132,8 +151,9 @@ async def manual_reconcile_admin_payment_intent(
 async def status_action_admin_payment_intent(
     intent_id: UUID,
     payload: PaymentIntentAdminStatusActionCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    current_admin: Users = Depends(get_current_admin),
+    current_admin: Users = Depends(require_admin_step_up("payment_status_action")),
 ):
     await admin_update_payment_intent_status(
         db,
@@ -141,5 +161,6 @@ async def status_action_admin_payment_intent(
         admin_user_id=current_admin.user_id,
         action=payload.action,
         note=payload.note,
+        step_up_method=get_admin_step_up_method(request),
     )
     return await get_admin_payment_intent_detail(intent_id, db, current_admin)

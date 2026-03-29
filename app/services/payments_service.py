@@ -573,6 +573,7 @@ async def admin_reconcile_payment_intent(
     admin_user_id,
     provider_reference: str | None = None,
     note: str | None = None,
+    step_up_method: str | None = None,
 ) -> PaymentIntents:
     intent = await db.get(PaymentIntents, intent_id)
     if intent is None:
@@ -591,6 +592,7 @@ async def admin_reconcile_payment_intent(
         "provider_reference": normalized_reference,
         "note": normalized_note,
         "reconciled_at": _utcnow().isoformat(),
+        "step_up_method": step_up_method,
     }
     intent.metadata_ = metadata
     intent.provider_reference = normalized_reference
@@ -612,6 +614,7 @@ async def admin_reconcile_payment_intent(
                 "note": normalized_note,
                 "admin_user_id": str(admin_user_id),
                 "merchant_reference": intent.merchant_reference,
+                "step_up_method": step_up_method,
             },
         )
     )
@@ -631,6 +634,7 @@ async def admin_update_payment_intent_status(
     admin_user_id,
     action: str,
     note: str | None = None,
+    step_up_method: str | None = None,
 ) -> PaymentIntents:
     intent = await db.get(PaymentIntents, intent_id)
     if intent is None:
@@ -660,6 +664,7 @@ async def admin_update_payment_intent_status(
         "admin_user_id": str(admin_user_id),
         "note": normalized_note,
         "applied_at": _utcnow().isoformat(),
+        "step_up_method": step_up_method,
     }
     intent.metadata_ = metadata
 
@@ -678,6 +683,7 @@ async def admin_update_payment_intent_status(
                 "note": normalized_note,
                 "admin_user_id": str(admin_user_id),
                 "merchant_reference": intent.merchant_reference,
+                "step_up_method": step_up_method,
             },
         )
     )

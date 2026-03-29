@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     AUTH_REFRESH_COOKIE_NAME: str = "refresh_token"
     AUTH_REFRESH_COOKIE_PATH: str = "/auth"
     AUTH_CSRF_HEADER_NAME: str = "X-CSRF-Token"
+    ADMIN_STEP_UP_ENABLED: bool = False
+    ADMIN_STEP_UP_HEADER_NAME: str = "X-Admin-Confirm"
+    ADMIN_STEP_UP_EXPECTED_VALUE: str = "confirm"
+    ADMIN_STEP_UP_ALLOW_HEADER_FALLBACK: bool = False
+    ADMIN_STEP_UP_TOKEN_HEADER_NAME: str = "X-Admin-Step-Up-Token"
+    ADMIN_STEP_UP_TOKEN_EXPIRE_MINUTES: int = 5
 
     # -------------------------------------------------
     # ENVIRONNEMENT

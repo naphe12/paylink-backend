@@ -15,7 +15,6 @@ ALLOWED_P2P_TRANSITIONS: dict[TradeStatus, set[TradeStatus]] = {
     },
     TradeStatus.CRYPTO_LOCKED: {
         TradeStatus.AWAITING_FIAT,
-        TradeStatus.FIAT_SENT,
         TradeStatus.CANCELLED,
         TradeStatus.DISPUTED,
     },

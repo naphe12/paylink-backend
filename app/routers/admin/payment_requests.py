@@ -1,4 +1,5 @@
 import decimal
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select, or_, func
@@ -22,11 +23,16 @@ class AdminPaymentRequestCreate(BaseModel):
 
 async def _find_user(db: AsyncSession, identifier: str) -> Users | None:
     ident = identifier.strip()
+    try:
+        user_uuid = UUID(ident)
+    except ValueError:
+        user_uuid = None
     normalized = ident.lower()
     paytag = normalized if normalized.startswith("@") else f"@{normalized}"
     return await db.scalar(
         select(Users).where(
             or_(
+                Users.user_id == user_uuid if user_uuid is not None else False,
                 func.lower(Users.email) == normalized,
                 func.lower(Users.username) == normalized,
                 func.lower(Users.paytag) == paytag,

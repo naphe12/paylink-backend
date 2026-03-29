@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     AUTH_REFRESH_COOKIE_NAME: str = os.getenv("AUTH_REFRESH_COOKIE_NAME", "refresh_token")
     AUTH_REFRESH_COOKIE_PATH: str = os.getenv("AUTH_REFRESH_COOKIE_PATH", "/auth")
     AUTH_CSRF_HEADER_NAME: str = os.getenv("AUTH_CSRF_HEADER_NAME", "X-CSRF-Token")
+    ADMIN_STEP_UP_ENABLED: bool = os.getenv("ADMIN_STEP_UP_ENABLED", "false").lower() == "true"
+    ADMIN_STEP_UP_HEADER_NAME: str = os.getenv("ADMIN_STEP_UP_HEADER_NAME", "X-Admin-Confirm")
+    ADMIN_STEP_UP_EXPECTED_VALUE: str = os.getenv("ADMIN_STEP_UP_EXPECTED_VALUE", "confirm")
+    ADMIN_STEP_UP_ALLOW_HEADER_FALLBACK: bool = os.getenv("ADMIN_STEP_UP_ALLOW_HEADER_FALLBACK", "false").lower() == "true"
+    ADMIN_STEP_UP_TOKEN_HEADER_NAME: str = os.getenv("ADMIN_STEP_UP_TOKEN_HEADER_NAME", "X-Admin-Step-Up-Token")
+    ADMIN_STEP_UP_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ADMIN_STEP_UP_TOKEN_EXPIRE_MINUTES", "5"))
     APP_ENV: str = os.getenv("APP_ENV", "dev")
     APP_VERSION: str = os.getenv("APP_VERSION", "dev")
     APP_COMMIT_SHA: str = os.getenv("APP_COMMIT_SHA", "")

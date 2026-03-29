@@ -26,6 +26,7 @@ from app.dependencies.auth import get_current_user, get_current_user_db,get_opti
 from app.models.user_auth import UserAuth
 from app.models.users import Users
 from app.schemas.users import UsersCreate, UsersRead
+from app.dependencies.step_up import create_admin_step_up_token
 from app.services.mailer import send_email
 from app.services.mailjet_service import MailjetEmailService
 from app.services.auth_sessions import issue_refresh_session, revoke_refresh_session, rotate_refresh_session
@@ -211,6 +212,50 @@ async def read_current_user(current_user: Users = Depends(get_current_user_db)):
 
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
+
+
+class AdminStepUpRequest(BaseModel):
+    password: str
+    action: str | None = None
+
+
+@router.post("/admin-step-up")
+async def issue_admin_step_up(
+    data: AdminStepUpRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user_db),
+):
+    if str(getattr(current_user, "role", "")).lower() != "admin":
+        raise HTTPException(status_code=403, detail="Acces reserve aux admin")
+
+    auth_data = await db.scalar(select(UserAuth).where(UserAuth.user_id == current_user.user_id))
+    if not auth_data or not verify_password(data.password, auth_data.password_hash or ""):
+        raise HTTPException(status_code=401, detail="Mot de passe admin incorrect")
+
+    token = create_admin_step_up_token(user=current_user, action=data.action)
+    return {
+        "token": token,
+        "token_type": "admin_step_up",
+        "expires_in_seconds": int(max(int(settings.ADMIN_STEP_UP_TOKEN_EXPIRE_MINUTES or 5), 1) * 60),
+        "header_name": str(settings.ADMIN_STEP_UP_TOKEN_HEADER_NAME or "X-Admin-Step-Up-Token"),
+        "action": data.action or "*",
+    }
+
+
+@router.get("/admin-step-up/status")
+async def get_admin_step_up_status(
+    current_user: Users = Depends(get_current_user_db),
+):
+    if str(getattr(current_user, "role", "")).lower() != "admin":
+        raise HTTPException(status_code=403, detail="Acces reserve aux admin")
+
+    return {
+        "enabled": bool(settings.ADMIN_STEP_UP_ENABLED),
+        "header_name": str(settings.ADMIN_STEP_UP_HEADER_NAME or "X-Admin-Confirm"),
+        "header_fallback_enabled": bool(settings.ADMIN_STEP_UP_ALLOW_HEADER_FALLBACK),
+        "token_header_name": str(settings.ADMIN_STEP_UP_TOKEN_HEADER_NAME or "X-Admin-Step-Up-Token"),
+        "token_expires_in_seconds": int(max(int(settings.ADMIN_STEP_UP_TOKEN_EXPIRE_MINUTES or 5), 1) * 60),
+    }
 
 
 @router.post("/forgot-password")

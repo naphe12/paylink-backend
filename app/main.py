@@ -35,6 +35,7 @@ from app.routers import backoffice_monitoring as backoffice_monitoring_router
 from app.routers.admin import analytics as admin_analytics_router
 from app.routers.admin import agents as admin_agents_router
 from app.routers.admin import ai_feedback as admin_ai_feedback_router
+from app.routers.admin import ops_workflow as admin_ops_workflow_router
 from app.routers.admin import payments as admin_payments_router
 from app.routers.admin import aml_events as admin_aml_router
 from app.routers.admin import cash_requests as admin_cash_requests_router
@@ -106,6 +107,7 @@ from app.services.backoffice_risk import router as backoffice_risk_router
 from app.services.idempotency_service import ensure_idempotency_schema
 from app.services.ai_runtime_schema import ensure_ai_runtime_schema
 from app.services.payments_runtime_schema import ensure_payments_runtime_schema
+from app.services.operator_workflow_runtime_schema import ensure_operator_workflow_schema
 from app.services.telegram_external_transfer_service import ensure_telegram_external_transfer_schema
 from app.services.auth_sessions import ensure_auth_refresh_schema
 from app.services.sandbox_transition_worker import run_sandbox_auto_transitions
@@ -477,6 +479,7 @@ app.include_router(admin_kyc_router.router)
 app.include_router(admin_analytics_router.router)
 app.include_router(admin_agents_router.router)
 app.include_router(admin_ai_feedback_router.router)
+app.include_router(admin_ops_workflow_router.router)
 app.include_router(admin_payments_router.router)
 app.include_router(admin_mobilemoney_router.router)
 app.include_router(admin_tontine_arrears_router.router)
@@ -866,6 +869,7 @@ async def startup_event():
         await ensure_telegram_external_transfer_schema(db)
         await ensure_ai_runtime_schema(db)
         await ensure_payments_runtime_schema(db)
+        await ensure_operator_workflow_schema(db)
         await db.commit()
         break
 

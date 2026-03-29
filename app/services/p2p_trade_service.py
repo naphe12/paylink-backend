@@ -154,6 +154,16 @@ class P2PTradeService:
         )
         db.add(proof)
 
+        if trade.status == TradeStatus.CRYPTO_LOCKED:
+            await set_trade_status(
+                db,
+                trade,
+                TradeStatus.AWAITING_FIAT,
+                actor_user_id,
+                "CLIENT",
+                note="Trade ready for fiat payment",
+            )
+
         trade.fiat_sent_at = datetime.now(timezone.utc)
         await set_trade_status(db, trade, TradeStatus.FIAT_SENT, actor_user_id, "CLIENT", note="Buyer marked fiat sent")
         await P2PRiskService.apply(db, trade)
