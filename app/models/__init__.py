@@ -54,6 +54,8 @@ from app.models.ai_audit_logs import AiAuditLogs
 from app.models.ai_feedback_annotations import AiFeedbackAnnotations
 from app.models.ai_feedback_suggestions import AiFeedbackSuggestions
 from app.models.ai_prompt_fragments import AiPromptFragments
+from app.models.payment_intents import PaymentIntents
+from app.models.payment_events import PaymentEvents
 
 __all__ = [
     "AgentLocations",
@@ -111,4 +113,6 @@ __all__ = [
     "AiFeedbackAnnotations",
     "AiFeedbackSuggestions",
     "AiPromptFragments",
+    "PaymentIntents",
+    "PaymentEvents",
 ]

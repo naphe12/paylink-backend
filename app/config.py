@@ -138,6 +138,28 @@ class Settings(BaseSettings):
     ASSISTANT_INTENT_PARSER_MIN_CONFIDENCE: float = 0.55
     AI_INTERNAL_TESTS_ENABLED: bool = False
 
+    # -------------------------------------------------
+    # PAYMENTS / MOBILE MONEY COLLECTION
+    # -------------------------------------------------
+    PAYMENTS_MOBILE_MONEY_PROVIDER: str = "lumicash_aggregator"
+    PAYMENTS_MOBILE_MONEY_WEBHOOK_SECRET: str = ""
+    PAYMENTS_PROVIDER_REQUEST_TIMEOUT_SECONDS: float = 12.0
+    PAYMENTS_LUMICASH_MERCHANT_NAME: str | None = None
+    PAYMENTS_LUMICASH_MERCHANT_NUMBER: str | None = None
+    PAYMENTS_LUMICASH_API_BASE_URL: str | None = None
+    PAYMENTS_LUMICASH_API_KEY: str | None = None
+    PAYMENTS_LUMICASH_COLLECTIONS_PATH: str = "/collections/mobile-money"
+    PAYMENTS_ECOCASH_MERCHANT_NAME: str | None = None
+    PAYMENTS_ECOCASH_MERCHANT_NUMBER: str | None = None
+    PAYMENTS_ECOCASH_API_BASE_URL: str | None = None
+    PAYMENTS_ECOCASH_API_KEY: str | None = None
+    PAYMENTS_ECOCASH_COLLECTIONS_PATH: str = "/collections/mobile-money"
+    PAYMENTS_ENOTI_MERCHANT_NAME: str | None = None
+    PAYMENTS_ENOTI_MERCHANT_NUMBER: str | None = None
+    PAYMENTS_ENOTI_API_BASE_URL: str | None = None
+    PAYMENTS_ENOTI_API_KEY: str | None = None
+    PAYMENTS_ENOTI_COLLECTIONS_PATH: str = "/collections/mobile-money"
+
 @lru_cache()
 def get_settings() -> Settings:
     return Settings()
