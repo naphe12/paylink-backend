@@ -8,6 +8,30 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
     REFRESH_TOKEN_EXPIRE_DAYS: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "14"))
+    ACCESS_TOKEN_EXPIRE_MINUTES_CLIENT: int | None = (
+        int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES_CLIENT")) if os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES_CLIENT") else None
+    )
+    ACCESS_TOKEN_EXPIRE_MINUTES_AGENT: int | None = (
+        int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES_AGENT")) if os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES_AGENT") else None
+    )
+    ACCESS_TOKEN_EXPIRE_MINUTES_ADMIN: int | None = (
+        int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES_ADMIN")) if os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES_ADMIN") else None
+    )
+    REFRESH_TOKEN_EXPIRE_DAYS_CLIENT: int | None = (
+        int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS_CLIENT")) if os.getenv("REFRESH_TOKEN_EXPIRE_DAYS_CLIENT") else None
+    )
+    REFRESH_TOKEN_EXPIRE_DAYS_AGENT: int | None = (
+        int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS_AGENT")) if os.getenv("REFRESH_TOKEN_EXPIRE_DAYS_AGENT") else None
+    )
+    REFRESH_TOKEN_EXPIRE_DAYS_ADMIN: int | None = (
+        int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS_ADMIN")) if os.getenv("REFRESH_TOKEN_EXPIRE_DAYS_ADMIN") else None
+    )
+    ACCESS_TOKEN_EXPIRE_MINUTES_STAGING: int | None = (
+        int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES_STAGING", "60")) if os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES_STAGING", "60") else None
+    )
+    REFRESH_TOKEN_EXPIRE_DAYS_STAGING: int | None = (
+        int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS_STAGING")) if os.getenv("REFRESH_TOKEN_EXPIRE_DAYS_STAGING") else None
+    )
     AUTH_COOKIE_DOMAIN: str | None = os.getenv("AUTH_COOKIE_DOMAIN")
     AUTH_COOKIE_SAMESITE: str = os.getenv("AUTH_COOKIE_SAMESITE", "lax")
     AUTH_COOKIE_SECURE: bool = os.getenv("AUTH_COOKIE_SECURE", "false").lower() == "true"
@@ -44,6 +68,35 @@ class Settings(BaseSettings):
     TELEGRAM_BOT_USERNAME: str = os.getenv("TELEGRAM_BOT_USERNAME", "")
     BONUS_RATE_MULTIPLIER: str = os.getenv("BONUS_RATE_MULTIPLIER", "50")
     BONUS_MAX_PER_TRANSFER: str = os.getenv("BONUS_MAX_PER_TRANSFER", "1000000")
-    
+
+    def _role_suffix(self, role: str | None) -> str | None:
+        normalized = str(role or "").strip().lower()
+        if normalized in {"client", "agent", "admin"}:
+            return normalized
+        return None
+
+    def access_token_expire_minutes_for_role(self, role: str | None = None) -> int:
+        role_suffix = self._role_suffix(role)
+        if str(self.APP_ENV).strip().lower() == "staging" and self.ACCESS_TOKEN_EXPIRE_MINUTES_STAGING:
+            return int(self.ACCESS_TOKEN_EXPIRE_MINUTES_STAGING)
+        if role_suffix == "client" and self.ACCESS_TOKEN_EXPIRE_MINUTES_CLIENT is not None:
+            return int(self.ACCESS_TOKEN_EXPIRE_MINUTES_CLIENT)
+        if role_suffix == "agent" and self.ACCESS_TOKEN_EXPIRE_MINUTES_AGENT is not None:
+            return int(self.ACCESS_TOKEN_EXPIRE_MINUTES_AGENT)
+        if role_suffix == "admin" and self.ACCESS_TOKEN_EXPIRE_MINUTES_ADMIN is not None:
+            return int(self.ACCESS_TOKEN_EXPIRE_MINUTES_ADMIN)
+        return int(self.ACCESS_TOKEN_EXPIRE_MINUTES)
+
+    def refresh_token_expire_days_for_role(self, role: str | None = None) -> int:
+        role_suffix = self._role_suffix(role)
+        if str(self.APP_ENV).strip().lower() == "staging" and self.REFRESH_TOKEN_EXPIRE_DAYS_STAGING is not None:
+            return int(self.REFRESH_TOKEN_EXPIRE_DAYS_STAGING)
+        if role_suffix == "client" and self.REFRESH_TOKEN_EXPIRE_DAYS_CLIENT is not None:
+            return int(self.REFRESH_TOKEN_EXPIRE_DAYS_CLIENT)
+        if role_suffix == "agent" and self.REFRESH_TOKEN_EXPIRE_DAYS_AGENT is not None:
+            return int(self.REFRESH_TOKEN_EXPIRE_DAYS_AGENT)
+        if role_suffix == "admin" and self.REFRESH_TOKEN_EXPIRE_DAYS_ADMIN is not None:
+            return int(self.REFRESH_TOKEN_EXPIRE_DAYS_ADMIN)
+        return int(self.REFRESH_TOKEN_EXPIRE_DAYS)
 
 settings = Settings()

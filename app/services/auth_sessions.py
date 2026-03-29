@@ -123,7 +123,8 @@ async def issue_refresh_session(
     refresh_token = secrets.token_urlsafe(48)
     csrf_token = secrets.token_urlsafe(24)
     token_hash = _hash_token(refresh_token)
-    expires_at = _utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    refresh_days = settings.refresh_token_expire_days_for_role(getattr(user, "role", None))
+    expires_at = _utcnow() + timedelta(days=refresh_days)
 
     await db.execute(
         text(
@@ -146,7 +147,7 @@ async def issue_refresh_session(
     response.set_cookie(
         key=settings.AUTH_REFRESH_COOKIE_NAME,
         value=refresh_token,
-        max_age=int(timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS).total_seconds()),
+        max_age=int(timedelta(days=refresh_days).total_seconds()),
         **_refresh_cookie_kwargs(),
     )
     return csrf_token
@@ -193,7 +194,8 @@ async def rotate_refresh_session(
     new_refresh_token = secrets.token_urlsafe(48)
     new_csrf_token = secrets.token_urlsafe(24)
     new_token_hash = _hash_token(new_refresh_token)
-    expires_at = _utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    refresh_days = settings.refresh_token_expire_days_for_role(getattr(user, "role", None))
+    expires_at = _utcnow() + timedelta(days=refresh_days)
 
     await db.execute(
         text(
@@ -231,7 +233,7 @@ async def rotate_refresh_session(
     response.set_cookie(
         key=settings.AUTH_REFRESH_COOKIE_NAME,
         value=new_refresh_token,
-        max_age=int(timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS).total_seconds()),
+        max_age=int(timedelta(days=refresh_days).total_seconds()),
         **_refresh_cookie_kwargs(),
     )
     return {"user": user, "csrf_token": new_csrf_token}

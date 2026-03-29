@@ -93,9 +93,9 @@ async def register_user(
         body_html=verification_body,
     )
 
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token_expires = timedelta(minutes=settings.access_token_expire_minutes_for_role(user.role))
     access_token = create_access_token(
-        data={"sub": str(user.user_id)}, expires_delta=access_token_expires
+        data={"sub": str(user.user_id), "role": user.role}, expires_delta=access_token_expires, role=user.role
     )
     csrf_token = await issue_refresh_session(db, response, user, request)
     await db.commit()
@@ -163,10 +163,11 @@ async def login(
     auth_data.last_login_at = datetime.utcnow()
     await db.commit()
 
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token_expires = timedelta(minutes=settings.access_token_expire_minutes_for_role(user.role))
     access_token = create_access_token(
-        data={"sub": str(user.user_id)},
+        data={"sub": str(user.user_id), "role": user.role},
         expires_delta=access_token_expires,
+        role=user.role,
     )
     csrf_token = await issue_refresh_session(db, response, user, request)
     await db.commit()
@@ -182,8 +183,9 @@ async def refresh_session(
     session_data = await rotate_refresh_session(db, request, response)
     user: Users = session_data["user"]
     access_token = create_access_token(
-        data={"sub": str(user.user_id)},
-        expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
+        data={"sub": str(user.user_id), "role": user.role},
+        expires_delta=timedelta(minutes=settings.access_token_expire_minutes_for_role(user.role)),
+        role=user.role,
     )
     await db.commit()
     return _build_auth_response(user, access_token, session_data["csrf_token"])

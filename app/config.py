@@ -16,8 +16,16 @@ class Settings(BaseSettings):
     # -------------------------------------------------
     SECRET_KEY: str = "secret-paylink-key"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 14
+    ACCESS_TOKEN_EXPIRE_MINUTES_CLIENT: int | None = None
+    ACCESS_TOKEN_EXPIRE_MINUTES_AGENT: int | None = None
+    ACCESS_TOKEN_EXPIRE_MINUTES_ADMIN: int | None = None
+    REFRESH_TOKEN_EXPIRE_DAYS_CLIENT: int | None = None
+    REFRESH_TOKEN_EXPIRE_DAYS_AGENT: int | None = None
+    REFRESH_TOKEN_EXPIRE_DAYS_ADMIN: int | None = None
+    ACCESS_TOKEN_EXPIRE_MINUTES_STAGING: int | None = 60
+    REFRESH_TOKEN_EXPIRE_DAYS_STAGING: int | None = None
     AUTH_COOKIE_DOMAIN: str | None = None
     AUTH_COOKIE_SAMESITE: str = "lax"
     AUTH_COOKIE_SECURE: bool = False
@@ -159,6 +167,36 @@ class Settings(BaseSettings):
     PAYMENTS_ENOTI_API_BASE_URL: str | None = None
     PAYMENTS_ENOTI_API_KEY: str | None = None
     PAYMENTS_ENOTI_COLLECTIONS_PATH: str = "/collections/mobile-money"
+
+    def _role_suffix(self, role: str | None) -> str | None:
+        normalized = str(role or "").strip().lower()
+        if normalized in {"client", "agent", "admin"}:
+            return normalized
+        return None
+
+    def access_token_expire_minutes_for_role(self, role: str | None = None) -> int:
+        role_suffix = self._role_suffix(role)
+        if str(self.APP_ENV).strip().lower() == "staging" and self.ACCESS_TOKEN_EXPIRE_MINUTES_STAGING:
+            return int(self.ACCESS_TOKEN_EXPIRE_MINUTES_STAGING)
+        if role_suffix == "client" and self.ACCESS_TOKEN_EXPIRE_MINUTES_CLIENT is not None:
+            return int(self.ACCESS_TOKEN_EXPIRE_MINUTES_CLIENT)
+        if role_suffix == "agent" and self.ACCESS_TOKEN_EXPIRE_MINUTES_AGENT is not None:
+            return int(self.ACCESS_TOKEN_EXPIRE_MINUTES_AGENT)
+        if role_suffix == "admin" and self.ACCESS_TOKEN_EXPIRE_MINUTES_ADMIN is not None:
+            return int(self.ACCESS_TOKEN_EXPIRE_MINUTES_ADMIN)
+        return int(self.ACCESS_TOKEN_EXPIRE_MINUTES)
+
+    def refresh_token_expire_days_for_role(self, role: str | None = None) -> int:
+        role_suffix = self._role_suffix(role)
+        if str(self.APP_ENV).strip().lower() == "staging" and self.REFRESH_TOKEN_EXPIRE_DAYS_STAGING is not None:
+            return int(self.REFRESH_TOKEN_EXPIRE_DAYS_STAGING)
+        if role_suffix == "client" and self.REFRESH_TOKEN_EXPIRE_DAYS_CLIENT is not None:
+            return int(self.REFRESH_TOKEN_EXPIRE_DAYS_CLIENT)
+        if role_suffix == "agent" and self.REFRESH_TOKEN_EXPIRE_DAYS_AGENT is not None:
+            return int(self.REFRESH_TOKEN_EXPIRE_DAYS_AGENT)
+        if role_suffix == "admin" and self.REFRESH_TOKEN_EXPIRE_DAYS_ADMIN is not None:
+            return int(self.REFRESH_TOKEN_EXPIRE_DAYS_ADMIN)
+        return int(self.REFRESH_TOKEN_EXPIRE_DAYS)
 
 @lru_cache()
 def get_settings() -> Settings:
