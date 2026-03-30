@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 #
 #
@@ -100,5 +100,4 @@ class CurrenciesRead(CurrenciesBase):
     invoices: list["InvoicesRead"] = None
     payment_instructions: list["PaymentInstructionsRead"] = None
     recon_lines: list["ReconLinesRead"] = None
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

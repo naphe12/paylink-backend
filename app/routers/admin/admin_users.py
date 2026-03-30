@@ -41,6 +41,7 @@ async def create_client_from_admin(
 async def list_users(
     q: str = "",
     status: str = "",
+    role: str = "",
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin)
 ):
@@ -51,6 +52,7 @@ async def list_users(
             Users.full_name,
             Users.email,
             Users.phone_e164,
+            Users.role,
             Users.kyc_status,
             Users.status,
             Users.risk_score,
@@ -65,6 +67,8 @@ async def list_users(
     )
     if status:
         stmt = stmt.where(Users.status == status)
+    if role:
+        stmt = stmt.where(Users.role == role)
     rows = (await db.execute(stmt)).all()
     return [
         {
@@ -72,6 +76,7 @@ async def list_users(
             "full_name": r.full_name,
             "email": r.email,
             "phone": r.phone_e164,
+            "role": r.role,
             "kyc_status": r.kyc_status,
             "status": r.status,
             "risk_score": r.risk_score,

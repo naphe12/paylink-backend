@@ -5,7 +5,7 @@ import decimal
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 #
 
@@ -43,5 +43,4 @@ class BillPaymentsRead(BillPaymentsBase):
     tx_id: Optional[str]
     invoice: Optional["InvoicesRead"] = None  # ✅ forward ref
     tx: Optional["TransactionsRead"] = None
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

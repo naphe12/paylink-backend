@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
-from pydantic import BaseModel, Field
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict
 
 # Auto-generated from SQLAlchemy model with relationships and imports
 from uuid import UUID
@@ -60,9 +60,7 @@ class TontinesRead(TontinesBase):
     tontine_members: list["TontineMembersRead"] = None
     tontine_contributions: list["TontineContributionsRead"] = None
     tontine_payouts: list["TontinePayoutsRead"] = None
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)
 class TontineListRead(TontinesBase):
     tontine_id: str
     owner_user: str
@@ -71,10 +69,8 @@ class TontineListRead(TontinesBase):
     periodicity_days: int
     status: str
     created_at: datetime
-    class Config:
-        from_attributes = True
-
-from pydantic import BaseModel
+    model_config = ConfigDict(from_attributes=True)
+from pydantic import BaseModel, ConfigDict
 from uuid import UUID
 from datetime import datetime
 
@@ -82,9 +78,7 @@ class TontineMemberOut(BaseModel):
     user_id: UUID
     full_name: str | None = None
 
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)
 
 class TontineOut(BaseModel):
     tontine_id: UUID
@@ -98,11 +92,10 @@ class TontineOut(BaseModel):
     next_rotation_at: datetime | None = None
     members: list[TontineMemberOut] = Field(default=[], alias="tontine_members")
 
-    class Config:
-        from_attributes = True   # remplace orm_mode=True en Pydantic v2
+    model_config = ConfigDict(from_attributes=True)
 
 
-class TontineMemberDetail(BaseModel):
+class TontineDetailMember(BaseModel):
     user_id: UUID
     name: str | None = None
     phone: str | None = None
@@ -116,12 +109,9 @@ class TontineDetailResponse(BaseModel):
     currency_code: str
     periodicity_days: int
     status: str
-    tontine_type: str
+    tontine_type: str | None = None
     amount_per_member: float
     current_round: int | None = None
     next_rotation_at: datetime | None = None
     common_pot: float | None = None
-    members: list[TontineMemberDetail] = Field(default_factory=list)
-
-    class Config:
-        from_attributes = True
+    members: list[TontineDetailMember] = Field(default_factory=list)

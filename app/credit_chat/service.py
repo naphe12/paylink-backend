@@ -3,11 +3,13 @@ import decimal
 from sqlalchemy import cast, select, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.legacy_adapters import handle_credit_chat_with_ai
 from app.credit_chat.parser import parse_credit_message
 from app.credit_chat.schemas import CreditChatResponse, CreditDraft
 from app.models.credit_lines import CreditLines
 from app.models.external_transfers import ExternalTransfers
 from app.models.general_settings import GeneralSettings
+from app.models.users import Users
 from app.models.wallets import Wallets
 
 
@@ -74,6 +76,15 @@ def _build_suggestions(draft: CreditDraft, missing: list[str]) -> list[str]:
 
 
 async def process_credit_message(db: AsyncSession, *, user_id, message: str) -> CreditChatResponse:
+    current_user = await db.scalar(select(Users).where(Users.user_id == user_id))
+    if current_user is not None:
+        ai_response, handled = await handle_credit_chat_with_ai(
+            db,
+            current_user=current_user,
+            message=message,
+        )
+        if handled:
+            return ai_response
     draft = parse_credit_message(message)
     wallet_ctx = await _get_wallet_context(db, user_id)
     draft.wallet_currency = wallet_ctx["wallet_currency"]

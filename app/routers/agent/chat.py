@@ -1,5 +1,5 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, Header
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent_chat.schemas import ChatRequest, ChatResponse, ConfirmChatRequest
@@ -8,16 +8,21 @@ from app.agent_chat.service import (
     cancel_chat_request,
     process_chat_message,
 )
+from app.agent_chat.utils import apply_selected_beneficiary
 from app.core.database import get_db
 from app.dependencies.auth import get_current_user
+from app.models.external_beneficiaries import ExternalBeneficiaries
 from app.models.external_transfers import ExternalTransfers
 from app.models.users import Users
 from app.schemas.external_transfers import ExternalTransferCreate, ExternalTransferRead
 from app.routers.wallet.transfer import _external_transfer_core
-from app.routers.agent._target_user import resolve_target_user_id
+from app.routers.agent._target_user import resolve_target_user_context
 
 router = APIRouter(prefix="/agent/chat", tags=["Agent Chat"])
 
+
+def _normalize_beneficiary_account(value) -> str:
+    return str(value or "").strip().lower()
 
 @router.post("", response_model=ChatResponse)
 async def chat_agent(
@@ -25,10 +30,16 @@ async def chat_agent(
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user),
 ):
+    target_context = await resolve_target_user_context(
+        db,
+        current_user,
+        payload.target_user_id,
+        payload.message,
+    )
     return await process_chat_message(
         db,
-        user_id=resolve_target_user_id(current_user, payload.target_user_id),
-        message=payload.message,
+        user_id=target_context.user_id,
+        message=target_context.message,
     )
 
 
@@ -48,6 +59,66 @@ async def confirm_agent_chat(
     current_user: Users = Depends(get_current_user),
 ):
     draft = payload.draft
+    draft = apply_selected_beneficiary(draft)
+    if draft.intent == "beneficiary_add":
+        missing_fields = []
+        if not draft.partner_name:
+            missing_fields.append("partner_name")
+        if not draft.country_destination:
+            missing_fields.append("country_destination")
+        if not draft.recipient_phone:
+            missing_fields.append("recipient_phone")
+        if not draft.recipient:
+            missing_fields.append("recipient")
+
+        if missing_fields:
+            return ChatResponse(
+                status="NEED_INFO",
+                message="Confirmation recue, mais il manque encore des informations pour enregistrer le beneficiaire.",
+                data=draft,
+                missing_fields=missing_fields,
+                executable=False,
+            )
+
+        existing = await db.scalar(
+            select(ExternalBeneficiaries).where(
+                ExternalBeneficiaries.user_id == current_user.user_id,
+                ExternalBeneficiaries.partner_name == str(draft.partner_name or ""),
+                ExternalBeneficiaries.recipient_phone == str(draft.recipient_phone or ""),
+                func.coalesce(func.lower(ExternalBeneficiaries.recipient_email), "") == _normalize_beneficiary_account(draft.account_ref),
+            )
+        )
+        if existing is None:
+            existing = ExternalBeneficiaries(
+                user_id=current_user.user_id,
+                recipient_name=str(draft.recipient or ""),
+                recipient_phone=str(draft.recipient_phone or ""),
+                recipient_email=_normalize_beneficiary_account(draft.account_ref) or None,
+                partner_name=str(draft.partner_name or ""),
+                country_destination=str(draft.country_destination or ""),
+                is_active=True,
+            )
+            db.add(existing)
+            message_out = f"Beneficiaire {existing.recipient_name} enregistre avec succes."
+        else:
+            existing.recipient_name = str(draft.recipient or existing.recipient_name)
+            existing.recipient_email = _normalize_beneficiary_account(draft.account_ref) or existing.recipient_email
+            existing.country_destination = str(draft.country_destination or existing.country_destination)
+            existing.is_active = True
+            message_out = f"Beneficiaire {existing.recipient_name} mis a jour avec succes."
+        await db.commit()
+        return {
+            "status": "DONE",
+            "message": message_out,
+            "beneficiary": {
+                "recipient_name": existing.recipient_name,
+                "recipient_phone": existing.recipient_phone,
+                "account_ref": existing.recipient_email,
+                "partner_name": existing.partner_name,
+                "country_destination": existing.country_destination,
+            },
+        }
+
     missing_fields = []
     if not draft.partner_name:
         missing_fields.append("partner_name")

@@ -16,6 +16,7 @@ from jose import JWTError, jwt
 from sqlalchemy import text
 
 import app.schemas
+from app.ai.router import router as ai_router
 from app.api.ws_security import router as ws_security_router
 from app.api.ws_tracking import router as ws_tracking_router
 from app.api.ops_payout import router as ops_payout_router
@@ -33,6 +34,9 @@ from app.routers import backoffice_audit as backoffice_audit_router
 from app.routers import backoffice_monitoring as backoffice_monitoring_router
 from app.routers.admin import analytics as admin_analytics_router
 from app.routers.admin import agents as admin_agents_router
+from app.routers.admin import ai_feedback as admin_ai_feedback_router
+from app.routers.admin import ops_workflow as admin_ops_workflow_router
+from app.routers.admin import payments as admin_payments_router
 from app.routers.admin import aml_events as admin_aml_router
 from app.routers.admin import cash_requests as admin_cash_requests_router
 from app.routers.admin import credit_history as admin_credit_history_router
@@ -52,6 +56,7 @@ from app.routers.admin import settings as admin_settings_router
 from app.routers.admin import tontine_arrears as admin_tontine_arrears_router
 from app.routers.admin import transactions_audit as admin_transactions_audit_router
 from app.routers.admin import transfers_monitor as admin_transfers_router
+from app.routers.admin import users_limits as admin_users_limits_router
 from app.routers.admin import wallet_analysis as admin_wallet_analysis_router
 from app.routers.admin.admin_users import router as admin_users_router
 from app.routers.admin.wallets_alerts import router as admin_wallets_router
@@ -92,6 +97,7 @@ from app.routers.bif_token import router as bif_router
 from app.routers.ref import country, exchange
 from app.routers.tontines.tontines import router as tontine_router
 from app.routers.wallet import payments as wallet_payments
+from app.routers.wallet.payment_collections import router as wallet_payment_collections_router
 from app.routers.wallet import transactions, wallet
 from app.routers.wallet.crypto_wallet import router as crypto_wallet_router
 from app.routers.telegram_external_transfer import router as telegram_external_transfer_router
@@ -100,6 +106,9 @@ from app.routers.wallet.transfer import router as transfer_router
 from app.routers.ws import router as ws_router
 from app.services.backoffice_risk import router as backoffice_risk_router
 from app.services.idempotency_service import ensure_idempotency_schema
+from app.services.ai_runtime_schema import ensure_ai_runtime_schema
+from app.services.payments_runtime_schema import ensure_payments_runtime_schema
+from app.services.operator_workflow_runtime_schema import ensure_operator_workflow_schema
 from app.services.telegram_external_transfer_service import ensure_telegram_external_transfer_schema
 from app.services.auth_sessions import ensure_auth_refresh_schema
 from app.services.sandbox_transition_worker import run_sandbox_auto_transitions
@@ -438,6 +447,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/auth", tags=["Auth"])
 app.include_router(change_password_router)
 app.include_router(wallet.router, prefix="/wallet", tags=["Wallet"])
+app.include_router(wallet_payment_collections_router)
 app.include_router(usdc_wallet_router)
 app.include_router(crypto_wallet_router)
 app.include_router(country.router, prefix="/api/countries", tags=["Countries"])
@@ -463,12 +473,16 @@ app.include_router(ops_payout_router)
 app.include_router(ops_liquidity_router)
 app.include_router(agent_ops_router)
 app.include_router(admin_users_router)
+app.include_router(admin_users_limits_router.router)
 app.include_router(admin_wallets_router)
 app.include_router(admin_transfers_router.router)
 app.include_router(admin_settings_router.router)
 app.include_router(admin_kyc_router.router)
 app.include_router(admin_analytics_router.router)
 app.include_router(admin_agents_router.router)
+app.include_router(admin_ai_feedback_router.router)
+app.include_router(admin_ops_workflow_router.router)
+app.include_router(admin_payments_router.router)
 app.include_router(admin_mobilemoney_router.router)
 app.include_router(admin_tontine_arrears_router.router)
 app.include_router(admin_credit_lines_router.router)
@@ -494,6 +508,7 @@ app.include_router(agent_p2p_chat_router)
 app.include_router(agent_router_extern)
 app.include_router(telegram_external_transfer_router)
 app.include_router(debug.router)
+app.include_router(ai_router)
 app.include_router(meta_router)
 app.include_router(test_email.router)
 app.include_router(health_router)
@@ -854,6 +869,9 @@ async def startup_event():
         await ensure_idempotency_schema(db)
         await ensure_request_metrics_schema(db)
         await ensure_telegram_external_transfer_schema(db)
+        await ensure_ai_runtime_schema(db)
+        await ensure_payments_runtime_schema(db)
+        await ensure_operator_workflow_schema(db)
         await db.commit()
         break
 

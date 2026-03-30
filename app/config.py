@@ -16,14 +16,28 @@ class Settings(BaseSettings):
     # -------------------------------------------------
     SECRET_KEY: str = "secret-paylink-key"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 14
+    ACCESS_TOKEN_EXPIRE_MINUTES_CLIENT: int | None = None
+    ACCESS_TOKEN_EXPIRE_MINUTES_AGENT: int | None = None
+    ACCESS_TOKEN_EXPIRE_MINUTES_ADMIN: int | None = None
+    REFRESH_TOKEN_EXPIRE_DAYS_CLIENT: int | None = None
+    REFRESH_TOKEN_EXPIRE_DAYS_AGENT: int | None = None
+    REFRESH_TOKEN_EXPIRE_DAYS_ADMIN: int | None = None
+    ACCESS_TOKEN_EXPIRE_MINUTES_STAGING: int | None = 60
+    REFRESH_TOKEN_EXPIRE_DAYS_STAGING: int | None = None
     AUTH_COOKIE_DOMAIN: str | None = None
     AUTH_COOKIE_SAMESITE: str = "lax"
     AUTH_COOKIE_SECURE: bool = False
     AUTH_REFRESH_COOKIE_NAME: str = "refresh_token"
     AUTH_REFRESH_COOKIE_PATH: str = "/auth"
     AUTH_CSRF_HEADER_NAME: str = "X-CSRF-Token"
+    ADMIN_STEP_UP_ENABLED: bool = False
+    ADMIN_STEP_UP_HEADER_NAME: str = "X-Admin-Confirm"
+    ADMIN_STEP_UP_EXPECTED_VALUE: str = "confirm"
+    ADMIN_STEP_UP_ALLOW_HEADER_FALLBACK: bool = False
+    ADMIN_STEP_UP_TOKEN_HEADER_NAME: str = "X-Admin-Step-Up-Token"
+    ADMIN_STEP_UP_TOKEN_EXPIRE_MINUTES: int = 5
 
     # -------------------------------------------------
     # ENVIRONNEMENT
@@ -125,6 +139,70 @@ class Settings(BaseSettings):
     TWILIO_TOKEN: str | None = None
     TWILIO_WHATSAPP_NUMBER: str | None = None
     OPENEXCHANGERATES_APP_ID: str = ""
+
+    # -------------------------------------------------
+    # ASSISTANT INTENT PARSER
+    # -------------------------------------------------
+    ASSISTANT_INTENT_PARSER_MODE: str = "heuristic"  # heuristic|hybrid|llm
+    ASSISTANT_INTENT_PARSER_PROVIDER: str = "disabled"  # disabled|ollama|openai_compatible
+    ASSISTANT_INTENT_PARSER_MODEL: str | None = None
+    ASSISTANT_INTENT_PARSER_BASE_URL: str | None = None
+    ASSISTANT_INTENT_PARSER_API_KEY: str | None = None
+    ASSISTANT_INTENT_PARSER_TIMEOUT_SECONDS: float = 4.0
+    ASSISTANT_INTENT_PARSER_MIN_CONFIDENCE: float = 0.55
+    AI_INTERNAL_TESTS_ENABLED: bool = False
+
+    # -------------------------------------------------
+    # PAYMENTS / MOBILE MONEY COLLECTION
+    # -------------------------------------------------
+    PAYMENTS_MOBILE_MONEY_PROVIDER: str = "lumicash_aggregator"
+    PAYMENTS_MOBILE_MONEY_WEBHOOK_SECRET: str = ""
+    PAYMENTS_PROVIDER_REQUEST_TIMEOUT_SECONDS: float = 12.0
+    PAYMENTS_LUMICASH_MERCHANT_NAME: str | None = None
+    PAYMENTS_LUMICASH_MERCHANT_NUMBER: str | None = None
+    PAYMENTS_LUMICASH_API_BASE_URL: str | None = None
+    PAYMENTS_LUMICASH_API_KEY: str | None = None
+    PAYMENTS_LUMICASH_COLLECTIONS_PATH: str = "/collections/mobile-money"
+    PAYMENTS_ECOCASH_MERCHANT_NAME: str | None = None
+    PAYMENTS_ECOCASH_MERCHANT_NUMBER: str | None = None
+    PAYMENTS_ECOCASH_API_BASE_URL: str | None = None
+    PAYMENTS_ECOCASH_API_KEY: str | None = None
+    PAYMENTS_ECOCASH_COLLECTIONS_PATH: str = "/collections/mobile-money"
+    PAYMENTS_ENOTI_MERCHANT_NAME: str | None = None
+    PAYMENTS_ENOTI_MERCHANT_NUMBER: str | None = None
+    PAYMENTS_ENOTI_API_BASE_URL: str | None = None
+    PAYMENTS_ENOTI_API_KEY: str | None = None
+    PAYMENTS_ENOTI_COLLECTIONS_PATH: str = "/collections/mobile-money"
+
+    def _role_suffix(self, role: str | None) -> str | None:
+        normalized = str(role or "").strip().lower()
+        if normalized in {"client", "agent", "admin"}:
+            return normalized
+        return None
+
+    def access_token_expire_minutes_for_role(self, role: str | None = None) -> int:
+        role_suffix = self._role_suffix(role)
+        if str(self.APP_ENV).strip().lower() == "staging" and self.ACCESS_TOKEN_EXPIRE_MINUTES_STAGING:
+            return int(self.ACCESS_TOKEN_EXPIRE_MINUTES_STAGING)
+        if role_suffix == "client" and self.ACCESS_TOKEN_EXPIRE_MINUTES_CLIENT is not None:
+            return int(self.ACCESS_TOKEN_EXPIRE_MINUTES_CLIENT)
+        if role_suffix == "agent" and self.ACCESS_TOKEN_EXPIRE_MINUTES_AGENT is not None:
+            return int(self.ACCESS_TOKEN_EXPIRE_MINUTES_AGENT)
+        if role_suffix == "admin" and self.ACCESS_TOKEN_EXPIRE_MINUTES_ADMIN is not None:
+            return int(self.ACCESS_TOKEN_EXPIRE_MINUTES_ADMIN)
+        return int(self.ACCESS_TOKEN_EXPIRE_MINUTES)
+
+    def refresh_token_expire_days_for_role(self, role: str | None = None) -> int:
+        role_suffix = self._role_suffix(role)
+        if str(self.APP_ENV).strip().lower() == "staging" and self.REFRESH_TOKEN_EXPIRE_DAYS_STAGING is not None:
+            return int(self.REFRESH_TOKEN_EXPIRE_DAYS_STAGING)
+        if role_suffix == "client" and self.REFRESH_TOKEN_EXPIRE_DAYS_CLIENT is not None:
+            return int(self.REFRESH_TOKEN_EXPIRE_DAYS_CLIENT)
+        if role_suffix == "agent" and self.REFRESH_TOKEN_EXPIRE_DAYS_AGENT is not None:
+            return int(self.REFRESH_TOKEN_EXPIRE_DAYS_AGENT)
+        if role_suffix == "admin" and self.REFRESH_TOKEN_EXPIRE_DAYS_ADMIN is not None:
+            return int(self.REFRESH_TOKEN_EXPIRE_DAYS_ADMIN)
+        return int(self.REFRESH_TOKEN_EXPIRE_DAYS)
 
 @lru_cache()
 def get_settings() -> Settings:

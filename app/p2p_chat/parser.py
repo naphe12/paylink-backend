@@ -1,12 +1,21 @@
 import re
 import unicodedata
 
+from app.services.assistant_intent_parser_llm import resolve_intent
 from app.p2p_chat.schemas import P2PDraft
 
 
 UUID_PATTERN = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
 )
+P2P_INTENTS = {
+    "latest_trade": "Ask for the latest P2P trade status.",
+    "why_blocked": "Ask why a P2P trade is blocked, pending or in dispute.",
+    "next_step": "Ask what to do next in a P2P trade.",
+    "offers_summary": "Ask about offers or a summary of available or owned offers.",
+    "track_trade": "Ask to track a specific trade or reference.",
+    "unknown": "The request does not match another P2P intent.",
+}
 
 
 def normalize_text(value: str | None) -> str:
@@ -39,4 +48,5 @@ def _extract_trade_id(message: str) -> str | None:
 
 def parse_p2p_message(message: str) -> P2PDraft:
     text = str(message or "").strip()
-    return P2PDraft(intent=_detect_intent(text), trade_id=_extract_trade_id(text), raw_message=text)
+    resolved = resolve_intent(domain="p2p", message=text, intents=P2P_INTENTS, heuristic_intent=_detect_intent(text))
+    return P2PDraft(intent=resolved.intent, trade_id=_extract_trade_id(text), raw_message=text)

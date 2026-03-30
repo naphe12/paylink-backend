@@ -1,11 +1,12 @@
 # app/schemas/users.py
 from __future__ import annotations
+
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
-from pydantic import UUID4, BaseModel, EmailStr
+
+from pydantic import UUID4, BaseModel, ConfigDict, EmailStr
+
 from app.schemas.user_auth import UserAuthRead
-from pydantic import BaseModel
-from datetime import datetime
 
 # ✅ Ces imports sont visibles uniquement pour l’éditeur (VSCode, Pylance)
 if TYPE_CHECKING:
@@ -70,9 +71,7 @@ class UserTokenData(BaseModel):
     email: str
     role: Optional[str] = None
 
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)
 
 class UsersRead_all(UsersBase):
     countries: Optional["CountriesRead"] = None
@@ -94,9 +93,7 @@ class UsersRead_all(UsersBase):
     tontine_contributions: Optional[List["TontineContributionsRead"]] = None
     tontine_payouts: Optional[List["TontinePayoutsRead"]] = None
     auth: Optional["UserAuthRead"] = None  # ✅ ajoute cette ligne
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UsersRead(BaseModel):
@@ -119,4 +116,4 @@ class UsersRead(BaseModel):
     used_monthly: float | None = None
     risk_score: float | None = None
     paytag: str | None = None
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(from_attributes=True)

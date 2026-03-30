@@ -4,6 +4,7 @@ from datetime import datetime, time, timedelta, timezone
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.legacy_adapters import handle_wallet_chat_with_ai
 from app.models.credit_line_events import CreditLineEvents
 from app.models.credit_lines import CreditLines
 from app.models.users import Users
@@ -119,6 +120,15 @@ async def _get_movements_for_date(db: AsyncSession, user_id, target_date):
 
 
 async def process_wallet_message(db: AsyncSession, *, user_id, message: str) -> WalletChatResponse:
+    current_user = await db.scalar(select(Users).where(Users.user_id == user_id))
+    if current_user is not None:
+        ai_response, handled = await handle_wallet_chat_with_ai(
+            db,
+            current_user=current_user,
+            message=message,
+        )
+        if handled:
+            return ai_response
     draft = parse_wallet_message(message)
     user, wallet, summary = await _get_wallet_context(db, user_id)
     if not user or not wallet:

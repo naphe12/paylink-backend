@@ -1,6 +1,7 @@
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.legacy_adapters import handle_escrow_chat_with_ai
 from app.escrow_chat.parser import parse_escrow_message
 from app.escrow_chat.schemas import EscrowChatResponse
 from app.models.escrow_order import EscrowOrder
@@ -84,6 +85,18 @@ async def _load_order(db: AsyncSession, *, user_id, order_id: str | None):
 
 
 async def process_escrow_message(db: AsyncSession, *, user_id, message: str) -> EscrowChatResponse:
+    from app.models.users import Users
+
+    user_for_ai = await db.scalar(select(Users).where(Users.user_id == user_id))
+    if user_for_ai is not None:
+        ai_response, used_ai = await handle_escrow_chat_with_ai(
+            db,
+            current_user=user_for_ai,
+            message=message,
+        )
+        if used_ai:
+            return ai_response
+
     draft = parse_escrow_message(message)
     order = await _load_order(db, user_id=user_id, order_id=draft.order_id)
 

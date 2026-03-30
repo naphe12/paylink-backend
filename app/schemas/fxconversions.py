@@ -5,7 +5,7 @@ import decimal
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 #
 
@@ -52,5 +52,4 @@ class FxConversionsRead(FxConversionsBase):
     base_currency: Optional["CurrenciesRead"] = None
     target_currency: Optional["CurrenciesRead"] = None
     tx: Optional["TransactionsRead"] = None
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

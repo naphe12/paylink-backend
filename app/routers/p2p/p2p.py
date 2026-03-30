@@ -20,7 +20,7 @@ from app.models.p2p_trade import P2PTrade
 from app.models.p2p_trade_history import P2PTradeStatusHistory
 
 from app.schemas.p2p_offer import OfferCreate, OfferOut, OfferUpdate
-from app.schemas.p2p_trade import TradeCreate, TradeOut, FiatSentIn, DisputeOpenIn
+from app.schemas.p2p_trade import TradeCreate, TradeOut, FiatSentIn, DisputeOpenIn, DisputeResolveIn
 from app.services.p2p_offer_service import P2POfferService
 from app.services.p2p_matching_engine import P2PMatchingEngine
 from app.services.p2p_mm_quote import P2PMMQuote
@@ -38,6 +38,7 @@ from app.services.idempotency_service import (
     compute_request_hash,
     store_idempotency_response,
 )
+from app.dependencies.step_up import get_admin_step_up_method, require_admin_step_up
 
 router = APIRouter(prefix="/p2p", tags=["P2P"])
 
@@ -625,6 +626,16 @@ async def fiat_sent_by_agent_link(
         if trade.status not in (TradeStatus.AWAITING_FIAT, TradeStatus.CRYPTO_LOCKED):
             raise HTTPException(400, f"Trade not ready for fiat sent (current={trade.status.value})")
 
+        if trade.status == TradeStatus.CRYPTO_LOCKED:
+            await set_trade_status(
+                db,
+                trade,
+                TradeStatus.AWAITING_FIAT,
+                actor_user_id=actor_user_id,
+                actor_role="AGENT_LINK",
+                note="Trade ready for fiat payment via email link",
+            )
+
         trade.fiat_sent_at = datetime.now(timezone.utc)
         await set_trade_status(
             db,
@@ -731,7 +742,15 @@ async def open_dispute(
                     status_code=409,
                     detail="Requete dupliquee en cours de traitement. Reessayez dans quelques secondes.",
                 )
-        dispute = await P2PDisputeService.open_dispute(db, trade_id, me.user_id, data.reason)
+        dispute = await P2PDisputeService.open_dispute(
+            db,
+            trade_id,
+            me.user_id,
+            data.reason,
+            reason_code=data.reason_code,
+            proof_type=data.proof_type,
+            proof_ref=data.proof_ref,
+        )
         response_payload = {"status": "OK", "dispute_id": str(dispute.dispute_id)}
         if scoped_idempotency_key:
             await store_idempotency_response(
@@ -742,6 +761,39 @@ async def open_dispute(
             )
             await db.commit()
         return response_payload
+    except PermissionError as e:
+        raise HTTPException(403, str(e))
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/trades/{trade_id}/dispute/resolve")
+async def resolve_dispute(
+    trade_id: str,
+    data: DisputeResolveIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    me: Users = Depends(require_admin_step_up("p2p_dispute_resolve")),
+):
+    try:
+        dispute = await P2PDisputeService.resolve_dispute(
+            db,
+            trade_id=trade_id,
+            resolved_by=me.user_id,
+            outcome=data.outcome,
+            resolution=data.resolution,
+            resolution_code=data.resolution_code,
+            proof_type=data.proof_type,
+            proof_ref=data.proof_ref,
+            step_up_method=get_admin_step_up_method(request),
+        )
+        return {
+            "status": "OK",
+            "dispute_id": str(dispute.dispute_id),
+            "dispute_status": str(getattr(dispute.status, "value", dispute.status)),
+            "trade_id": trade_id,
+            "outcome": data.outcome,
+        }
     except PermissionError as e:
         raise HTTPException(403, str(e))
     except Exception as e:

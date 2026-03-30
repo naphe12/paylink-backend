@@ -1,12 +1,20 @@
 import re
 import unicodedata
 
+from app.services.assistant_intent_parser_llm import resolve_intent
 from app.escrow_chat.schemas import EscrowDraft
 
 
 UUID_PATTERN = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
 )
+ESCROW_INTENTS = {
+    "latest_status": "Ask for the latest escrow status.",
+    "why_pending": "Ask why an escrow is pending or blocked.",
+    "next_step": "Ask what the next escrow step is.",
+    "track_order": "Ask to track an escrow order or reference.",
+    "unknown": "The request does not match another escrow intent.",
+}
 
 
 def normalize_text(value: str | None) -> str:
@@ -42,4 +50,5 @@ def _extract_order_id(message: str) -> str | None:
 
 def parse_escrow_message(message: str) -> EscrowDraft:
     text = str(message or "").strip()
-    return EscrowDraft(intent=_detect_intent(text), order_id=_extract_order_id(text), raw_message=text)
+    resolved = resolve_intent(domain="escrow", message=text, intents=ESCROW_INTENTS, heuristic_intent=_detect_intent(text))
+    return EscrowDraft(intent=resolved.intent, order_id=_extract_order_id(text), raw_message=text)

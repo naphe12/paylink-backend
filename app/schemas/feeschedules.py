@@ -5,7 +5,7 @@ import decimal
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 #
 
@@ -72,5 +72,4 @@ class FeeSchedulesRead(FeeSchedulesBase):
     percent_fee: Optional[decimal.Decimal]
     currency: Optional["CurrenciesRead"] = None  # ✅ forward reference
     provider: Optional["ProvidersRead"] = None
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

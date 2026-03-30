@@ -5,9 +5,11 @@ import re
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.legacy_adapters import handle_agent_chat_with_ai
 from app.agent_chat.parser import normalize_text, parse_chat_message
-from app.agent_chat.schemas import ChatResponse, TransferDraft
+from app.agent_chat.schemas import AgentChatDraft, ChatResponse
 from app.models.external_transfers import ExternalTransfers
+from app.models.users import Users
 from app.models.wallets import Wallets
 from app.models.credit_lines import CreditLines
 
@@ -155,9 +157,9 @@ def _score_beneficiary_match(query: str, candidate: str) -> float:
 
 
 def _resolve_beneficiary_from_history(
-    draft: TransferDraft,
+    draft: AgentChatDraft,
     beneficiaries: list[dict],
-) -> tuple[TransferDraft, list[str]]:
+) -> tuple[AgentChatDraft, list[str]]:
     assumptions: list[str] = []
     if not draft.recipient:
         return draft, assumptions
@@ -188,7 +190,7 @@ def _resolve_beneficiary_from_history(
     return draft, assumptions
 
 
-def _apply_defaults(draft: TransferDraft) -> list[str]:
+def _apply_defaults(draft: AgentChatDraft) -> list[str]:
     assumptions: list[str] = []
     if draft.country_destination == "Burundi" and not draft.partner_name:
         draft.partner_name = "Lumicash"
@@ -196,7 +198,7 @@ def _apply_defaults(draft: TransferDraft) -> list[str]:
     return assumptions
 
 
-def _learn_from_history(draft: TransferDraft, beneficiaries: list[dict]) -> list[str]:
+def _learn_from_history(draft: AgentChatDraft, beneficiaries: list[dict]) -> list[str]:
     assumptions: list[str] = []
     if not beneficiaries:
         return assumptions
@@ -239,7 +241,7 @@ def _learn_from_history(draft: TransferDraft, beneficiaries: list[dict]) -> list
 
 
 def _learn_from_memories(
-    draft: TransferDraft,
+    draft: AgentChatDraft,
     *,
     raw_message: str,
     memories: list[dict],
@@ -285,7 +287,7 @@ def _learn_from_memories(
     return assumptions
 
 
-def _missing_fields_for_confirmation(draft: TransferDraft) -> list[str]:
+def _missing_fields_for_confirmation(draft: AgentChatDraft) -> list[str]:
     missing = []
     if draft.amount is None or draft.amount <= Decimal("0"):
         missing.append("amount")
@@ -296,7 +298,7 @@ def _missing_fields_for_confirmation(draft: TransferDraft) -> list[str]:
     return missing
 
 
-def _missing_fields_for_execution(draft: TransferDraft) -> list[str]:
+def _missing_fields_for_execution(draft: AgentChatDraft) -> list[str]:
     missing = []
     if not draft.partner_name:
         missing.append("partner_name")
@@ -313,7 +315,7 @@ def _find_short_phone_candidate(message: str) -> str | None:
 
 
 def _build_suggestions(
-    draft: TransferDraft,
+    draft: AgentChatDraft,
     missing: list[str],
     beneficiaries: list[dict],
     raw_message: str | None = None,
@@ -353,6 +355,16 @@ def _build_suggestions(
 
 
 async def process_chat_message(db: AsyncSession, *, user_id, message: str) -> ChatResponse:
+    user_for_ai = await db.scalar(select(Users).where(Users.user_id == user_id))
+    if user_for_ai is not None:
+        ai_response, used_ai = await handle_agent_chat_with_ai(
+            db,
+            current_user=user_for_ai,
+            message=message,
+        )
+        if used_ai:
+            return ai_response
+
     draft = parse_chat_message(message)
     wallet_ctx = await _get_wallet_context(db, user_id)
     beneficiaries = await _get_recent_beneficiaries(db, user_id)

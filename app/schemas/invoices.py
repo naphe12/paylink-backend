@@ -5,7 +5,7 @@ import decimal
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 #
 
@@ -65,5 +65,4 @@ class InvoicesRead(InvoicesBase):
     users: Optional["UsersRead"] = None
     merchant: Optional["MerchantsRead"] = None
     bill_payments: Optional[List["BillPaymentsRead"]] = None  # ✅ forward ref
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

@@ -3,17 +3,20 @@ from __future__ import annotations
 import inspect
 import logging
 from datetime import timedelta
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import BackgroundTasks, HTTPException
 from jose import JWTError, jwt
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent_chat.schemas import TransferDraft
+from app.agent_chat.schemas import AgentChatDraft
 from app.agent_chat.service import process_chat_message
+from app.agent_chat.utils import apply_selected_beneficiary
 from app.config import settings
 from app.core.security import create_access_token
+from app.models.external_beneficiaries import ExternalBeneficiaries
 from app.models.external_transfers import ExternalTransfers
 from app.models.users import Users
 from app.routers.wallet.transfer import _external_transfer_core
@@ -23,6 +26,10 @@ from app.services.telegram import send_message as send_telegram_message
 
 LINK_TOKEN_ACTION = "telegram_external_transfer_link"
 logger = logging.getLogger(__name__)
+
+
+def _normalize_beneficiary_account(value: str | None) -> str:
+    return str(value or "").strip().lower()
 
 
 async def ensure_telegram_external_transfer_schema(db: AsyncSession) -> None:
@@ -137,7 +144,7 @@ async def store_chat_state(
     *,
     chat_id: str,
     user_id: str,
-    draft: TransferDraft | None,
+    draft: AgentChatDraft | None,
     raw_message: str | None,
 ) -> None:
     await db.execute(
@@ -163,7 +170,7 @@ async def store_chat_state(
     await db.commit()
 
 
-async def load_chat_state(db: AsyncSession, *, chat_id: str) -> TransferDraft | None:
+async def load_chat_state(db: AsyncSession, *, chat_id: str) -> AgentChatDraft | None:
     row = (
         await db.execute(
             text(
@@ -179,7 +186,7 @@ async def load_chat_state(db: AsyncSession, *, chat_id: str) -> TransferDraft | 
     ).mappings().first()
     if not row or not row["draft"]:
         return None
-    return TransferDraft.model_validate(row["draft"])
+    return AgentChatDraft.model_validate(row["draft"])
 
 
 async def clear_chat_state(db: AsyncSession, *, chat_id: str) -> None:
@@ -193,6 +200,51 @@ async def clear_chat_state(db: AsyncSession, *, chat_id: str) -> None:
         {"chat_id": str(chat_id).strip()},
     )
     await db.commit()
+
+
+async def _save_beneficiary_from_chat(
+    db: AsyncSession,
+    *,
+    current_user: Users,
+    draft: AgentChatDraft,
+) -> dict[str, Any]:
+    existing = await db.scalar(
+        select(ExternalBeneficiaries).where(
+            ExternalBeneficiaries.user_id == current_user.user_id,
+            ExternalBeneficiaries.partner_name == str(draft.partner_name or ""),
+            ExternalBeneficiaries.recipient_phone == str(draft.recipient_phone or ""),
+            func.coalesce(func.lower(ExternalBeneficiaries.recipient_email), "") == _normalize_beneficiary_account(draft.account_ref),
+        )
+    )
+    if existing is None:
+        existing = ExternalBeneficiaries(
+            user_id=current_user.user_id,
+            recipient_name=str(draft.recipient or ""),
+            recipient_phone=str(draft.recipient_phone or ""),
+            recipient_email=_normalize_beneficiary_account(draft.account_ref) or None,
+            partner_name=str(draft.partner_name or ""),
+            country_destination=str(draft.country_destination or ""),
+            is_active=True,
+        )
+        db.add(existing)
+        message_out = f"Beneficiaire {existing.recipient_name} enregistre avec succes."
+    else:
+        existing.recipient_name = str(draft.recipient or existing.recipient_name)
+        existing.recipient_email = _normalize_beneficiary_account(draft.account_ref) or existing.recipient_email
+        existing.country_destination = str(draft.country_destination or existing.country_destination)
+        existing.is_active = True
+        message_out = f"Beneficiaire {existing.recipient_name} mis a jour avec succes."
+    await db.commit()
+    return {
+        "message": message_out,
+        "beneficiary": {
+            "recipient_name": existing.recipient_name,
+            "recipient_phone": existing.recipient_phone,
+            "account_ref": existing.recipient_email,
+            "partner_name": existing.partner_name,
+            "country_destination": existing.country_destination,
+        },
+    }
 
 
 async def _run_background_tasks(background_tasks: BackgroundTasks) -> None:
@@ -280,6 +332,41 @@ async def confirm_external_transfer_from_chat(
     return transfer_payload
 
 
+async def confirm_chat_action(
+    db: AsyncSession,
+    *,
+    chat_id: str,
+    current_user: Users,
+) -> dict[str, Any]:
+    draft = await load_chat_state(db, chat_id=chat_id)
+    if not draft:
+        raise HTTPException(status_code=404, detail="Aucun brouillon en attente pour ce chat.")
+
+    draft = apply_selected_beneficiary(draft)
+    if draft.intent == "beneficiary_add":
+        missing_fields: list[str] = []
+        if not draft.partner_name:
+            missing_fields.append("partner_name")
+        if not draft.country_destination:
+            missing_fields.append("country_destination")
+        if not draft.recipient_phone:
+            missing_fields.append("recipient_phone")
+        if not draft.recipient:
+            missing_fields.append("recipient")
+        if missing_fields:
+            raise HTTPException(status_code=400, detail=f"Brouillon incomplet: {', '.join(missing_fields)}")
+        result = await _save_beneficiary_from_chat(db, current_user=current_user, draft=draft)
+        await clear_chat_state(db, chat_id=chat_id)
+        return {"kind": "beneficiary_add", **result}
+
+    transfer = await confirm_external_transfer_from_chat(
+        db,
+        chat_id=chat_id,
+        current_user=current_user,
+    )
+    return {"kind": "external_transfer", "transfer": transfer}
+
+
 def format_chat_response(payload) -> str:
     message = str(getattr(payload, "message", "") or "").strip()
     lines = [message] if message else []
@@ -344,31 +431,55 @@ async def handle_telegram_external_transfer_message(
         return "Brouillon annule."
 
     if lowered in {"/confirm", "confirmer", "confirm"}:
-        transfer = await confirm_external_transfer_from_chat(
+        result = await confirm_chat_action(
             db,
             chat_id=chat_id,
             current_user=current_user,
         )
+        if result.get("kind") == "beneficiary_add":
+            beneficiary = result.get("beneficiary") or {}
+            return (
+                f"{result.get('message')}\n"
+                f"Beneficiaire: {beneficiary.get('recipient_name')}\n"
+                f"Partenaire: {beneficiary.get('partner_name')}\n"
+                f"Telephone: {beneficiary.get('recipient_phone')}"
+            )
+        transfer = result.get("transfer") or {}
         reference = transfer.get("reference_code") or transfer.get("transfer_id")
         status = transfer.get("status") or "pending"
-        return (
-            f"Demande creee avec succes.\n"
-            f"Reference: {reference}\n"
-            f"Statut: {status}"
-        )
+        return f"Demande creee avec succes.\nReference: {reference}\nStatut: {status}"
 
     normalized_message = text_value
     if lowered.startswith("/transfer "):
         normalized_message = text_value.split(" ", 1)[1].strip()
 
+    current_draft = await load_chat_state(db, chat_id=chat_id)
+    if current_draft and current_draft.beneficiary_candidates and lowered.isdigit():
+        current_draft.selected_beneficiary_index = int(lowered)
+        current_draft = apply_selected_beneficiary(current_draft)
+        await store_chat_state(
+            db,
+            chat_id=chat_id,
+            user_id=str(current_user.user_id),
+            draft=current_draft,
+            raw_message=current_draft.raw_message,
+        )
+        return (
+            f"Beneficiaire {lowered} selectionne.\n"
+            f"{format_chat_response(SimpleNamespace(message='Selection prise en compte.', data=current_draft, missing_fields=[], executable=True, suggestions=[]))}"
+        )
+
     payload = await process_chat_message(db, user_id=current_user.user_id, message=normalized_message)
-    await store_chat_state(
-        db,
-        chat_id=chat_id,
-        user_id=str(current_user.user_id),
-        draft=getattr(payload, "data", None),
-        raw_message=normalized_message,
-    )
+    if getattr(payload, "status", None) in {"CONFIRM", "NEED_INFO"} and getattr(payload, "data", None) is not None:
+        await store_chat_state(
+            db,
+            chat_id=chat_id,
+            user_id=str(current_user.user_id),
+            draft=getattr(payload, "data", None),
+            raw_message=normalized_message,
+        )
+    else:
+        await clear_chat_state(db, chat_id=chat_id)
     return format_chat_response(payload)
 
 

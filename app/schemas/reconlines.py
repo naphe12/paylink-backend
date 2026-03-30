@@ -6,7 +6,7 @@ from __future__ import annotations
 import decimal
 from typing import TYPE_CHECKING, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
     from app.schemas.currencies import CurrenciesRead
@@ -55,5 +55,4 @@ class ReconLinesRead(ReconLinesBase):
     currencies: Optional["CurrenciesRead"] = None
     transactions: Optional["TransactionsRead"] = None
     recon: Optional["ReconFilesRead"] = None
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

@@ -3,6 +3,7 @@ import decimal
 from sqlalchemy import String, cast, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.legacy_adapters import handle_wallet_support_with_ai
 from app.models.client_balance_events import ClientBalanceEvents
 from app.models.external_transfers import ExternalTransfers
 from app.models.users import Users
@@ -70,6 +71,16 @@ async def _load_context(db: AsyncSession, user_id):
 
 
 async def process_wallet_support_message(db: AsyncSession, *, user_id, message: str) -> WalletSupportChatResponse:
+    user_for_ai = await db.scalar(select(Users).where(Users.user_id == user_id))
+    if user_for_ai is not None:
+        ai_response, used_ai = await handle_wallet_support_with_ai(
+            db,
+            current_user=user_for_ai,
+            message=message,
+        )
+        if used_ai:
+            return ai_response
+
     draft = parse_wallet_support_message(message)
     (
         user,

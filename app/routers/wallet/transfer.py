@@ -20,6 +20,7 @@ from app.models.credit_line_history import CreditLineHistory
 from app.models.credit_line_events import CreditLineEvents
 from app.models.credit_lines import CreditLines
 from app.models.countries import Countries
+from app.models.external_beneficiaries import ExternalBeneficiaries
 from app.models.external_transfers import ExternalTransfers
 from app.models.transactions import Transactions
 from app.models.users import Users
@@ -31,7 +32,6 @@ from app.schemas.external_transfers import (
     ExternalTransferCreate,
     ExternalTransferRead,
 )
-from app.schemas.transactions import TransactionSend
 from app.services.aml import update_risk_score
 from app.services.ledger import LedgerLine, LedgerService
 from app.services.risk_engine import calculate_risk_score
@@ -66,10 +66,53 @@ from app.services.fx_provider import get_open_exchange_rate_to_eur
 router = APIRouter(prefix="/wallet/transfer", tags=["External Transfer"])
 logger = logging.getLogger(__name__)
 EXTERNAL_TRANSFER_PHONE_RE = re.compile(r"^\+?[0-9]{8,15}$")
+AML_ALERT_THRESHOLD = 50
+AML_MANUAL_REVIEW_THRESHOLD = 60
+AML_AUTO_FREEZE_THRESHOLD = 80
 
 
 def _is_valid_external_phone(value: str | None) -> bool:
     return bool(EXTERNAL_TRANSFER_PHONE_RE.fullmatch(str(value or "").strip()))
+
+
+def _derive_external_transfer_aml_reason_codes(
+    *,
+    user: Users,
+    amount: decimal.Decimal,
+    risk_score: int,
+    channel: str,
+) -> list[str]:
+    codes: list[str] = []
+    kyc_tier = int(getattr(user, "kyc_tier", 0) or 0)
+    if kyc_tier <= 0:
+        codes.append("AML_KYC_UNVERIFIED")
+    elif kyc_tier == 1:
+        codes.append("AML_KYC_BASIC")
+
+    created_at = getattr(user, "created_at", None)
+    if created_at is not None:
+        user_age_days = max((datetime.utcnow() - created_at.replace(tzinfo=None) if getattr(created_at, "tzinfo", None) else datetime.utcnow() - created_at).days, 0)
+        if user_age_days < 7:
+            codes.append("AML_NEW_ACCOUNT_LT_7D")
+        elif user_age_days < 30:
+            codes.append("AML_NEW_ACCOUNT_LT_30D")
+
+    if amount >= decimal.Decimal("1000000"):
+        codes.append("AML_AMOUNT_GE_1000000")
+    elif amount >= decimal.Decimal("300000"):
+        codes.append("AML_AMOUNT_GE_300000")
+
+    if str(channel or "").lower() == "external":
+        codes.append("AML_EXTERNAL_CHANNEL")
+
+    if risk_score >= AML_AUTO_FREEZE_THRESHOLD:
+        codes.append("AML_SCORE_CRITICAL")
+    elif risk_score >= AML_MANUAL_REVIEW_THRESHOLD:
+        codes.append("AML_SCORE_MANUAL_REVIEW")
+    elif risk_score >= AML_ALERT_THRESHOLD:
+        codes.append("AML_SCORE_ALERT")
+
+    return codes
 
 
 async def _get_destination_currency(db: AsyncSession, country: str) -> str:
@@ -579,10 +622,11 @@ async def list_external_beneficiaries(
     """
     Liste des bénéficiaires déjà utilisés par l'utilisateur pour ses transferts externes.
     """
-    stmt = (
+    transfer_stmt = (
         select(
             ExternalTransfers.recipient_name,
             ExternalTransfers.recipient_phone,
+            ExternalTransfers.metadata_.label("metadata_"),
             ExternalTransfers.partner_name,
             ExternalTransfers.country_destination,
         )
@@ -590,19 +634,51 @@ async def list_external_beneficiaries(
         .distinct()
         .order_by(ExternalTransfers.recipient_name.asc())
     )
-    result = await db.execute(stmt)
-    rows = result.all()
-    return [
-        {
-          "recipient_name": r.recipient_name,
-          "recipient_phone": str(r.recipient_phone or "").strip() or None,
-          "recipient_email": None,
-          "partner_name": r.partner_name,
-          "country_destination": r.country_destination,
+    saved_stmt = (
+        select(ExternalBeneficiaries)
+        .where(
+            ExternalBeneficiaries.user_id == current_user.user_id,
+            ExternalBeneficiaries.is_active.is_(True),
+        )
+        .order_by(ExternalBeneficiaries.recipient_name.asc())
+    )
+    transfer_rows = (await db.execute(transfer_stmt)).all()
+    saved_rows = (await db.execute(saved_stmt)).scalars().all()
+
+    beneficiaries: dict[tuple[str, str, str], dict] = {}
+    for item in saved_rows:
+        phone = str(item.recipient_phone or "").strip()
+        if not _is_valid_external_phone(phone):
+            continue
+        account_ref = str(item.recipient_email or "").strip().lower()
+        beneficiaries[(str(item.partner_name or "").strip().lower(), phone, account_ref)] = {
+            "recipient_name": item.recipient_name,
+            "recipient_phone": phone or None,
+            "account_ref": account_ref or None,
+            "recipient_email": str(item.recipient_email or "").strip().lower() or None,
+            "partner_name": item.partner_name,
+            "country_destination": item.country_destination,
         }
-        for r in rows
-        if _is_valid_external_phone(r.recipient_phone)
-    ]
+
+    for row in transfer_rows:
+        phone = str(row.recipient_phone or "").strip()
+        if not _is_valid_external_phone(phone):
+            continue
+        metadata = dict(row.metadata_ or {})
+        account_ref = str(metadata.get("recipient_email") or "").strip().lower()
+        key = (str(row.partner_name or "").strip().lower(), phone, account_ref)
+        beneficiaries.setdefault(
+            key,
+            {
+                "recipient_name": row.recipient_name,
+                "recipient_phone": phone or None,
+                "account_ref": account_ref or None,
+                "recipient_email": str(metadata.get("recipient_email") or "").strip().lower() or None,
+                "partner_name": row.partner_name,
+                "country_destination": row.country_destination,
+            },
+        )
+    return sorted(beneficiaries.values(), key=lambda item: (str(item.get("recipient_name") or "").lower(), str(item.get("partner_name") or "").lower()))
 
 
 @router.get("/external/mine")
@@ -766,6 +842,12 @@ async def _external_transfer_core(
 
     risk = await update_risk_score(db, current_user, amount, channel="external")
     aml_manual_review_required = risk >= 60
+    aml_reason_codes = _derive_external_transfer_aml_reason_codes(
+        user=user_locked,
+        amount=amount,
+        risk_score=int(risk),
+        channel="external",
+    )
 
     if current_user.external_transfers_blocked:
         raise HTTPException(423, "Transferts externes temporairement suspendus.")
@@ -911,6 +993,7 @@ async def _external_transfer_core(
         "processed_by_user_id": processed_by_user_id if transfer_status == "completed" else None,
         "aml_risk_score": int(risk),
         "aml_manual_review_required": bool(aml_manual_review_required),
+        "aml_reason_codes": aml_reason_codes or None,
         "review_reason": review_reasons[0] if review_reasons else None,
         "review_reasons": review_reasons or None,
         "funding_pending": bool(insufficient_funds_review_required),

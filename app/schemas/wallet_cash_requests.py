@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.models.wallet_cash_requests import (
     WalletCashRequestStatus,
@@ -44,9 +44,7 @@ class WalletCashRequestBase(BaseModel):
     created_at: datetime
     processed_at: datetime | None = None
 
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)
 
 class WalletCashRequestRead(WalletCashRequestBase):
     pass

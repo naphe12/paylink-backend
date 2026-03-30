@@ -12,6 +12,7 @@ WalletSupportIntent = Literal[
     "frozen_account",
     "cant_send",
     "latest_movement",
+    "limits",
     "unknown",
 ]
 

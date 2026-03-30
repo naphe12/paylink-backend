@@ -5,12 +5,20 @@ from app.services.assistant_semantic_parser import (
     normalize_text,
     tokenize,
 )
+from app.services.assistant_intent_parser_llm import resolve_intent
 from app.transfer_support_chat.schemas import TransferSupportDraft
 
 
 TRACK_WORDS = {"suivre", "suivi", "statut", "ou", "demande", "transfert", "reference", "reference_code"}
 PENDING_WORDS = {"pending", "attente", "bloque", "bloquee", "raison", "pourquoi"}
 CAPACITY_WORDS = {"capacite", "capacite financiere", "credit", "disponible", "wallet", "solde", "utiliser", "peut"}
+TRANSFER_SUPPORT_INTENTS = {
+    "track_transfer": "Track an external transfer request or ask where it is.",
+    "pending_reason": "Ask why a transfer is pending, blocked or waiting.",
+    "status_help": "Ask what transfer statuses mean.",
+    "capacity": "Ask about available financial capacity before transferring.",
+    "unknown": "The request does not match another transfer support intent.",
+}
 
 
 def _build_transfer_semantic_query(message: str) -> SemanticQuery:
@@ -64,9 +72,16 @@ def _build_transfer_semantic_query(message: str) -> SemanticQuery:
 def parse_transfer_support_message(message: str) -> TransferSupportDraft:
     text = str(message or "").strip()
     query = _build_transfer_semantic_query(text)
+    resolved = resolve_intent(
+        domain="transfer_support",
+        message=text,
+        intents=TRANSFER_SUPPORT_INTENTS,
+        heuristic_intent=query.action,
+    )
+    query.action = resolved.intent
     return TransferSupportDraft(
         intent=query.action,
         reference_code=query.reference_code,
         raw_message=text,
-        semantic_hints=query.to_dict(),
+        semantic_hints={**query.to_dict(), "intent_parser_source": resolved.source, "intent_confidence": resolved.confidence},
     )

@@ -1,8 +1,13 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from uuid import UUID
 from decimal import Decimal
 from datetime import datetime
 from schemas.escrow_enums import EscrowOrderStatus, EscrowNetwork, EscrowPayoutMethod
+from app.schemas.dispute_codes import (
+    EscrowRefundReasonCode,
+    EscrowRefundResolutionCode,
+    ProofTypeCode,
+)
 
 
 class EscrowOrderCreate(BaseModel):
@@ -28,5 +33,18 @@ class EscrowOrderResponse(BaseModel):
     deposit_address: str
     expires_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EscrowRefundRequestIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+    reason_code: EscrowRefundReasonCode | None = None
+    proof_type: ProofTypeCode | None = None
+    proof_ref: str | None = Field(default=None, min_length=1, max_length=500)
+
+
+class EscrowRefundConfirmIn(BaseModel):
+    resolution: str = Field(min_length=3, max_length=500)
+    resolution_code: EscrowRefundResolutionCode | None = None
+    proof_type: ProofTypeCode | None = None
+    proof_ref: str | None = Field(default=None, min_length=1, max_length=500)

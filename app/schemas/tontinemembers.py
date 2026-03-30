@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
     from app.schemas.tontines import TontinesRead
@@ -32,5 +32,4 @@ class TontineMembersRead(TontineMembersBase):
     join_order: int
     tontine: Optional["TontinesRead"] = None
     user: Optional["UsersRead"] = None
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
