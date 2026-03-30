@@ -56,6 +56,7 @@ from app.routers.admin import settings as admin_settings_router
 from app.routers.admin import tontine_arrears as admin_tontine_arrears_router
 from app.routers.admin import transactions_audit as admin_transactions_audit_router
 from app.routers.admin import transfers_monitor as admin_transfers_router
+from app.routers.admin import users_limits as admin_users_limits_router
 from app.routers.admin import wallet_analysis as admin_wallet_analysis_router
 from app.routers.admin.admin_users import router as admin_users_router
 from app.routers.admin.wallets_alerts import router as admin_wallets_router
@@ -472,6 +473,7 @@ app.include_router(ops_payout_router)
 app.include_router(ops_liquidity_router)
 app.include_router(agent_ops_router)
 app.include_router(admin_users_router)
+app.include_router(admin_users_limits_router.router)
 app.include_router(admin_wallets_router)
 app.include_router(admin_transfers_router.router)
 app.include_router(admin_settings_router.router)
