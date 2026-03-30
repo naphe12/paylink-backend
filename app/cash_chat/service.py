@@ -155,6 +155,8 @@ async def process_cash_message(db: AsyncSession, *, user_id, message: str) -> Ca
             assumptions.append("La demande a deja ete finalisee.")
         elif request_status == "rejected":
             assumptions.append("La demande a ete rejetee. Verifie les details ou recree une nouvelle demande si besoin.")
+        elif request_status == "cancelled":
+            assumptions.append("La demande a ete annulee. Il faut en creer une nouvelle si l'operation est toujours souhaitee.")
         return CashChatResponse(
             status="INFO",
             message=message_text,

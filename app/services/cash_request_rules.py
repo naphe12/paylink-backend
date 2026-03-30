@@ -9,11 +9,13 @@ ALLOWED_CASH_REQUEST_TRANSITIONS: dict[WalletCashRequestStatus, set[WalletCashRe
     WalletCashRequestStatus.PENDING: {
         WalletCashRequestStatus.APPROVED,
         WalletCashRequestStatus.REJECTED,
+        WalletCashRequestStatus.CANCELLED,
     },
     WalletCashRequestStatus.APPROVED: {
         WalletCashRequestStatus.COMPLETED,
     },
     WalletCashRequestStatus.REJECTED: set(),
+    WalletCashRequestStatus.CANCELLED: set(),
     WalletCashRequestStatus.COMPLETED: set(),
 }
 
