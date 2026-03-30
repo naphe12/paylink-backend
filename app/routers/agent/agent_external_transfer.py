@@ -79,6 +79,16 @@ def _extract_transfer_risk_flags(metadata: dict | None) -> dict:
     }
 
 
+def _transfer_origin_currency(transfer: ExternalTransfers, fallback: str = "EUR") -> str:
+    metadata = dict(getattr(transfer, "metadata_", {}) or {})
+    return str(metadata.get("origin_currency") or fallback or "EUR").upper()
+
+
+def _transfer_destination_currency(transfer: ExternalTransfers, fallback: str = "BIF") -> str:
+    metadata = dict(getattr(transfer, "metadata_", {}) or {})
+    return str(metadata.get("destination_currency") or transfer.currency or fallback or "BIF").upper()
+
+
 async def _ensure_transfer_transaction(
     db: AsyncSession,
     transfer: ExternalTransfers,
@@ -94,7 +104,7 @@ async def _ensure_transfer_transaction(
         return tx_by_id
 
     amount = fallback_tx.amount if fallback_tx else transfer.amount or Decimal("0")
-    currency_code = fallback_tx.currency_code if fallback_tx else transfer.currency or "EUR"
+    currency_code = fallback_tx.currency_code if fallback_tx else _transfer_origin_currency(transfer)
     new_tx = Transactions(
         tx_id=transfer.transfer_id,  # respecte le FK
         amount=amount,
@@ -152,7 +162,7 @@ async def _close_external_transfer_core(
         raise HTTPException(status_code=404, detail="Portefeuille agent introuvable.")
 
     wallet_ccy = str(wallet.currency_code or "").upper()
-    transfer_ccy = str(transfer.currency or "").upper()
+    transfer_ccy = _transfer_destination_currency(transfer)
     if wallet_ccy == transfer_ccy and transfer.local_amount is not None:
         amount_to_debit = Decimal(transfer.local_amount)
     else:
@@ -235,7 +245,7 @@ async def _close_external_transfer_core(
         Bonjour {user.full_name},
 
         Votre transfert {transfer.reference_code} a ete complete par un agent.
-        Montant envoye : {transfer.amount} {transfer.currency}
+        Montant envoye : {transfer.amount} {_transfer_origin_currency(transfer)}
         Beneficiaire : {transfer.recipient_name} ({transfer.recipient_phone})
 
         Merci d'utiliser paylink.
@@ -380,9 +390,10 @@ async def get_pending_transfers(
                 "recipient_name": transfer.recipient_name,
                 "recipient_phone": transfer.recipient_phone,
                 "amount": float(transfer.amount),
-                "currency": transfer.currency,
+                "currency": _transfer_origin_currency(transfer),
                 "rate": float(transfer.rate) if transfer.rate is not None else None,
                 "local_amount": float(transfer.local_amount) if transfer.local_amount is not None else None,
+                "local_currency": _transfer_destination_currency(transfer),
                 "credit_used": bool(transfer.credit_used),
                 "status": transfer.status,
                 "reference_code": transfer.reference_code,
