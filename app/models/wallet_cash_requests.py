@@ -30,10 +30,12 @@ class WalletCashRequestStatus(str, enum.Enum):
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
+    CANCELLED = "cancelled"
     COMPLETED = "completed"
     PENDING_UPPER = "PENDING"
     APPROVED_UPPER = "APPROVED"
     REJECTED_UPPER = "REJECTED"
+    CANCELLED_UPPER = "CANCELLED"
     COMPLETED_UPPER = "COMPLETED"
 
 
@@ -71,6 +73,10 @@ def normalize_wallet_cash_request_status(value: str | WalletCashRequestStatus | 
         "APPROVED": WalletCashRequestStatus.APPROVED,
         "rejected": WalletCashRequestStatus.REJECTED,
         "REJECTED": WalletCashRequestStatus.REJECTED,
+        "cancelled": WalletCashRequestStatus.CANCELLED,
+        "CANCELLED": WalletCashRequestStatus.CANCELLED,
+        "canceled": WalletCashRequestStatus.CANCELLED,
+        "CANCELED": WalletCashRequestStatus.CANCELLED,
         "completed": WalletCashRequestStatus.COMPLETED,
         "COMPLETED": WalletCashRequestStatus.COMPLETED,
     }

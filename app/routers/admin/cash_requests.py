@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Header, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import String, cast, select
+from sqlalchemy import String, cast, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -69,6 +69,27 @@ class AdminCashUserRead(BaseModel):
     full_name: str | None = None
     email: str | None = None
     phone_e164: str | None = None
+
+
+class AdminCashDepositSearchRead(BaseModel):
+    deposit_created_at: datetime
+    user_id: UUID
+    user_full_name: str | None = None
+    user_email: str | None = None
+    wallet_id: UUID | None = None
+    amount: decimal.Decimal
+    currency_code: str
+    operation_type: str
+    deposit_mode: str
+    new_balance: decimal.Decimal | None = None
+    cash_request_id: UUID | None = None
+    movement_id: UUID | None = None
+    reference: str | None = None
+    description: str | None = None
+    admin_note: str | None = None
+    admin_user_id: UUID | None = None
+    admin_full_name: str | None = None
+    admin_email: str | None = None
 
 
 async def _serialize_request(
@@ -225,6 +246,126 @@ async def list_cash_users(
         )
         for u in users
     ]
+
+
+@router.get("/admin-deposits", response_model=list[AdminCashDepositSearchRead])
+async def list_admin_cash_deposits(
+    q: str | None = Query(None),
+    user_id: UUID | None = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    params = {
+        "user_id": str(user_id) if user_id else None,
+        "q": f"%{q.strip()}%" if q and q.strip() else None,
+        "limit": limit,
+    }
+    rows = (
+        await db.execute(
+            text(
+                """
+                WITH wallet_tx AS (
+                  SELECT
+                    wt.transaction_id AS movement_id,
+                    wt.user_id,
+                    wt.wallet_id,
+                    wt.amount,
+                    wt.currency_code,
+                    wt.direction,
+                    wt.operation_type,
+                    wt.reference,
+                    wt.description,
+                    wt.balance_after,
+                    wt.created_at,
+                    CASE
+                      WHEN wt.reference ~* '^[0-9a-f-]{36}$' THEN CAST(wt.reference AS uuid)
+                      ELSE NULL
+                    END AS direct_admin_user_id
+                  FROM paylink.wallet_transactions wt
+                  WHERE wt.operation_type IN ('cash_deposit_admin_direct', 'cash_deposit_admin')
+                    AND wt.direction IN ('credit', 'CREDIT')
+                ),
+                cash_request_meta AS (
+                  SELECT
+                    wcr.request_id AS cash_request_id,
+                    wcr.user_id,
+                    wcr.amount,
+                    wcr.currency_code,
+                    wcr.processed_at,
+                    wcr.processed_by AS processed_by_admin_id,
+                    wcr.admin_note
+                  FROM paylink.wallet_cash_requests wcr
+                  WHERE CAST(wcr.type AS text) IN ('DEPOSIT', 'deposit')
+                    AND CAST(wcr.status AS text) IN ('APPROVED', 'approved')
+                ),
+                joined AS (
+                  SELECT
+                    tx.movement_id,
+                    tx.user_id,
+                    tx.wallet_id,
+                    tx.amount,
+                    tx.currency_code,
+                    tx.operation_type,
+                    tx.reference,
+                    tx.description,
+                    tx.balance_after,
+                    tx.created_at AS deposit_created_at,
+                    crm.cash_request_id,
+                    COALESCE(crm.processed_by_admin_id, tx.direct_admin_user_id) AS processed_by_admin_id,
+                    crm.admin_note
+                  FROM wallet_tx tx
+                  LEFT JOIN cash_request_meta crm
+                    ON crm.user_id = tx.user_id
+                   AND crm.amount = tx.amount
+                   AND crm.currency_code = tx.currency_code
+                   AND crm.processed_at IS NOT NULL
+                   AND ABS(EXTRACT(EPOCH FROM (crm.processed_at - tx.created_at))) <= 10
+                )
+                SELECT
+                  j.deposit_created_at,
+                  u.user_id,
+                  u.full_name AS user_full_name,
+                  u.email AS user_email,
+                  j.wallet_id,
+                  j.amount,
+                  j.currency_code,
+                  j.operation_type,
+                  CASE
+                    WHEN j.operation_type = 'cash_deposit_admin_direct' THEN 'depot_admin_direct'
+                    WHEN j.operation_type = 'cash_deposit_admin' THEN 'depot_admin_via_validation'
+                    ELSE j.operation_type
+                  END AS deposit_mode,
+                  j.balance_after AS new_balance,
+                  j.cash_request_id,
+                  j.movement_id,
+                  j.reference,
+                  j.description,
+                  j.admin_note,
+                  admin_user.user_id AS admin_user_id,
+                  admin_user.full_name AS admin_full_name,
+                  admin_user.email AS admin_email
+                FROM joined j
+                JOIN paylink.users u ON u.user_id = j.user_id
+                LEFT JOIN paylink.users admin_user ON admin_user.user_id = j.processed_by_admin_id
+                WHERE (:user_id IS NULL OR j.user_id = CAST(:user_id AS uuid))
+                  AND (
+                    :q IS NULL
+                    OR u.full_name ILIKE :q
+                    OR u.email ILIKE :q
+                    OR u.phone_e164 ILIKE :q
+                    OR admin_user.full_name ILIKE :q
+                    OR admin_user.email ILIKE :q
+                    OR j.reference ILIKE :q
+                  )
+                ORDER BY j.deposit_created_at DESC
+                LIMIT :limit
+                """
+            ),
+            params,
+        )
+    ).mappings().all()
+    return [AdminCashDepositSearchRead.model_validate(dict(row)) for row in rows]
 
 
 @router.post("/deposit")
