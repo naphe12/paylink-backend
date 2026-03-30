@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Header, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import String, cast, select, text
+from sqlalchemy import Integer, String, bindparam, cast, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -361,6 +361,10 @@ async def list_admin_cash_deposits(
                 ORDER BY j.deposit_created_at DESC
                 LIMIT :limit
                 """
+            ).bindparams(
+                bindparam("user_id", type_=String()),
+                bindparam("q", type_=String()),
+                bindparam("limit", type_=Integer()),
             ),
             params,
         )
