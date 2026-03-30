@@ -69,6 +69,7 @@ EXTERNAL_TRANSFER_PHONE_RE = re.compile(r"^\+?[0-9]{8,15}$")
 AML_ALERT_THRESHOLD = 50
 AML_MANUAL_REVIEW_THRESHOLD = 60
 AML_AUTO_FREEZE_THRESHOLD = 80
+EXTERNAL_TRANSFER_SETTLEMENT_CURRENCY = "BIF"
 
 
 def _is_valid_external_phone(value: str | None) -> bool:
@@ -131,6 +132,44 @@ async def _get_destination_currency(db: AsyncSession, country: str) -> str:
     if country_row and country_row.currency_code:
         return str(country_row.currency_code).upper()
     return "EUR"
+
+
+async def _get_sender_country_currency(
+    db: AsyncSession,
+    user: Users,
+    fallback_currency: str | None = None,
+) -> str:
+    user_country_code = str(getattr(user, "country_code", "") or "").strip()
+    if user_country_code:
+        country_currency = await db.scalar(
+            select(Countries.currency_code).where(Countries.country_code == user_country_code)
+        )
+        if country_currency:
+            return str(country_currency).upper()
+    return str(fallback_currency or "EUR").upper()
+
+
+def _serialize_external_transfer_read(transfer: ExternalTransfers) -> dict:
+    metadata = dict(getattr(transfer, "metadata_", {}) or {})
+    return ExternalTransferRead.model_validate(
+        {
+            "transfer_id": transfer.transfer_id,
+            "user_id": transfer.user_id,
+            "partner_name": transfer.partner_name,
+            "country_destination": transfer.country_destination,
+            "recipient_name": transfer.recipient_name,
+            "recipient_phone": str(transfer.recipient_phone or "").strip() or None,
+            "recipient_email": _normalize_optional_email(metadata.get("recipient_email")),
+            "amount": transfer.amount,
+            "currency": str(metadata.get("origin_currency") or "EUR"),
+            "rate": transfer.rate,
+            "local_amount": transfer.local_amount,
+            "credit_used": transfer.credit_used,
+            "status": transfer.status,
+            "reference_code": transfer.reference_code,
+            "created_at": transfer.created_at,
+        }
+    ).model_dump(mode="json")
 
 
 async def _resolve_fx_rate(
@@ -695,25 +734,7 @@ async def list_my_external_transfers(
         .limit(safe_limit)
     )
     return [
-        ExternalTransferRead.model_validate(
-            {
-                "transfer_id": transfer.transfer_id,
-                "user_id": transfer.user_id,
-                "partner_name": transfer.partner_name,
-                "country_destination": transfer.country_destination,
-                "recipient_name": transfer.recipient_name,
-                "recipient_phone": str(transfer.recipient_phone or "").strip() or None,
-                "recipient_email": None,
-                "amount": transfer.amount,
-                "currency": transfer.currency,
-                "rate": transfer.rate,
-                "local_amount": transfer.local_amount,
-                "credit_used": transfer.credit_used,
-                "status": transfer.status,
-                "reference_code": transfer.reference_code,
-                "created_at": transfer.created_at,
-            }
-        )
+        _serialize_external_transfer_read(transfer)
         for transfer in result.scalars().all()
         if _is_valid_external_phone(transfer.recipient_phone)
     ]
@@ -808,9 +829,9 @@ async def _external_transfer_core(
         credit_used_total = decimal.Decimal(user_locked.credit_used or 0)
         credit_available = max(credit_limit - credit_used_total, decimal.Decimal(0))
     credit_available_before = credit_available
-    origin_currency = wallet.currency_code or "EUR"
+    origin_currency = await _get_sender_country_currency(db, current_user, wallet.currency_code or "EUR")
     is_bif_client = str(origin_currency or "").upper() == "BIF"
-    destination_currency = await _get_destination_currency(db, data.country_destination)
+    destination_currency = EXTERNAL_TRANSFER_SETTLEMENT_CURRENCY
     if is_bif_client and str(destination_currency or "").upper() == "BIF":
         fee_rate = decimal.Decimal("6.25")
     else:
@@ -1097,7 +1118,7 @@ async def _external_transfer_core(
     await db.commit()
     await db.refresh(transfer)
     if scoped_idempotency_key:
-        payload_out = ExternalTransferRead.model_validate(transfer).model_dump(mode="json")
+        payload_out = _serialize_external_transfer_read(transfer)
         await store_idempotency_response(
             db,
             key=scoped_idempotency_key,
@@ -1126,7 +1147,7 @@ async def _external_transfer_core(
         "notify_recipient": transfer_status == "approved",
     }
     background_tasks.add_task(_notify_external_transfer_task, **notification_kwargs)
-    return payload_out if scoped_idempotency_key else transfer
+    return payload_out if scoped_idempotency_key else _serialize_external_transfer_read(transfer)
 
 
 @router.post("/external", response_model=ExternalTransferRead)
