@@ -13,6 +13,54 @@ from app.ai.schemas import AiResponse, ParsedIntent
 from app.models.users import Users
 
 
+def _format_amount(value: Any) -> str:
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    formatted = f"{amount:,.2f}"
+    return formatted.replace(",", " ")
+
+
+def _build_financial_overview_message(data: dict[str, Any]) -> str:
+    currency = str(data.get("wallet_currency") or "EUR")
+    wallet_available = _format_amount(data.get("wallet_available"))
+    credit_remaining = _format_amount(data.get("credit_remaining"))
+    daily_remaining = _format_amount(data.get("daily_remaining"))
+    monthly_remaining = _format_amount(data.get("monthly_remaining"))
+    status = str(data.get("status") or "inconnu").lower()
+    kyc_status = str(data.get("kyc_status") or "inconnu").lower()
+    diagnostic = str(data.get("diagnostic_probable") or "A_VERIFIER_COTE_LOGS_OU_FRONT")
+
+    segments = [
+        f"Situation financiere : compte {status}, KYC {kyc_status}.",
+        f"Wallet disponible : {wallet_available} {currency}.",
+        f"Credit disponible : {credit_remaining} {currency}.",
+        f"Reste de limite : {daily_remaining} {currency} aujourd'hui et {monthly_remaining} {currency} ce mois.",
+    ]
+
+    if data.get("reference_code"):
+        transfer_amount = _format_amount(data.get("last_transfer_amount"))
+        transfer_currency = str(data.get("last_transfer_currency") or currency)
+        transfer_status = str(data.get("transfer_status") or "inconnu")
+        segments.append(
+            f"Dernier transfert : {data.get('reference_code')} de {transfer_amount} {transfer_currency}, statut {transfer_status}."
+        )
+
+    diagnostic_labels = {
+        "COMPTE_NON_ACTIF": "Diagnostic probable : compte non actif.",
+        "TRANSFERTS_EXTERNES_SUSPENDUS": "Diagnostic probable : transferts externes suspendus.",
+        "LIMITE_JOURNALIERE_DEPASSEE_POUR_600": "Diagnostic probable : un transfert de 600 depasserait la limite journaliere.",
+        "LIMITE_MENSUELLE_DEPASSEE_POUR_600": "Diagnostic probable : un transfert de 600 depasserait la limite mensuelle.",
+        "COUVERTURE_INSUFFISANTE_POUR_600_HORS_FRAIS": "Diagnostic probable : la couverture disponible reste insuffisante pour 600 hors frais.",
+        "TRANSFERT_EN_ATTENTE_DE_FINANCEMENT": "Diagnostic probable : le dernier transfert reste en attente de financement.",
+        "REVUE_AML_MANUELLE": "Diagnostic probable : le dernier transfert est en revue AML manuelle.",
+        "A_VERIFIER_COTE_LOGS_OU_FRONT": "Diagnostic probable : rien de bloquant n'apparait ici, verifier les logs ou le front.",
+    }
+    segments.append(diagnostic_labels.get(diagnostic, f"Diagnostic probable : {diagnostic}."))
+    return " ".join(segments)
+
+
 def _merge_entities(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
     merged = dict(base)
     for key, value in incoming.items():
@@ -107,10 +155,19 @@ async def handle_message(
 
     if command.intent == "wallet.balance":
         data = command.payload
+        currency = data.get("wallet_currency") or "EUR"
+        wallet_available = _format_amount(data.get("wallet_available"))
+        credit_available = _format_amount(data.get("credit_available"))
         message_out = (
-            f"Votre solde disponible est de {data['wallet_available']} {data['wallet_currency']}. "
-            f"Credit disponible: {data['credit_available']} {data['wallet_currency']}."
+            f"Solde wallet disponible : {wallet_available} {currency}. "
+            f"Credit disponible : {credit_available} {currency}."
         )
+        await clear_conversation_state(db, session_id, current_user.user_id)
+        return response_builder.answer(message_out, data=data, parsed_intent=parsed), parsed, command.model_dump(mode="json")
+
+    if command.intent == "wallet.financial_overview":
+        data = command.payload
+        message_out = _build_financial_overview_message(data)
         await clear_conversation_state(db, session_id, current_user.user_id)
         return response_builder.answer(message_out, data=data, parsed_intent=parsed), parsed, command.model_dump(mode="json")
 
@@ -128,8 +185,8 @@ async def handle_message(
         data = command.payload
         wallet_currency = data.get("wallet_currency") or "EUR"
         message_out = (
-            f"Capacite cash actuelle: wallet {data.get('wallet_available')} {wallet_currency}, "
-            f"credit {data.get('credit_available')} {wallet_currency}."
+            f"Capacite cash actuelle : wallet {_format_amount(data.get('wallet_available'))} {wallet_currency}, "
+            f"credit {_format_amount(data.get('credit_available'))} {wallet_currency}."
         )
         return response_builder.answer(message_out, data=data, parsed_intent=parsed), parsed, command.model_dump(mode="json")
 
@@ -201,8 +258,8 @@ async def handle_message(
         data = command.payload
         wallet_currency = data.get("wallet_currency") or "EUR"
         message_out = (
-            f"Capacite actuelle: wallet {data.get('wallet_available')} {wallet_currency}, "
-            f"credit disponible {data.get('credit_available')} {wallet_currency}."
+            f"Capacite actuelle : wallet {_format_amount(data.get('wallet_available'))} {wallet_currency}, "
+            f"credit disponible {_format_amount(data.get('credit_available'))} {wallet_currency}."
         )
         await clear_conversation_state(db, session_id, current_user.user_id)
         return response_builder.answer(message_out, data=data, parsed_intent=parsed), parsed, command.model_dump(mode="json")
@@ -222,8 +279,9 @@ async def handle_message(
         amount = data.get("amount") or "0"
         currency = data.get("currency") or data.get("wallet_currency") or "EUR"
         message_out = (
-            f"Je peux simuler {amount} {currency}. Capacite actuelle: wallet {data.get('wallet_available')} "
-            f"{data.get('wallet_currency')}, credit {data.get('credit_available')} {data.get('wallet_currency')}."
+            f"Je peux simuler {_format_amount(amount)} {currency}. Capacite actuelle : "
+            f"wallet {_format_amount(data.get('wallet_available'))} {data.get('wallet_currency')}, "
+            f"credit {_format_amount(data.get('credit_available'))} {data.get('wallet_currency')}."
         )
         await clear_conversation_state(db, session_id, current_user.user_id)
         return response_builder.answer(message_out, data=data, parsed_intent=parsed), parsed, command.model_dump(mode="json")

@@ -88,6 +88,125 @@ async def _load_wallet_balance(db: AsyncSession, current_user: Users) -> WalletB
     )
 
 
+def _safe_decimal(value: Any) -> Decimal:
+    try:
+        return Decimal(str(value or 0))
+    except Exception:
+        return Decimal("0")
+
+
+def _financial_diagnostic(
+    *,
+    current_user: Users,
+    wallet_available: Decimal,
+    credit_remaining: Decimal,
+    latest_transfer_metadata: dict[str, Any],
+) -> str:
+    if str(getattr(current_user, "status", "") or "").lower() != "active":
+        return "COMPTE_NON_ACTIF"
+    if bool(getattr(current_user, "external_transfers_blocked", False)):
+        return "TRANSFERTS_EXTERNES_SUSPENDUS"
+
+    daily_limit = _safe_decimal(getattr(current_user, "daily_limit", 0))
+    used_daily = _safe_decimal(getattr(current_user, "used_daily", 0))
+    if daily_limit > 0 and used_daily + Decimal("600") > daily_limit:
+        return "LIMITE_JOURNALIERE_DEPASSEE_POUR_600"
+
+    monthly_limit = _safe_decimal(getattr(current_user, "monthly_limit", 0))
+    used_monthly = _safe_decimal(getattr(current_user, "used_monthly", 0))
+    if monthly_limit > 0 and used_monthly + Decimal("600") > monthly_limit:
+        return "LIMITE_MENSUELLE_DEPASSEE_POUR_600"
+
+    if wallet_available + max(credit_remaining, Decimal("0")) < Decimal("600"):
+        return "COUVERTURE_INSUFFISANTE_POUR_600_HORS_FRAIS"
+
+    if str(latest_transfer_metadata.get("funding_pending") or "").lower() == "true":
+        return "TRANSFERT_EN_ATTENTE_DE_FINANCEMENT"
+    if str(latest_transfer_metadata.get("aml_manual_review_required") or "").lower() == "true":
+        return "REVUE_AML_MANUELLE"
+    return "A_VERIFIER_COTE_LOGS_OU_FRONT"
+
+
+async def _load_financial_overview(db: AsyncSession, current_user: Users) -> dict[str, Any]:
+    balance = await _load_wallet_balance(db, current_user)
+    wallet = await db.scalar(_wallet_priority_stmt(current_user.user_id))
+    latest_transfer = await db.scalar(
+        select(ExternalTransfers)
+        .where(ExternalTransfers.user_id == current_user.user_id)
+        .order_by(desc(ExternalTransfers.created_at))
+    )
+
+    linked_tx = None
+    if latest_transfer is not None:
+        linked_tx = await db.scalar(
+            select(Transactions)
+            .where(Transactions.related_entity_id == latest_transfer.transfer_id)
+            .order_by(desc(Transactions.created_at))
+        )
+
+    wallet_pending = _safe_decimal(getattr(wallet, "pending", 0) if wallet is not None else 0)
+    bonus_balance = _safe_decimal(getattr(wallet, "bonus_balance", 0) if wallet is not None else balance.bonus_balance)
+    daily_limit = _safe_decimal(getattr(current_user, "daily_limit", 0))
+    used_daily = _safe_decimal(getattr(current_user, "used_daily", 0))
+    monthly_limit = _safe_decimal(getattr(current_user, "monthly_limit", 0))
+    used_monthly = _safe_decimal(getattr(current_user, "used_monthly", 0))
+    credit_limit = _safe_decimal(getattr(current_user, "credit_limit", 0))
+    credit_used = _safe_decimal(getattr(current_user, "credit_used", 0))
+    credit_remaining = max(credit_limit - credit_used, Decimal("0"))
+    metadata_payload = dict(getattr(latest_transfer, "metadata_", {}) or {}) if latest_transfer is not None else {}
+
+    return {
+        "user_id": str(current_user.user_id),
+        "full_name": str(getattr(current_user, "full_name", "") or ""),
+        "email": str(getattr(current_user, "email", "") or "") or None,
+        "phone_e164": str(getattr(current_user, "phone_e164", "") or "") or None,
+        "status": str(getattr(current_user, "status", "") or ""),
+        "kyc_status": str(getattr(current_user, "kyc_status", "") or ""),
+        "kyc_tier": int(getattr(current_user, "kyc_tier", 0) or 0),
+        "external_transfers_blocked": bool(getattr(current_user, "external_transfers_blocked", False)),
+        "daily_limit": str(daily_limit),
+        "used_daily": str(used_daily),
+        "daily_remaining": str(max(daily_limit - used_daily, Decimal("0"))),
+        "monthly_limit": str(monthly_limit),
+        "used_monthly": str(used_monthly),
+        "monthly_remaining": str(max(monthly_limit - used_monthly, Decimal("0"))),
+        "wallet_currency": balance.wallet_currency,
+        "wallet_available": str(balance.wallet_available),
+        "wallet_pending": str(wallet_pending),
+        "bonus_balance": str(bonus_balance),
+        "credit_limit": str(credit_limit),
+        "credit_used": str(credit_used),
+        "credit_remaining": str(credit_remaining),
+        "risk_score": int(getattr(current_user, "risk_score", 0) or 0),
+        "reference_code": str(getattr(latest_transfer, "reference_code", "") or "") or None,
+        "transfer_status": str(getattr(latest_transfer, "status", "") or "") or None,
+        "last_transfer_amount": str(_safe_decimal(getattr(latest_transfer, "amount", 0))) if latest_transfer is not None else None,
+        "last_transfer_currency": str(getattr(latest_transfer, "currency", "") or "") or None,
+        "local_amount": str(_safe_decimal(getattr(latest_transfer, "local_amount", 0))) if latest_transfer is not None else None,
+        "rate": str(_safe_decimal(getattr(latest_transfer, "rate", 0))) if latest_transfer is not None else None,
+        "partner_name": str(getattr(latest_transfer, "partner_name", "") or "") or None,
+        "country_destination": str(getattr(latest_transfer, "country_destination", "") or "") or None,
+        "recipient_name": str(getattr(latest_transfer, "recipient_name", "") or "") or None,
+        "recipient_phone": str(getattr(latest_transfer, "recipient_phone", "") or "") or None,
+        "last_transfer_created_at": latest_transfer.created_at.isoformat() if latest_transfer is not None and latest_transfer.created_at else None,
+        "last_transfer_processed_at": latest_transfer.processed_at.isoformat() if latest_transfer is not None and latest_transfer.processed_at else None,
+        "transaction_status": str(getattr(linked_tx, "status", "") or "") if linked_tx is not None else None,
+        "review_reason": metadata_payload.get("review_reason"),
+        "review_reasons": metadata_payload.get("review_reasons"),
+        "funding_pending": metadata_payload.get("funding_pending"),
+        "required_credit_topup": metadata_payload.get("required_credit_topup"),
+        "aml_manual_review_required": metadata_payload.get("aml_manual_review_required"),
+        "aml_risk_score": metadata_payload.get("aml_risk_score"),
+        "aml_reason_codes": metadata_payload.get("aml_reason_codes"),
+        "diagnostic_probable": _financial_diagnostic(
+            current_user=current_user,
+            wallet_available=balance.wallet_available,
+            credit_remaining=credit_remaining,
+            latest_transfer_metadata=metadata_payload,
+        ),
+    }
+
+
 def _describe_aml_reason(aml_score: Any, *, manual_review: bool) -> str:
     if aml_score is None:
         return "Un controle AML manuel est en cours."
@@ -652,6 +771,14 @@ async def resolve_intent(
                 "bonus_balance": str(balance.bonus_balance or 0),
                 "tontines_count": int(tontines_count or 0),
             },
+            requires_confirmation=False,
+        )
+
+    if parsed.intent == "wallet.financial_overview":
+        return ResolvedCommand(
+            intent="wallet.financial_overview",
+            action_code="wallet.get_financial_overview",
+            payload=await _load_financial_overview(db, current_user),
             requires_confirmation=False,
         )
 

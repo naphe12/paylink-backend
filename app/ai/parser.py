@@ -24,6 +24,7 @@ AI_INTENTS = {
     "cash.capacity": "Ask for available cash capacity before a deposit or withdrawal.",
     "cash.request_status": "Ask for the status of the latest cash deposit or withdrawal request.",
     "wallet.balance": "Ask for current wallet balance or available funds.",
+    "wallet.financial_overview": "Ask for the full financial situation of the account including wallet, credit, limits and latest transfer context.",
     "wallet.block_reason": "Ask why a wallet action is blocked, frozen, refused or impossible.",
     "wallet.limits": "Ask for daily or monthly wallet limits and usage.",
     "credit.capacity": "Ask how much wallet and credit capacity is currently available.",
@@ -124,6 +125,14 @@ def _build_transfer_entities(message: str, metadata: RuntimeMetadata) -> dict[st
 
 
 def _heuristic_intent(message: str, metadata: RuntimeMetadata) -> tuple[str, dict[str, Any]]:
+    normalized_message = _normalize_text(message)
+    if (
+        "situation financiere" in normalized_message
+        or ("situation" in normalized_message and "financ" in normalized_message)
+        or "sante financiere" in normalized_message
+    ):
+        return "wallet.financial_overview", {}
+
     cash = parse_cash_message(message)
     if cash.intent == "deposit":
         return "cash.deposit", {
@@ -232,7 +241,7 @@ def parse_user_message(message: str, metadata: RuntimeMetadata) -> ParsedIntent:
         entities = {
             "scenario": heuristic_entities.get("scenario"),
         }
-    elif intent_code in {"cash.capacity", "cash.request_status", "wallet.block_reason"}:
+    elif intent_code in {"cash.capacity", "cash.request_status", "wallet.block_reason", "wallet.balance", "wallet.financial_overview"}:
         entities = {}
     elif intent_code in {"cash.deposit", "cash.withdraw"}:
         entities = heuristic_entities
@@ -252,8 +261,6 @@ def parse_user_message(message: str, metadata: RuntimeMetadata) -> ParsedIntent:
             "currency": heuristic_entities.get("currency"),
         }
     elif intent_code == "credit.pending_reason":
-        entities = {}
-    elif intent_code == "wallet.limits":
         entities = {}
     elif intent_code == "escrow.status":
         entities = {

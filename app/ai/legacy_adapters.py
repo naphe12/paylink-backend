@@ -91,7 +91,7 @@ async def handle_wallet_support_with_ai(
         session_id=None,
     )
     intent = str(getattr(parsed, "intent", "") or "")
-    if intent not in {"wallet.balance", "wallet.limits", "wallet.block_reason", "transfer.status", "help.explain_block_reason"}:
+    if intent not in {"wallet.balance", "wallet.financial_overview", "wallet.limits", "wallet.block_reason", "transfer.status", "help.explain_block_reason"}:
         return (
             WalletSupportChatResponse(
                 status="NEED_INFO",
@@ -99,7 +99,7 @@ async def handle_wallet_support_with_ai(
             ),
             False,
         )
-    draft_intent = "limits" if intent == "wallet.limits" else "cant_send" if intent in {"wallet.block_reason", "transfer.status", "help.explain_block_reason"} else "unknown"
+    draft_intent = "limits" if intent in {"wallet.limits", "wallet.financial_overview"} else "cant_send" if intent in {"wallet.block_reason", "transfer.status", "help.explain_block_reason"} else "unknown"
     data = WalletSupportDraft(intent=draft_intent, raw_message=message)
     assumptions = [
         f"Intent IA: {intent}.",
@@ -107,6 +107,8 @@ async def handle_wallet_support_with_ai(
     ]
     if intent == "wallet.limits":
         assumptions.append("Reponse alignee sur les limites journalieres et mensuelles du compte.")
+    if intent == "wallet.financial_overview":
+        assumptions.append("Reponse alignee sur la synthese financiere complete du compte.")
     if intent == "wallet.block_reason":
         assumptions.append("Reponse alignee sur les causes de blocage wallet calculees cote backend.")
     payload = (ai_response.data or None)
@@ -136,6 +138,7 @@ async def handle_agent_chat_with_ai(
     parsed = parse_user_message(message, metadata)
     if parsed.intent not in {
         "wallet.balance",
+        "wallet.financial_overview",
         "wallet.limits",
         "credit.capacity",
         "kyc.status",
@@ -172,6 +175,28 @@ async def handle_agent_chat_with_ai(
                 ),
                 data=AgentChatDraft(
                     intent="capacity",
+                    wallet_currency=wallet_currency,
+                    raw_message=message,
+                ),
+                executable=False,
+                assumptions=[
+                    f"Intent IA: {parsed.intent}.",
+                    f"Confiance: {parsed.confidence}.",
+                ],
+                summary=payload,
+            ),
+            True,
+        )
+
+    if command.intent == "wallet.financial_overview":
+        payload = command.payload
+        wallet_currency = str(payload.get("wallet_currency") or "EUR")
+        return (
+            ChatResponse(
+                status="INFO",
+                message=str(ai_response.message or ""),
+                data=AgentChatDraft(
+                    intent="financial_overview",
                     wallet_currency=wallet_currency,
                     raw_message=message,
                 ),
@@ -727,7 +752,7 @@ async def handle_wallet_chat_with_ai(
         session_id=None,
     )
     intent = str(getattr(parsed, "intent", "") or "")
-    if intent not in {"wallet.balance", "wallet.limits"}:
+    if intent not in {"wallet.balance", "wallet.financial_overview", "wallet.limits"}:
         return (WalletChatResponse(status="NEED_INFO", message=""), False)
     payload = (ai_response.data or {}) if hasattr(ai_response, "data") else {}
     draft_intent = "balance" if intent == "wallet.balance" else "limits"
