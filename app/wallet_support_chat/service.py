@@ -50,6 +50,44 @@ def _wallet_eta_hint(*, cash_request_type: str | None = None, cash_request_statu
     return None
 
 
+def _wallet_dossier_type(intent: str, assumptions: list[str]) -> str:
+    joined = " ".join(str(item) for item in assumptions).lower()
+    if intent == "missing_deposit":
+        return "deposit_follow_up"
+    if intent == "blocked_withdraw":
+        return "withdraw_blocked"
+    if intent == "cant_send":
+        return "send_blocked"
+    if "gele" in joined or "suspendu" in joined:
+        return "account_review"
+    return "standard"
+
+
+def _wallet_who_must_act_now(*, account_status: str, assumptions: list[str]) -> str:
+    normalized_status = str(account_status or "").lower()
+    joined = " ".join(str(item) for item in assumptions).lower()
+    if normalized_status in {"frozen", "suspended"}:
+        return "operations"
+    if "limite journaliere" in joined or "limite mensuelle" in joined:
+        return "client"
+    if "encore en attente" in joined or "demande de retrait" in joined or "demande de depot" in joined:
+        return "operations"
+    return "client"
+
+
+def _wallet_primary_blocker(intent: str, assumptions: list[str]) -> str:
+    joined = [str(item).strip() for item in assumptions if str(item).strip()]
+    if joined:
+        return joined[0]
+    if intent == "missing_deposit":
+        return "Le depot attendu n'apparait pas encore dans le wallet."
+    if intent == "blocked_withdraw":
+        return "Le retrait est bloque par une contrainte de compte, de limite ou de traitement."
+    if intent == "cant_send":
+        return "L'envoi est actuellement bloque."
+    return ""
+
+
 async def _load_context(db: AsyncSession, user_id):
     user = await db.scalar(select(Users).where(Users.user_id == user_id))
     wallet = await db.scalar(select(Wallets).where(Wallets.user_id == user_id))
@@ -174,7 +212,14 @@ async def process_wallet_support_message(db: AsyncSession, *, user_id, message: 
                     if status == "pending"
                     else "Verifie la demande cash liee pour plus de details.",
                 ],
-                summary={**summary, "next_step": next_step, "eta_hint": eta_hint},
+                summary={
+                    **summary,
+                    "next_step": next_step,
+                    "eta_hint": eta_hint,
+                    "dossier_type": "deposit_follow_up",
+                    "who_must_act_now": "operations" if status == "pending" else "client",
+                    "primary_blocker": message_text,
+                },
                 suggestions=[next_step],
             )
         return WalletSupportChatResponse(
@@ -185,6 +230,9 @@ async def process_wallet_support_message(db: AsyncSession, *, user_id, message: 
             summary={
                 **summary,
                 "next_step": "Verifier si le mouvement attendu etait un cash-in, un virement ou un autre type d'entree.",
+                "dossier_type": "deposit_follow_up",
+                "who_must_act_now": "client",
+                "primary_blocker": "Le depot attendu n'apparait pas encore dans le dossier.",
             },
             suggestions=["Verifier si le mouvement attendu etait un cash-in, un virement ou un autre type d'entree."],
         )
@@ -216,7 +264,14 @@ async def process_wallet_support_message(db: AsyncSession, *, user_id, message: 
             ),
             data=draft,
             assumptions=assumptions,
-            summary={**summary, "next_step": next_step, "eta_hint": eta_hint},
+            summary={
+                **summary,
+                "next_step": next_step,
+                "eta_hint": eta_hint,
+                "dossier_type": _wallet_dossier_type("blocked_withdraw", assumptions),
+                "who_must_act_now": _wallet_who_must_act_now(account_status=summary["account_status"], assumptions=assumptions),
+                "primary_blocker": _wallet_primary_blocker("blocked_withdraw", assumptions),
+            },
             suggestions=[next_step],
         )
 
@@ -259,7 +314,14 @@ async def process_wallet_support_message(db: AsyncSession, *, user_id, message: 
             ),
             data=draft,
             assumptions=assumptions,
-            summary={**summary, "next_step": next_step, "eta_hint": eta_hint},
+            summary={
+                **summary,
+                "next_step": next_step,
+                "eta_hint": eta_hint,
+                "dossier_type": _wallet_dossier_type("cant_send", assumptions),
+                "who_must_act_now": _wallet_who_must_act_now(account_status=summary["account_status"], assumptions=assumptions),
+                "primary_blocker": _wallet_primary_blocker("cant_send", assumptions),
+            },
             suggestions=[next_step],
         )
 

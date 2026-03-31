@@ -113,6 +113,57 @@ def _transfer_eta_hint(*, status: str, review_reasons: list[str], metadata: dict
     return None
 
 
+def _transfer_dossier_type(*, status: str, review_reasons: list[str], metadata: dict) -> str:
+    normalized_status = str(status or "").lower()
+    if "aml" in review_reasons or metadata.get("aml_manual_review_required"):
+        return "review"
+    if "insufficient_funds" in review_reasons or metadata.get("funding_pending"):
+        return "funding"
+    if normalized_status in {"failed", "cancelled", "reversed"}:
+        return "failed"
+    if normalized_status in {"completed", "succeeded"}:
+        return "completed"
+    return "standard"
+
+
+def _transfer_who_must_act_now(*, status: str, review_reasons: list[str], metadata: dict) -> str:
+    normalized_status = str(status or "").lower()
+    if "insufficient_funds" in review_reasons or metadata.get("funding_pending"):
+        return "client"
+    if "aml" in review_reasons or metadata.get("aml_manual_review_required"):
+        return "operations"
+    if normalized_status in {"pending", "initiated", "approved"}:
+        return "operations"
+    if normalized_status in {"completed", "succeeded", "failed", "cancelled", "reversed"}:
+        return "none"
+    return "operations"
+
+
+def _transfer_primary_blocker(*, status: str, review_reasons: list[str], metadata: dict) -> str:
+    normalized_status = str(status or "").lower()
+    if "insufficient_funds" in review_reasons or metadata.get("funding_pending"):
+        shortfall = str(metadata.get("required_credit_topup") or "").strip()
+        return (
+            f"Couverture financiere manquante de {shortfall}."
+            if shortfall
+            else "Couverture financiere insuffisante."
+        )
+    if "aml" in review_reasons or metadata.get("aml_manual_review_required"):
+        detail = _describe_aml_reason_codes(metadata)
+        if detail:
+            return f"Revue AML en cours: {detail}."
+        return "Revue AML en cours."
+    if normalized_status == "approved":
+        return "Execution finale partenaire encore en attente."
+    if normalized_status in {"pending", "initiated"}:
+        return "Validation operateur encore en attente."
+    if normalized_status in {"completed", "succeeded"}:
+        return "Aucun blocage actif."
+    if normalized_status in {"failed", "cancelled", "reversed"}:
+        return "Le dossier est clos sur un echec ou une annulation."
+    return "Le dossier suit encore son cycle de traitement."
+
+
 async def _find_transfer(db: AsyncSession, *, user_id, reference_code: str | None):
     if reference_code:
         return await db.scalar(
@@ -262,6 +313,9 @@ async def process_transfer_support_message(db: AsyncSession, *, user_id, message
                 "credit_available": _fmt_decimal(wallet_ctx["credit_available"]),
                 "total_capacity": _fmt_decimal(wallet_ctx["total_capacity"]),
                 "next_step": next_step,
+                "dossier_type": "capacity",
+                "who_must_act_now": "client",
+                "primary_blocker": "",
             },
             suggestions=[
                 next_step,
@@ -335,6 +389,21 @@ async def process_transfer_support_message(db: AsyncSession, *, user_id, message
             next_step
         ),
         "eta_hint": eta_hint,
+        "dossier_type": _transfer_dossier_type(
+            status=str(getattr(transfer, "status", "") or ""),
+            review_reasons=review_reasons,
+            metadata=metadata,
+        ),
+        "who_must_act_now": _transfer_who_must_act_now(
+            status=str(getattr(transfer, "status", "") or ""),
+            review_reasons=review_reasons,
+            metadata=metadata,
+        ),
+        "primary_blocker": _transfer_primary_blocker(
+            status=str(getattr(transfer, "status", "") or ""),
+            review_reasons=review_reasons,
+            metadata=metadata,
+        ),
     }
 
     if draft.intent == "status_help":

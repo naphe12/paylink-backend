@@ -169,6 +169,29 @@ def _wallet_block_next_step(*, account_status: str, reasons: list[str]) -> str:
     return "Verifier le solde, les limites et les dossiers en attente avant de relancer l'operation."
 
 
+def _wallet_dossier_type(*, account_status: str, reasons: list[str]) -> str:
+    normalized_status = str(account_status or "").lower()
+    joined = " ".join(str(item) for item in reasons).lower()
+    if normalized_status in {"frozen", "suspended"}:
+        return "account_review"
+    if "demande cash recente" in joined:
+        return "withdraw_blocked"
+    if "transfert recent" in joined or "limite " in joined:
+        return "send_blocked"
+    return "standard"
+
+
+def _wallet_who_must_act_now(*, account_status: str) -> str:
+    normalized_status = str(account_status or "").lower()
+    if normalized_status in {"frozen", "suspended"}:
+        return "operations"
+    return "client"
+
+
+def _wallet_primary_blocker(reasons: list[str]) -> str | None:
+    return str(reasons[0]) if reasons else None
+
+
 def _transfer_next_step(*, status: str, review_reasons: list[str], metadata_payload: dict[str, Any], limit_block_detail: str | None) -> str:
     normalized_status = str(status or "").lower()
     if limit_block_detail:
@@ -186,6 +209,43 @@ def _transfer_next_step(*, status: str, review_reasons: list[str], metadata_payl
     if normalized_status in {"failed", "cancelled", "reversed"}:
         return "Verifier la cause de l'echec puis recreer un nouveau transfert si necessaire."
     return "Verifier la reference du transfert et l'etat du dossier pour definir la prochaine action."
+
+
+def _transfer_dossier_type(*, status: str, review_reasons: list[str], metadata_payload: dict[str, Any], limit_block_detail: str | None) -> str:
+    normalized_status = str(status or "").lower()
+    if limit_block_detail or "insufficient_funds" in review_reasons or metadata_payload.get("funding_pending"):
+        return "funding"
+    if "aml" in review_reasons or metadata_payload.get("aml_manual_review_required"):
+        return "review"
+    if normalized_status in {"failed", "cancelled", "reversed"}:
+        return "failed"
+    if normalized_status in {"completed", "succeeded"}:
+        return "completed"
+    return "standard"
+
+
+def _transfer_who_must_act_now(*, status: str, review_reasons: list[str], metadata_payload: dict[str, Any], limit_block_detail: str | None) -> str:
+    normalized_status = str(status or "").lower()
+    if normalized_status in {"completed", "succeeded"}:
+        return "none"
+    if limit_block_detail or "insufficient_funds" in review_reasons or metadata_payload.get("funding_pending"):
+        return "client"
+    if "aml" in review_reasons or metadata_payload.get("aml_manual_review_required") or normalized_status in {"pending", "initiated", "approved"}:
+        return "operations"
+    return "client"
+
+
+def _transfer_primary_blocker(*, review_reasons: list[str], metadata_payload: dict[str, Any], limit_block_detail: str | None) -> str | None:
+    if limit_block_detail:
+        return limit_block_detail
+    if "insufficient_funds" in review_reasons or metadata_payload.get("funding_pending"):
+        shortfall_amount = str(metadata_payload.get("required_credit_topup") or "").strip()
+        if shortfall_amount:
+            return f"Le dossier manque encore {shortfall_amount} pour etre finance."
+        return "Le dossier n'est pas encore suffisamment finance."
+    if "aml" in review_reasons or metadata_payload.get("aml_manual_review_required"):
+        return "Le dossier attend une revue AML ou conformite."
+    return None
 
 
 def _escrow_pending_reasons(*, status: str, flags: list[str]) -> list[str]:
@@ -210,6 +270,36 @@ def _escrow_pending_reasons(*, status: str, flags: list[str]) -> list[str]:
     return reasons
 
 
+def _escrow_dossier_type(*, status: str, flags: list[str]) -> str:
+    normalized_status = str(status or "").upper()
+    if normalized_status in {"REFUND_PENDING", "REFUNDED"}:
+        return "refund"
+    if flags:
+        return "review"
+    if normalized_status in {"FAILED", "CANCELLED", "EXPIRED"}:
+        return "failed"
+    return "standard"
+
+
+def _escrow_who_must_act_now(status: str) -> str:
+    normalized_status = str(status or "").upper()
+    if normalized_status == "CREATED":
+        return "depositor"
+    if normalized_status in {"FUNDED", "SWAPPED", "PAYOUT_PENDING", "REFUND_PENDING"}:
+        return "operations"
+    return "none"
+
+
+def _escrow_primary_blocker(*, status: str, flags: list[str], pending_reasons: list[str]) -> str | None:
+    if flags:
+        return f"Verification operateur requise ({', '.join(str(flag) for flag in flags)})."
+    if pending_reasons:
+        return str(pending_reasons[0])
+    if str(status or "").upper() in {"FAILED", "CANCELLED", "EXPIRED"}:
+        return "Le dossier est sorti du flux nominal et doit etre verifie."
+    return None
+
+
 def _escrow_next_step(status: str) -> str:
     normalized_status = str(status or "").upper()
     if normalized_status == "CREATED":
@@ -227,6 +317,34 @@ def _escrow_next_step(status: str) -> str:
     if normalized_status in {"FAILED", "CANCELLED", "EXPIRED"}:
         return "Verifier la cause de sortie du flux puis recreer un ordre si necessaire."
     return "Verifier le detail de la commande escrow pour connaitre l'etape suivante."
+
+
+def _p2p_dossier_type(*, status: str, dispute_status: str | None) -> str:
+    normalized_status = str(status or "").upper()
+    if dispute_status or normalized_status == "DISPUTED":
+        return "dispute"
+    if normalized_status == "RELEASED":
+        return "completed"
+    if normalized_status in {"CANCELLED", "CANCELED"}:
+        return "cancelled"
+    return "standard"
+
+
+def _p2p_who_must_act_now(*, status: str, dispute_status: str | None) -> str:
+    normalized_status = str(status or "").upper()
+    if dispute_status or normalized_status == "DISPUTED":
+        return "operations"
+    if normalized_status in {"CREATED", "AWAITING_CRYPTO"}:
+        return "seller"
+    if normalized_status in {"CRYPTO_LOCKED", "AWAITING_FIAT"}:
+        return "buyer"
+    if normalized_status == "FIAT_SENT":
+        return "seller"
+    return "none"
+
+
+def _p2p_primary_blocker(blocked_reasons: list[str]) -> str | None:
+    return str(blocked_reasons[0]) if blocked_reasons else None
 
 
 def _p2p_blocked_reasons(*, status: str, dispute_status: str | None, last_note: str | None) -> list[str]:
@@ -816,6 +934,7 @@ async def resolve_intent(
             reasons.append("Un transfert recent est encore en cours de revue ou d'execution.")
         if not reasons:
             reasons.append("Le blocage probable vient du solde, d'une verification manuelle ou d'une contrainte contextuelle.")
+        dossier_type = _wallet_dossier_type(account_status=account_status, reasons=reasons)
         return ResolvedCommand(
             intent="wallet.block_reason",
             action_code="wallet.explain_block_reason",
@@ -828,6 +947,9 @@ async def resolve_intent(
                 "used_monthly": str(getattr(current_user, "used_monthly", 0) or 0),
                 "reasons": reasons,
                 "explanation": " ".join(reasons),
+                "dossier_type": dossier_type,
+                "who_must_act_now": _wallet_who_must_act_now(account_status=account_status),
+                "primary_blocker": _wallet_primary_blocker(reasons),
                 "next_step": _wallet_block_next_step(
                     account_status=str(getattr(current_user, "status", "") or ""),
                     reasons=reasons,
@@ -1040,6 +1162,7 @@ async def resolve_intent(
         status_value = str(getattr(getattr(order, "status", None), "value", getattr(order, "status", "")) or "")
         network_value = str(getattr(getattr(order, "deposit_network", None), "value", getattr(order, "deposit_network", "")) or "")
         flags = [str(item) for item in (getattr(order, "flags", []) or [])]
+        pending_reasons = _escrow_pending_reasons(status=status_value, flags=flags)
         return ResolvedCommand(
             intent="escrow.status",
             action_code="escrow.get_status",
@@ -1054,7 +1177,10 @@ async def resolve_intent(
                 "payout_provider": str(getattr(order, "payout_provider", "") or ""),
                 "payout_account": str(getattr(order, "payout_account_number", "") or ""),
                 "flags": flags,
-                "pending_reasons": _escrow_pending_reasons(status=status_value, flags=flags),
+                "dossier_type": _escrow_dossier_type(status=status_value, flags=flags),
+                "who_must_act_now": _escrow_who_must_act_now(status_value),
+                "primary_blocker": _escrow_primary_blocker(status=status_value, flags=flags, pending_reasons=pending_reasons),
+                "pending_reasons": pending_reasons,
                 "next_step": _escrow_next_step(status_value),
                 "eta_hint": _escrow_eta_hint(status_value),
             },
@@ -1118,6 +1244,13 @@ async def resolve_intent(
             .order_by(desc(P2PTradeStatusHistory.created_at))
         )
         trade_status = str(getattr(getattr(trade, "status", None), "value", getattr(trade, "status", "")) or "")
+        current_user_role = "buyer" if str(getattr(trade, "buyer_id", "") or "") == str(current_user.user_id) else "seller"
+        dispute_status = str(getattr(getattr(dispute, "status", None), "value", getattr(dispute, "status", "")) or "") or None
+        blocked_reasons = _p2p_blocked_reasons(
+            status=trade_status,
+            dispute_status=dispute_status,
+            last_note=str(getattr(last_history, "note", "") or "") or None,
+        )
         next_step = {
             "CREATED": "Le trade vient d'etre cree. Attendez l'allocation escrow ou l'etape crypto.",
             "AWAITING_CRYPTO": "Le vendeur doit encore verrouiller ou envoyer la crypto dans l'escrow.",
@@ -1139,14 +1272,14 @@ async def resolve_intent(
                 "bif_amount": str(getattr(trade, "bif_amount", "") or ""),
                 "payment_method": str(getattr(getattr(trade, "payment_method", None), "value", getattr(trade, "payment_method", "")) or ""),
                 "created_at": trade.created_at.isoformat() if getattr(trade, "created_at", None) else None,
-                "dispute_status": str(getattr(getattr(dispute, "status", None), "value", getattr(dispute, "status", "")) or ""),
+                "dispute_status": dispute_status or "",
                 "last_note": str(getattr(last_history, "note", "") or "") or None,
                 "p2p_view": parsed.entities.get("p2p_view"),
-                "blocked_reasons": _p2p_blocked_reasons(
-                    status=trade_status,
-                    dispute_status=str(getattr(getattr(dispute, "status", None), "value", getattr(dispute, "status", "")) or "") or None,
-                    last_note=str(getattr(last_history, "note", "") or "") or None,
-                ),
+                "dossier_type": _p2p_dossier_type(status=trade_status, dispute_status=dispute_status),
+                "who_must_act_now": _p2p_who_must_act_now(status=trade_status, dispute_status=dispute_status),
+                "primary_blocker": _p2p_primary_blocker(blocked_reasons),
+                "current_user_role": current_user_role,
+                "blocked_reasons": blocked_reasons,
                 "next_step": next_step,
                 "eta_hint": _p2p_eta_hint(trade_status),
             },
@@ -1181,13 +1314,22 @@ async def resolve_intent(
         linked_tx = await db.scalar(
             select(Transactions).where(Transactions.related_entity_id == transfer.transfer_id)
         )
+        metadata_payload = dict(getattr(transfer, "metadata_", {}) or {})
+        review_reasons = [str(item) for item in (metadata_payload.get("review_reasons") or [])]
+        transfer_status = str(transfer.status or "")
+        dossier_type = _transfer_dossier_type(
+            status=transfer_status,
+            review_reasons=review_reasons,
+            metadata_payload=metadata_payload,
+            limit_block_detail=None,
+        )
         return ResolvedCommand(
             intent="transfer.status",
             action_code="transfer.get_status",
             payload={
                 "transfer_id": str(transfer.transfer_id),
                 "reference_code": transfer.reference_code,
-                "transfer_status": str(transfer.status or ""),
+                "transfer_status": transfer_status,
                 "transaction_status": str(getattr(linked_tx, "status", "") or "") or None,
                 "recipient_name": transfer.recipient_name,
                 "recipient_phone": transfer.recipient_phone,
@@ -1196,16 +1338,29 @@ async def resolve_intent(
                 "amount": str(transfer.amount or 0),
                 "currency": str(transfer.currency or ""),
                 "created_at": transfer.created_at.isoformat() if transfer.created_at else None,
+                "review_reasons": review_reasons,
+                "dossier_type": dossier_type,
+                "who_must_act_now": _transfer_who_must_act_now(
+                    status=transfer_status,
+                    review_reasons=review_reasons,
+                    metadata_payload=metadata_payload,
+                    limit_block_detail=None,
+                ),
+                "primary_blocker": _transfer_primary_blocker(
+                    review_reasons=review_reasons,
+                    metadata_payload=metadata_payload,
+                    limit_block_detail=None,
+                ),
                 "next_step": _transfer_next_step(
-                    status=str(transfer.status or ""),
-                    review_reasons=[],
-                    metadata_payload=dict(getattr(transfer, "metadata_", {}) or {}),
+                    status=transfer_status,
+                    review_reasons=review_reasons,
+                    metadata_payload=metadata_payload,
                     limit_block_detail=None,
                 ),
                 "eta_hint": _transfer_eta_hint(
-                    status=str(transfer.status or ""),
-                    review_reasons=[],
-                    metadata_payload=dict(getattr(transfer, "metadata_", {}) or {}),
+                    status=transfer_status,
+                    review_reasons=review_reasons,
+                    metadata_payload=metadata_payload,
                     limit_block_detail=None,
                 ),
             },
