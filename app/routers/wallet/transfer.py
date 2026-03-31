@@ -40,6 +40,10 @@ from app.services.telegram import send_message as send_telegram_message
 from app.services.transaction_notifications import send_transaction_emails
 from app.services.wallet_history import log_wallet_movement
 from app.services.pdf_utils import build_external_transfer_receipt
+from app.services.external_transfer_capacity import (
+    compute_external_transfer_funding,
+    effective_external_transfer_capacity,
+)
 
 
 def _normalize_optional_email(value: str | None) -> str | None:
@@ -844,11 +848,13 @@ async def _external_transfer_core(
     fx_rate = await _resolve_fx_rate(db, origin_currency, destination_currency)
 
     total_required = amount + fee_amount
-    total_available = wallet_balance + credit_available
-    approval_available = credit_available if is_bif_client else (wallet_balance + credit_available)
+    approval_available = (
+        credit_available
+        if is_bif_client
+        else effective_external_transfer_capacity(wallet_balance, credit_available)
+    )
     insufficient_funds_review_required = total_required > approval_available and not override_balance_check
     shortfall_amount = max(decimal.Decimal("0"), total_required - approval_available)
-    force_negative_wallet = override_balance_check and total_required > total_available
 
     used_daily = decimal.Decimal(user_locked.used_daily or 0)
     used_monthly = decimal.Decimal(user_locked.used_monthly or 0)
@@ -880,31 +886,24 @@ async def _external_transfer_core(
     credit_used = decimal.Decimal("0")
     wallet_debit_amount = decimal.Decimal("0")
     if not insufficient_funds_review_required:
-        if wallet_balance_before >= total_required:
-            wallet_after = wallet_balance_before - total_required
-            wallet.available = wallet_after
-            credit_used = decimal.Decimal(0)
-            wallet_debit_amount = total_required
+        funding = compute_external_transfer_funding(
+            wallet_available=wallet_balance_before,
+            credit_available=credit_available_before,
+            total_required=total_required,
+        )
+        wallet_after = funding["wallet_after"]
+        credit_used = funding["credit_used"]
+        credit_available_after = funding["credit_available_after"]
+        wallet_debit_amount = funding["wallet_debit_amount"]
+        wallet.available = wallet_after
+        if credit_line:
+            credit_line.used_amount = decimal.Decimal(credit_line.used_amount or 0) + credit_used
+            credit_line.outstanding_amount = max(decimal.Decimal("0"), credit_available_after)
+            credit_line.updated_at = datetime.utcnow()
+            user_locked.credit_limit = decimal.Decimal(credit_line.initial_amount or 0)
+            user_locked.credit_used = decimal.Decimal(credit_line.used_amount or 0)
         else:
-            wallet_consumed = max(wallet_balance_before, decimal.Decimal("0"))
-            remaining_after_wallet = total_required - wallet_consumed
-            credit_used = min(credit_available_before, remaining_after_wallet)
-            credit_available_after = credit_available_before - credit_used
-            wallet_debit_amount = wallet_consumed
-            residual_after_credit = remaining_after_wallet - credit_used
-            if str(origin_currency or "").upper() == "EUR":
-                wallet_after = wallet_balance_before - total_required
-            else:
-                wallet_after = -residual_after_credit if force_negative_wallet else decimal.Decimal("0")
-            wallet.available = wallet_after
-            if credit_line:
-                credit_line.used_amount = decimal.Decimal(credit_line.used_amount or 0) + credit_used
-                credit_line.outstanding_amount = max(decimal.Decimal("0"), credit_available_after)
-                credit_line.updated_at = datetime.utcnow()
-                user_locked.credit_limit = decimal.Decimal(credit_line.initial_amount or 0)
-                user_locked.credit_used = decimal.Decimal(credit_line.used_amount or 0)
-            else:
-                user_locked.credit_used = credit_used_total + credit_used
+            user_locked.credit_used = credit_used_total + credit_used
 
     review_reasons: list[str] = []
     if insufficient_funds_review_required:
@@ -1269,23 +1268,15 @@ async def _fund_pending_external_transfer_for_approval(
         if credit_line
         else decimal.Decimal("0")
     )
-    wallet_consumed = max(wallet_balance_before, decimal.Decimal("0"))
-    remaining_after_wallet = max(decimal.Decimal("0"), total_required - wallet_consumed)
-    credit_used = min(credit_available_before, remaining_after_wallet)
-    credit_available_after = credit_available_before - credit_used
-    residual_after_credit = remaining_after_wallet - credit_used
-    wallet_debit_amount = decimal.Decimal("0")
-    origin_currency = str(metadata.get("origin_currency") or wallet.currency_code or "EUR").upper()
-
-    if wallet_balance_before >= total_required:
-        wallet_after = wallet_balance_before - total_required
-        wallet_debit_amount = total_required
-    elif origin_currency == "EUR":
-        wallet_after = wallet_balance_before - total_required
-        wallet_debit_amount = wallet_consumed
-    else:
-        wallet_after = -residual_after_credit if residual_after_credit > 0 else decimal.Decimal("0")
-        wallet_debit_amount = wallet_consumed
+    funding = compute_external_transfer_funding(
+        wallet_available=wallet_balance_before,
+        credit_available=credit_available_before,
+        total_required=total_required,
+    )
+    credit_used = funding["credit_used"]
+    credit_available_after = funding["credit_available_after"]
+    wallet_debit_amount = funding["wallet_debit_amount"]
+    wallet_after = funding["wallet_after"]
 
     wallet.available = wallet_after
     if credit_line:

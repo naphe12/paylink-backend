@@ -9,6 +9,7 @@ from app.models.external_transfers import ExternalTransfers
 from app.models.transactions import Transactions
 from app.models.users import Users
 from app.models.wallets import Wallets
+from app.services.external_transfer_capacity import effective_external_transfer_capacity
 from app.transfer_support_chat.parser import parse_transfer_support_message
 from app.transfer_support_chat.schemas import TransferSupportChatResponse
 
@@ -131,7 +132,7 @@ async def _get_wallet_context(db: AsyncSession, user_id) -> dict:
         "wallet_currency": wallet_currency,
         "wallet_available": wallet_available,
         "credit_available": credit_available,
-        "total_capacity": wallet_available + credit_available,
+        "total_capacity": effective_external_transfer_capacity(wallet_available, credit_available),
     }
 
 

@@ -24,6 +24,7 @@ from app.models.transactions import Transactions
 from app.models.users import Users
 from app.models.wallet_cash_requests import WalletCashRequestStatus, WalletCashRequests
 from app.models.wallets import Wallets
+from app.services.external_transfer_capacity import effective_external_transfer_capacity
 
 AML_ALERT_THRESHOLD = 50
 AML_MANUAL_REVIEW_THRESHOLD = 60
@@ -117,7 +118,7 @@ def _financial_diagnostic(
     if monthly_limit > 0 and used_monthly + Decimal("600") > monthly_limit:
         return "LIMITE_MENSUELLE_DEPASSEE_POUR_600"
 
-    if wallet_available + max(credit_remaining, Decimal("0")) < Decimal("600"):
+    if effective_external_transfer_capacity(wallet_available, credit_remaining) < Decimal("600"):
         return "COUVERTURE_INSUFFISANTE_POUR_600_HORS_FRAIS"
 
     if str(latest_transfer_metadata.get("funding_pending") or "").lower() == "true":
@@ -502,7 +503,9 @@ async def resolve_intent(
                 "wallet_currency": balance.wallet_currency,
                 "credit_available": str(balance.credit_available),
                 "bonus_balance": str(balance.bonus_balance or 0),
-                "total_capacity": str(balance.wallet_available + balance.credit_available),
+                "total_capacity": str(
+                    effective_external_transfer_capacity(balance.wallet_available, balance.credit_available)
+                ),
             },
             requires_confirmation=False,
         )

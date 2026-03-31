@@ -11,6 +11,7 @@ from app.models.external_transfers import ExternalTransfers
 from app.models.general_settings import GeneralSettings
 from app.models.users import Users
 from app.models.wallets import Wallets
+from app.services.external_transfer_capacity import effective_external_transfer_capacity
 
 
 async def _get_wallet_context(db: AsyncSession, user_id) -> dict:
@@ -35,7 +36,7 @@ async def _get_wallet_context(db: AsyncSession, user_id) -> dict:
         "wallet_currency": wallet_currency,
         "wallet_available": wallet_available,
         "credit_available": credit_available,
-        "total_capacity": wallet_available + credit_available,
+        "total_capacity": effective_external_transfer_capacity(wallet_available, credit_available),
     }
 
 
