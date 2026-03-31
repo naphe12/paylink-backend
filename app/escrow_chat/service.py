@@ -5,17 +5,11 @@ from app.ai.legacy_adapters import handle_escrow_chat_with_ai
 from app.escrow_chat.parser import parse_escrow_message
 from app.escrow_chat.schemas import EscrowChatResponse
 from app.models.escrow_order import EscrowOrder
+from app.services.assistant_suggestions import build_assistant_suggestions
 
 
 def _build_suggestions() -> list[str]:
-    return [
-        "Quel est le statut de mon dernier escrow ?",
-        "Pourquoi mon escrow est en attente ?",
-        "Quelle est la prochaine etape de mon escrow ?",
-        "Suis la commande 00000000-0000-0000-0000-000000000000",
-        "Explique l'etape en cours de mon escrow.",
-        "Que dois-je faire maintenant sur mon escrow ?",
-    ]
+    return build_assistant_suggestions("escrow")
 
 
 def _status_text(order) -> str:

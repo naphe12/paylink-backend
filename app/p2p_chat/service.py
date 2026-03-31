@@ -6,19 +6,13 @@ from app.models.p2p_dispute import P2PDispute
 from app.models.p2p_offer import P2POffer
 from app.models.p2p_trade import P2PTrade
 from app.models.p2p_trade_history import P2PTradeStatusHistory
+from app.services.assistant_suggestions import build_assistant_suggestions
 from app.p2p_chat.parser import parse_p2p_message
 from app.p2p_chat.schemas import P2PChatResponse
 
 
 def _build_suggestions() -> list[str]:
-    return [
-        "Quel est le statut de mon dernier trade P2P ?",
-        "Pourquoi mon trade P2P est bloque ?",
-        "Quelle est la prochaine etape de mon trade ?",
-        "Resume mes offres P2P",
-        "Suis le trade 00000000-0000-0000-0000-000000000000",
-        "Explique pourquoi mon trade est en litige.",
-    ]
+    return build_assistant_suggestions("p2p")
 
 
 def _status_text(value) -> str:

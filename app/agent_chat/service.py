@@ -12,6 +12,7 @@ from app.models.external_transfers import ExternalTransfers
 from app.models.users import Users
 from app.models.wallets import Wallets
 from app.models.credit_lines import CreditLines
+from app.services.assistant_suggestions import build_assistant_suggestions
 from app.services.external_transfer_capacity import effective_external_transfer_capacity
 
 
@@ -352,7 +353,13 @@ def _build_suggestions(
         sample_names = ", ".join(item["recipient_name"] for item in beneficiaries[:3] if item["recipient_name"])
         if sample_names:
             suggestions.append(f"Beneficiaires habituels reconnus: {sample_names}.")
-    return suggestions[:4]
+    return build_assistant_suggestions(
+        "agent_transfer",
+        intent=draft.intent,
+        missing_fields=missing,
+        extra_examples=suggestions,
+        limit=6,
+    )
 
 
 async def process_chat_message(db: AsyncSession, *, user_id, message: str) -> ChatResponse:

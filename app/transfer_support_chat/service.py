@@ -9,6 +9,7 @@ from app.models.external_transfers import ExternalTransfers
 from app.models.transactions import Transactions
 from app.models.users import Users
 from app.models.wallets import Wallets
+from app.services.assistant_suggestions import build_assistant_suggestions
 from app.services.external_transfer_capacity import effective_external_transfer_capacity
 from app.transfer_support_chat.parser import parse_transfer_support_message
 from app.transfer_support_chat.schemas import TransferSupportChatResponse
@@ -46,14 +47,7 @@ def _fmt_decimal(value: Decimal) -> str:
 
 
 def _build_suggestions() -> list[str]:
-    return [
-        "Demande le statut de ta derniere demande.",
-        "Donne une reference comme EXT-AB12CD34.",
-        "Demande pourquoi une demande est en pending.",
-        "Demande l'explication des statuts pending, approved et completed.",
-        "Demande la capacite financiere actuelle.",
-        "Suis la reference EXT-AB12CD34.",
-    ]
+    return build_assistant_suggestions("transfer_support")
 
 
 def _describe_aml_reason(metadata: dict) -> str:

@@ -11,6 +11,7 @@ from app.models.external_transfers import ExternalTransfers
 from app.models.general_settings import GeneralSettings
 from app.models.users import Users
 from app.models.wallets import Wallets
+from app.services.assistant_suggestions import build_assistant_suggestions
 from app.services.external_transfer_capacity import effective_external_transfer_capacity
 
 
@@ -59,21 +60,12 @@ async def _get_latest_pending_transfer(db: AsyncSession, user_id):
 
 
 def _build_suggestions(draft: CreditDraft, missing: list[str]) -> list[str]:
-    suggestions: list[str] = []
-    if draft.intent == "unknown":
-        suggestions.extend(
-            [
-                "Demande la capacite financiere actuelle.",
-                "Demande le credit disponible restant.",
-                "Demande si un montant peut passer, par exemple 200 USD.",
-                "Demande pourquoi une demande de transfert est pending.",
-            ]
-        )
-    if "amount" in missing:
-        suggestions.append("Precise le montant, par exemple 200 USD.")
-    if "currency" in missing:
-        suggestions.append("Precise la devise, par exemple BIF ou USD.")
-    return suggestions[:6]
+    return build_assistant_suggestions(
+        "credit",
+        intent=draft.intent,
+        missing_fields=missing,
+        limit=6,
+    )
 
 
 async def process_credit_message(db: AsyncSession, *, user_id, message: str) -> CreditChatResponse:

@@ -7,6 +7,7 @@ from app.kyc_chat.parser import parse_kyc_message
 from app.kyc_chat.schemas import KycChatResponse, KycDraft
 from app.models.kyc_verifications import KycVerifications
 from app.models.users import Users
+from app.services.assistant_suggestions import build_assistant_suggestions
 
 
 TIER_LIMITS = {
@@ -46,16 +47,7 @@ def _format_doc_label(doc_name: str) -> str:
 
 
 def _build_suggestions(draft: KycDraft) -> list[str]:
-    if draft.intent == "unknown":
-        return [
-            "Demande ton niveau KYC actuel.",
-            "Demande quels documents manquent.",
-            "Demande les limites journalieres et mensuelles.",
-            "Demande ce que debloque le niveau suivant.",
-            "Demande pourquoi ton dossier KYC est bloque.",
-            "Demande le statut exact de verification.",
-        ]
-    return []
+    return build_assistant_suggestions("kyc", intent=draft.intent, limit=6)
 
 
 def _build_summary(user: Users | None, verification: KycVerifications | None, missing_docs: list[str]) -> dict:

@@ -64,7 +64,10 @@ from app.models.general_settings import GeneralSettings
 from app.models.fx_custom_rates import FxCustomRates
 from app.models.fxconversions import FxConversions
 from app.core.security import create_access_token
-from app.services.external_transfer_rules import transition_external_transfer_status
+from app.services.external_transfer_rules import (
+    map_external_transfer_to_transaction_status,
+    transition_external_transfer_status,
+)
 from app.services.fx_provider import get_open_exchange_rate_to_eur
 
 router = APIRouter(prefix="/wallet/transfer", tags=["External Transfer"])
@@ -918,16 +921,16 @@ async def _external_transfer_core(
     requested_status = str(final_status_override or "").strip().lower()
     if requires_admin:
         transfer_status = "pending"
-        txn_status = "pending"
+        txn_status = map_external_transfer_to_transaction_status(transfer_status)
     elif requested_status == "completed":
         transfer_status = "completed"
-        txn_status = "completed"
+        txn_status = map_external_transfer_to_transaction_status(transfer_status)
     elif requested_status == "approved":
         transfer_status = "approved"
-        txn_status = "pending"
+        txn_status = map_external_transfer_to_transaction_status(transfer_status)
     else:
         transfer_status = "pending" if requires_admin else "approved"
-        txn_status = "pending"
+        txn_status = map_external_transfer_to_transaction_status(transfer_status)
 
     debited = wallet_debit_amount
     movement = None
@@ -1405,7 +1408,7 @@ async def _fund_pending_external_transfer_for_approval(
 
     user.used_daily = decimal.Decimal(user.used_daily or 0) + decimal.Decimal(transfer.amount or 0)
     user.used_monthly = decimal.Decimal(user.used_monthly or 0) + decimal.Decimal(transfer.amount or 0)
-    txn.status = "pending"
+    txn.status = map_external_transfer_to_transaction_status(transfer.status)
     txn.updated_at = now
 
 
@@ -1435,7 +1438,7 @@ async def approve_external_transfer(
         select(Transactions).where(Transactions.related_entity_id == transfer.transfer_id)
     )
     if txn:
-        txn.status = "pending"
+        txn.status = map_external_transfer_to_transaction_status(transfer.status)
         txn.updated_at = datetime.utcnow()
 
     await db.commit()

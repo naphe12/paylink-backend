@@ -9,6 +9,16 @@ EXTERNAL_TRANSFER_STATUS_FAILED = "failed"
 EXTERNAL_TRANSFER_STATUS_CANCELLED = "cancelled"
 
 
+EXTERNAL_TRANSFER_TO_TRANSACTION_STATUS: dict[str, str] = {
+    EXTERNAL_TRANSFER_STATUS_PENDING: "pending",
+    EXTERNAL_TRANSFER_STATUS_APPROVED: "initiated",
+    EXTERNAL_TRANSFER_STATUS_COMPLETED: "completed",
+    EXTERNAL_TRANSFER_STATUS_SUCCEEDED: "succeeded",
+    EXTERNAL_TRANSFER_STATUS_FAILED: "failed",
+    EXTERNAL_TRANSFER_STATUS_CANCELLED: "cancelled",
+}
+
+
 ALLOWED_EXTERNAL_TRANSFER_TRANSITIONS: dict[str, set[str]] = {
     EXTERNAL_TRANSFER_STATUS_PENDING: {
         EXTERNAL_TRANSFER_STATUS_APPROVED,
@@ -59,3 +69,8 @@ def transition_external_transfer_status(transfer: ExternalTransfers, to_status: 
     target = normalize_external_transfer_status(to_status)
     validate_external_transfer_transition(current, target)
     transfer.status = target
+
+
+def map_external_transfer_to_transaction_status(status: str | None) -> str:
+    normalized = normalize_external_transfer_status(status)
+    return EXTERNAL_TRANSFER_TO_TRANSACTION_STATUS.get(normalized, "pending")

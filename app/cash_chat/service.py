@@ -9,6 +9,7 @@ from app.cash_chat.schemas import CashChatResponse, CashDraft
 from app.models.credit_lines import CreditLines
 from app.models.wallet_cash_requests import WalletCashRequestStatus, WalletCashRequests
 from app.models.wallets import Wallets
+from app.services.assistant_suggestions import build_assistant_suggestions
 
 
 SUPPORTED_CASH_PROVIDERS = {"Lumicash", "Ecocash", "eNoti", "MTN"}
@@ -70,23 +71,20 @@ def _missing_fields_for_execution(draft: CashDraft) -> list[str]:
 
 
 def _build_suggestions(draft: CashDraft, missing: list[str]) -> list[str]:
-    suggestions: list[str] = []
-    if draft.intent == "unknown":
-        suggestions.extend(
+    return build_assistant_suggestions(
+        "cash",
+        intent=draft.intent,
+        missing_fields=missing,
+        extra_examples=(
             [
                 "Demande un depot, un retrait ou une capacite cash.",
                 "Demande le statut de ta derniere demande cash.",
-                "Exemple: depot 25000 BIF.",
-                "Exemple: retrait 120 USD via Ecocash au +250788123456.",
             ]
-        )
-    if "amount" in missing:
-        suggestions.append("Precise le montant, par exemple 25000 BIF.")
-    if "provider_name" in missing:
-        suggestions.append("Precise le reseau, par exemple Lumicash ou Ecocash.")
-    if "mobile_number" in missing:
-        suggestions.append("Ajoute le numero mobile complet du beneficiaire.")
-    return suggestions[:6]
+            if draft.intent == "unknown"
+            else None
+        ),
+        limit=6,
+    )
 
 
 async def process_cash_message(db: AsyncSession, *, user_id, message: str) -> CashChatResponse:
