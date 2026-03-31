@@ -20,6 +20,26 @@ from app.models.wallets import Wallets
 router = APIRouter(prefix="/admin/analytics", tags=["Admin Analytics"])
 
 
+async def _sum_transactions_by_currency(
+    db: AsyncSession,
+    *,
+    since: datetime,
+) -> dict[str, float]:
+    rows = (
+        await db.execute(
+            select(
+                Transactions.currency_code,
+                func.coalesce(func.sum(Transactions.amount), 0).label("total"),
+            ).where(Transactions.created_at >= since).group_by(Transactions.currency_code)
+        )
+    ).all()
+    return {
+        str(row.currency_code or "").upper(): float(row.total or 0)
+        for row in rows
+        if str(row.currency_code or "").strip()
+    }
+
+
 @router.get("/overview")
 async def analytics_overview(
     db: AsyncSession = Depends(get_db),
@@ -34,16 +54,8 @@ async def analytics_overview(
         select(func.count(Users.user_id)).where(Users.updated_at >= day_ago)
     )
 
-    tx_today = await db.scalar(
-        select(func.sum(Transactions.amount)).where(
-            Transactions.created_at >= day_ago
-        )
-    )
-    tx_week = await db.scalar(
-        select(func.sum(Transactions.amount)).where(
-            Transactions.created_at >= week_ago
-        )
-    )
+    tx_today_by_currency = await _sum_transactions_by_currency(db, since=day_ago)
+    tx_week_by_currency = await _sum_transactions_by_currency(db, since=week_ago)
 
     negative_wallets = await db.scalar(
         select(func.count(Wallets.wallet_id)).where(Wallets.available < 0)
@@ -83,8 +95,10 @@ async def analytics_overview(
     return {
         "total_users": total_users or 0,
         "active_today": active_today or 0,
-        "transactions_24h": float(tx_today or 0),
-        "transactions_7d": float(tx_week or 0),
+        "transactions_24h": float(sum(tx_today_by_currency.values())),
+        "transactions_7d": float(sum(tx_week_by_currency.values())),
+        "transactions_24h_by_currency": tx_today_by_currency,
+        "transactions_7d_by_currency": tx_week_by_currency,
         "negative_wallets": negative_wallets or 0,
         "role_counts": {
             "users": int(role_counts_row.users or 0),
