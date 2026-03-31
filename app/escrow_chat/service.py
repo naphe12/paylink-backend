@@ -34,6 +34,22 @@ def _next_step_for_status(status: str) -> str:
     return "Verifier le detail de la commande pour connaitre l'etape suivante."
 
 
+def _eta_for_status(status: str) -> str | None:
+    if status == "CREATED":
+        return "Aucun delai fiable tant que le depot USDC n'est pas detecte."
+    if status == "FUNDED":
+        return "Le traitement prend generalement quelques minutes avant conversion ou swap."
+    if status == "SWAPPED":
+        return "Le payout fiat est souvent prepare dans les prochaines minutes."
+    if status == "PAYOUT_PENDING":
+        return "Le payout fiat peut prendre de quelques minutes a quelques heures selon l'operateur."
+    if status == "PAID_OUT":
+        return "Ordre termine."
+    if status in {"REFUND_PENDING", "REFUNDED"}:
+        return "Le delai depend du traitement du remboursement."
+    return None
+
+
 def _pending_reasons(order, status: str) -> list[str]:
     reasons: list[str] = []
     if status == "CREATED":
@@ -65,6 +81,7 @@ def _serialize_summary(order) -> dict:
         "payout_provider": str(getattr(order, "payout_provider", "") or ""),
         "payout_account": str(getattr(order, "payout_account_number", "") or ""),
         "next_step": _next_step_for_status(status),
+        "eta_hint": _eta_for_status(status),
     }
 
 
@@ -114,21 +131,25 @@ async def process_escrow_message(db: AsyncSession, *, user_id, message: str) -> 
     summary = _serialize_summary(order)
 
     if draft.intent in {"latest_status", "track_order"}:
+        eta_text = f" Delai probable: {summary['eta_hint']}" if summary.get("eta_hint") else ""
         return EscrowChatResponse(
             status="INFO",
-            message=f"Votre commande escrow est actuellement au statut {status}.",
+            message=f"Votre commande escrow est actuellement au statut {status}. Prochaine action recommandee: {summary['next_step']}{eta_text}",
             data=draft,
             assumptions=[summary["next_step"]],
             summary=summary,
+            suggestions=[summary["next_step"]],
         )
 
     if draft.intent == "why_pending":
+        eta_text = f" Delai probable: {summary['eta_hint']}" if summary.get("eta_hint") else ""
         return EscrowChatResponse(
             status="INFO",
-            message=f"Le statut actuel est {status}. Voici ce qui explique probablement l'attente.",
+            message=f"Le statut actuel est {status}. Voici ce qui explique probablement l'attente. Prochaine action recommandee: {summary['next_step']}{eta_text}",
             data=draft,
             assumptions=_pending_reasons(order, status),
             summary=summary,
+            suggestions=[summary["next_step"]],
         )
 
     if draft.intent == "next_step":
@@ -138,6 +159,7 @@ async def process_escrow_message(db: AsyncSession, *, user_id, message: str) -> 
             data=draft,
             assumptions=_pending_reasons(order, status),
             summary=summary,
+            suggestions=[summary["next_step"]],
         )
 
     return EscrowChatResponse(

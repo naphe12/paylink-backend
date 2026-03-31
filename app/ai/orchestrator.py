@@ -102,6 +102,20 @@ def _build_limits_message(data: dict[str, Any]) -> str:
     )
 
 
+def _with_next_step(message: str, data: dict[str, Any]) -> str:
+    next_step = str(data.get("next_step") or "").strip()
+    if not next_step:
+        return message
+    return f"{message} Prochaine action recommandee: {next_step}"
+
+
+def _with_eta(message: str, data: dict[str, Any]) -> str:
+    eta_hint = str(data.get("eta_hint") or "").strip()
+    if not eta_hint:
+        return message
+    return f"{message} Delai probable: {eta_hint}"
+
+
 def _build_transfer_confirmation(payload: dict[str, Any]) -> str:
     amount = payload.get("amount") or "0"
     currency = payload.get("origin_currency") or payload.get("currency") or "EUR"
@@ -255,7 +269,7 @@ async def handle_message(
     if command.intent == "wallet.block_reason":
         data = command.payload
         return response_builder.answer(
-            str(data.get("explanation") or "Aucune explication disponible."),
+            _with_next_step(str(data.get("explanation") or "Aucune explication disponible."), data),
             data=data,
             parsed_intent=parsed,
         ), parsed, command.model_dump(mode="json")
@@ -311,7 +325,7 @@ async def handle_message(
                 command.model_dump(mode="json"),
             )
         return response_builder.answer(
-            str(data.get("explanation") or "Aucune explication disponible."),
+            _with_next_step(str(data.get("explanation") or "Aucune explication disponible."), data),
             data=data,
             parsed_intent=parsed,
         ), parsed, command.model_dump(mode="json")
@@ -363,12 +377,15 @@ async def handle_message(
             )
         order_id = data.get("order_id")
         status_text = data.get("status") or "inconnu"
+        pending_reasons = list(data.get("pending_reasons") or [])
         message_out = (
             f"La commande escrow {order_id} est actuellement au statut {status_text}."
             if order_id
             else f"Le dernier escrow est actuellement au statut {status_text}."
         )
-        return response_builder.answer(message_out, data=data, parsed_intent=parsed), parsed, command.model_dump(mode="json")
+        if pending_reasons:
+            message_out = f"{message_out} Cause probable: {pending_reasons[0]}"
+        return response_builder.answer(_with_eta(_with_next_step(message_out, data), data), data=data, parsed_intent=parsed), parsed, command.model_dump(mode="json")
 
     if command.intent == "p2p.offers_summary":
         data = command.payload
@@ -394,12 +411,15 @@ async def handle_message(
             )
         view = str(data.get("p2p_view") or "latest_trade")
         if view == "why_blocked":
+            blocked_reasons = list(data.get("blocked_reasons") or [])
             message_out = f"Le trade est au statut {data.get('trade_status')}. Voici les causes probables du blocage ou de l'attente."
+            if blocked_reasons:
+                message_out = f"{message_out} Cause principale: {blocked_reasons[0]}"
         elif view == "next_step":
             message_out = str(data.get("next_step") or "Verifier la timeline du trade.")
         else:
             message_out = f"Votre trade P2P est actuellement au statut {data.get('trade_status')}."
-        return response_builder.answer(message_out, data=data, parsed_intent=parsed), parsed, command.model_dump(mode="json")
+        return response_builder.answer(_with_eta(_with_next_step(message_out, data), data), data=data, parsed_intent=parsed), parsed, command.model_dump(mode="json")
 
     if command.intent == "transfer.status":
         data = command.payload
@@ -424,7 +444,7 @@ async def handle_message(
             if reference_text
             else f"Le dernier transfert est actuellement {status_text}."
         )
-        return response_builder.answer(message_out, data=data, parsed_intent=parsed), parsed, command.model_dump(mode="json")
+        return response_builder.answer(_with_eta(_with_next_step(message_out, data), data), data=data, parsed_intent=parsed), parsed, command.model_dump(mode="json")
 
     if command.intent == "help.explain_block_reason":
         data = command.payload
@@ -444,7 +464,7 @@ async def handle_message(
             )
         return (
             response_builder.answer(
-                str(data.get("explanation") or "Aucune explication disponible."),
+                _with_eta(_with_next_step(str(data.get("explanation") or "Aucune explication disponible."), data), data),
                 data=data,
                 parsed_intent=parsed,
             ),

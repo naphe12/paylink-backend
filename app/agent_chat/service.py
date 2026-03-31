@@ -388,7 +388,7 @@ async def process_chat_message(db: AsyncSession, *, user_id, message: str) -> Ch
         credit_available = wallet_ctx["credit_available"]
         total_capacity = wallet_ctx["total_capacity"]
         return ChatResponse(
-            status="INFO",
+            status="DONE",
             message=(
                 f"Capacite financiere actuelle: **wallet {_fmt_decimal(wallet_available)} {wallet_ctx['wallet_currency']}**, "
                 f"**credit disponible {_fmt_decimal(credit_available)} {wallet_ctx['wallet_currency']}**, "

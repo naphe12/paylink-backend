@@ -27,6 +27,20 @@ def _ai_type_to_support_status(ai_type: str) -> str:
     return "ERROR"
 
 
+def _append_next_step(message: str, payload: dict | None) -> str:
+    next_step = str((payload or {}).get("next_step") or "").strip()
+    if not next_step:
+        return message
+    return f"{message} Prochaine action recommandee: {next_step}"
+
+
+def _next_step_suggestions(payload: dict | None) -> list[str]:
+    next_step = str((payload or {}).get("next_step") or "").strip()
+    if not next_step:
+        return []
+    return [next_step]
+
+
 async def handle_transfer_support_with_ai(
     db,
     *,
@@ -67,12 +81,13 @@ async def handle_transfer_support_with_ai(
     return (
         TransferSupportChatResponse(
             status=_ai_type_to_support_status(ai_response.type),
-            message=ai_response.message,
+            message=_append_next_step(ai_response.message, payload),
             data=data,
             missing_fields=list(ai_response.missing_fields or []),
             executable=False,
             assumptions=assumptions,
             summary=payload or None,
+            suggestions=_next_step_suggestions(payload),
         ),
         True,
     )
@@ -117,12 +132,13 @@ async def handle_wallet_support_with_ai(
     return (
         WalletSupportChatResponse(
             status=_ai_type_to_support_status(ai_response.type),
-            message=ai_response.message,
+            message=_append_next_step(ai_response.message, payload),
             data=data,
             missing_fields=list(ai_response.missing_fields or []),
             executable=False,
             assumptions=assumptions,
             summary=payload,
+            suggestions=_next_step_suggestions(payload),
         ),
         True,
     )
@@ -168,7 +184,7 @@ async def handle_agent_chat_with_ai(
         wallet_currency = str(payload.get("wallet_currency") or "EUR")
         return (
             ChatResponse(
-                status="INFO",
+                status="DONE",
                 message=(
                     f"Capacite financiere actuelle: wallet {payload.get('wallet_available')} {wallet_currency}, "
                     f"credit disponible {payload.get('credit_available')} {wallet_currency}."
@@ -193,7 +209,7 @@ async def handle_agent_chat_with_ai(
         wallet_currency = str(payload.get("wallet_currency") or "EUR")
         return (
             ChatResponse(
-                status="INFO",
+                status="DONE",
                 message=str(ai_response.message or ""),
                 data=AgentChatDraft(
                     intent="financial_overview",
@@ -215,7 +231,7 @@ async def handle_agent_chat_with_ai(
         wallet_currency = str(payload.get("wallet_currency") or "EUR")
         return (
             ChatResponse(
-                status="INFO",
+                status="DONE",
                 message=(
                     f"Limites actuelles: {payload.get('used_daily')} / {payload.get('daily_limit')} {wallet_currency} aujourd'hui "
                     f"(reste {payload.get('daily_remaining')} {wallet_currency}), "
@@ -241,7 +257,7 @@ async def handle_agent_chat_with_ai(
         payload = command.payload
         return (
             ChatResponse(
-                status="INFO",
+                status="DONE",
                 message=(
                     f"Statut KYC actuel: {payload.get('kyc_status')}. Niveau: {payload.get('kyc_tier')}. "
                     f"Limites: {payload.get('daily_limit')} par jour et {payload.get('monthly_limit')} par mois."
@@ -274,7 +290,7 @@ async def handle_agent_chat_with_ai(
             ).strip()
         return (
             ChatResponse(
-                status="INFO",
+                status="DONE",
                 message=message_out,
                 data=AgentChatDraft(
                     intent="escrow_status",
@@ -306,7 +322,7 @@ async def handle_agent_chat_with_ai(
             ).strip()
         return (
             ChatResponse(
-                status="INFO",
+                status="DONE",
                 message=message_out,
                 data=AgentChatDraft(
                     intent="transfer_status",
@@ -333,7 +349,7 @@ async def handle_agent_chat_with_ai(
             assumptions.append(f"Motifs AML: {', '.join(str(item) for item in payload.get('aml_reason_codes') or [])}.")
         return (
             ChatResponse(
-                status="INFO",
+                status="DONE",
                 message=str(payload.get("explanation") or "Aucune explication disponible."),
                 data=AgentChatDraft(
                     intent="pending_reason",
@@ -391,7 +407,7 @@ async def handle_agent_chat_with_ai(
         payload = command.payload
         return (
             ChatResponse(
-                status="INFO",
+                status="DONE",
                 message=ai_response.message,
                 data=AgentChatDraft(
                     intent="beneficiary_list",
@@ -492,7 +508,7 @@ async def handle_escrow_chat_with_ai(
     return (
         EscrowChatResponse(
             status=_ai_type_to_support_status(ai_response.type),
-            message=ai_response.message,
+            message=_append_next_step(ai_response.message, payload),
             data=EscrowDraft(
                 intent="track_order" if (parsed.entities or {}).get("order_id") else "latest_status",
                 order_id=(parsed.entities or {}).get("order_id") if parsed else None,
@@ -504,6 +520,7 @@ async def handle_escrow_chat_with_ai(
                 f"Confiance: {getattr(parsed, 'confidence', None)}.",
             ],
             summary=payload or None,
+            suggestions=_next_step_suggestions(payload),
         ),
         True,
     )
@@ -657,7 +674,7 @@ async def handle_p2p_chat_with_ai(
     return (
         P2PChatResponse(
             status=_ai_type_to_support_status(ai_response.type),
-            message=ai_response.message,
+            message=_append_next_step(ai_response.message, payload),
             data=P2PDraft(intent=draft_intent, trade_id=(parsed.entities or {}).get("trade_id"), raw_message=message),
             executable=False,
             assumptions=[
@@ -665,6 +682,7 @@ async def handle_p2p_chat_with_ai(
                 f"Confiance: {getattr(parsed, 'confidence', None)}.",
             ],
             summary=payload or None,
+            suggestions=_next_step_suggestions(payload),
         ),
         True,
     )

@@ -81,6 +81,38 @@ def _describe_aml_reason_codes(metadata: dict) -> str | None:
     return f"{', '.join(labels[:-1])} et {labels[-1]}"
 
 
+def _transfer_next_step(*, status: str, review_reasons: list[str], metadata: dict) -> str:
+    normalized_status = str(status or "").lower()
+    if "insufficient_funds" in review_reasons or metadata.get("funding_pending"):
+        return "Approvisionner le wallet ou la couverture de credit, puis relancer ou attendre la reprise du dossier."
+    if "aml" in review_reasons or metadata.get("aml_manual_review_required"):
+        return "Attendre la revue conformite ou fournir les justificatifs demandes si le support les reclame."
+    if normalized_status == "approved":
+        return "Attendre l'execution finale du partenaire ou verifier le suivi agent."
+    if normalized_status in {"pending", "initiated"}:
+        return "Verifier les details du dossier et attendre la prochaine etape de validation."
+    if normalized_status in {"completed", "succeeded"}:
+        return "Verifier simplement la bonne reception cote beneficiaire."
+    if normalized_status in {"failed", "cancelled", "reversed"}:
+        return "Verifier la cause de l'echec puis recreer un nouveau transfert si necessaire."
+    return "Verifier la reference du transfert et l'etat du dossier pour definir la prochaine action."
+
+
+def _transfer_eta_hint(*, status: str, review_reasons: list[str], metadata: dict) -> str | None:
+    normalized_status = str(status or "").lower()
+    if "insufficient_funds" in review_reasons or metadata.get("funding_pending"):
+        return "Aucun delai fiable tant que la couverture financiere n'est pas complete."
+    if "aml" in review_reasons or metadata.get("aml_manual_review_required"):
+        return "Le delai depend de la revue conformite et peut prendre plus de temps qu'un flux nominal."
+    if normalized_status == "approved":
+        return "Execution finale attendue prochainement selon le partenaire."
+    if normalized_status in {"pending", "initiated"}:
+        return "Le dossier reste en validation, sans ETA ferme a ce stade."
+    if normalized_status in {"completed", "succeeded"}:
+        return "Transfert termine."
+    return None
+
+
 async def _find_transfer(db: AsyncSession, *, user_id, reference_code: str | None):
     if reference_code:
         return await db.scalar(
@@ -207,12 +239,14 @@ async def process_transfer_support_message(db: AsyncSession, *, user_id, message
     wallet_ctx = await _get_wallet_context(db, user_id)
 
     if draft.intent == "capacity":
+        next_step = "Verifier si la capacite disponible couvre le prochain transfert avant de lancer la demande."
         return TransferSupportChatResponse(
             status="INFO",
             message=(
                 f"Capacite financiere actuelle: **wallet {_fmt_decimal(wallet_ctx['wallet_available'])} {wallet_ctx['wallet_currency']}**, "
                 f"**credit disponible {_fmt_decimal(wallet_ctx['credit_available'])} {wallet_ctx['wallet_currency']}**, "
-                f"soit **{_fmt_decimal(wallet_ctx['total_capacity'])} {wallet_ctx['wallet_currency']} utilisables**."
+                f"soit **{_fmt_decimal(wallet_ctx['total_capacity'])} {wallet_ctx['wallet_currency']} utilisables**. "
+                f"Prochaine action recommandee: {next_step}"
             ),
             data=draft,
             assumptions=[
@@ -227,8 +261,10 @@ async def process_transfer_support_message(db: AsyncSession, *, user_id, message
                 "wallet_available": _fmt_decimal(wallet_ctx["wallet_available"]),
                 "credit_available": _fmt_decimal(wallet_ctx["credit_available"]),
                 "total_capacity": _fmt_decimal(wallet_ctx["total_capacity"]),
+                "next_step": next_step,
             },
             suggestions=[
+                next_step,
                 "Exemple: wallet 10 EUR + credit disponible 50 EUR = capacite 60 EUR.",
                 "Tu peux aussi demander pourquoi une demande est pending.",
             ],
@@ -264,6 +300,16 @@ async def process_transfer_support_message(db: AsyncSession, *, user_id, message
         metadata=metadata,
         tx_status=tx_status,
     )
+    next_step = _transfer_next_step(
+        status=str(getattr(transfer, "status", "") or ""),
+        review_reasons=review_reasons,
+        metadata=metadata,
+    )
+    eta_hint = _transfer_eta_hint(
+        status=str(getattr(transfer, "status", "") or ""),
+        review_reasons=review_reasons,
+        metadata=metadata,
+    )
 
     summary = {
         "user_id": str(getattr(user, "user_id", "") or "") or None,
@@ -286,12 +332,9 @@ async def process_transfer_support_message(db: AsyncSession, *, user_id, message
         "review_reasons": review_reasons,
         "funding_pending": bool(metadata.get("funding_pending")),
         "next_step": (
-            "Attendre validation manuelle ou couverture."
-            if str(getattr(transfer, "status", "") or "").lower() in {"pending", "initiated"}
-            else "Attendre execution finale."
-            if str(getattr(transfer, "status", "") or "").lower() == "approved"
-            else "Aucune action immediate."
+            next_step
         ),
+        "eta_hint": eta_hint,
     }
 
     if draft.intent == "status_help":
@@ -300,7 +343,9 @@ async def process_transfer_support_message(db: AsyncSession, *, user_id, message
             "succeeded/completed = termine, failed = echec."
         )
     else:
-        response_message = status_text
+        response_message = f"{status_text} Prochaine action recommandee: {next_step}"
+        if eta_hint:
+            response_message = f"{response_message} Delai probable: {eta_hint}"
 
     return TransferSupportChatResponse(
         status="INFO",
@@ -308,6 +353,7 @@ async def process_transfer_support_message(db: AsyncSession, *, user_id, message
         data=draft,
         assumptions=assumptions,
         summary=summary,
+        suggestions=[next_step],
     )
 
 
