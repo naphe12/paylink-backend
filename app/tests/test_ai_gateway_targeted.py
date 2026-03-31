@@ -152,6 +152,9 @@ def test_resolve_intent_wallet_block_reason_uses_backend_reasons():
     assert "statut du compte" in resolved.payload["explanation"].lower()
     assert any("limite journaliere" in item.lower() for item in resolved.payload["reasons"])
     assert any("demande cash recente" in item.lower() for item in resolved.payload["reasons"])
+    assert resolved.payload["dossier_type"] == "account_review"
+    assert resolved.payload["who_must_act_now"] == "operations"
+    assert resolved.payload["primary_blocker"]
     assert resolved.payload["next_step"]
 
 
@@ -183,6 +186,9 @@ def test_resolve_intent_escrow_status_exposes_pending_reasons_and_next_step():
     )
 
     assert resolved.intent == "escrow.status"
+    assert resolved.payload["dossier_type"] == "review"
+    assert resolved.payload["who_must_act_now"] == "operations"
+    assert resolved.payload["primary_blocker"]
     assert resolved.payload["next_step"]
     assert resolved.payload["eta_hint"]
     assert any("payout fiat" in item.lower() for item in resolved.payload["pending_reasons"])
@@ -217,7 +223,47 @@ def test_resolve_intent_p2p_trade_status_exposes_blocked_reasons():
     )
 
     assert resolved.intent == "p2p.trade_status"
+    assert resolved.payload["dossier_type"] == "dispute"
+    assert resolved.payload["who_must_act_now"] == "operations"
+    assert resolved.payload["primary_blocker"]
+    assert resolved.payload["current_user_role"] == "buyer"
     assert resolved.payload["next_step"]
     assert resolved.payload["eta_hint"]
     assert any("vendeur" in item.lower() for item in resolved.payload["blocked_reasons"])
     assert any("litige actuel" in item.lower() for item in resolved.payload["blocked_reasons"])
+
+
+def test_resolve_intent_transfer_status_exposes_structured_guidance():
+    current_user = SimpleNamespace(user_id="user-1")
+    transfer = SimpleNamespace(
+        transfer_id="tr-1",
+        reference_code="EXT-001",
+        status="pending",
+        recipient_name="Alice",
+        recipient_phone="+25761000001",
+        partner_name="Lumicash",
+        country_destination="Burundi",
+        amount=Decimal("300"),
+        currency="EUR",
+        created_at=None,
+        metadata_={"funding_pending": True, "required_credit_topup": "50", "review_reasons": ["insufficient_funds"]},
+    )
+    linked_tx = SimpleNamespace(status="pending")
+    db = _FakeDb([transfer, linked_tx])
+    parsed = ParsedIntent(intent="transfer.status", entities={})
+
+    resolved = asyncio.run(
+        ai_resolver.resolve_intent(
+            db,
+            current_user=current_user,
+            parsed=parsed,
+            metadata=_metadata(),
+        )
+    )
+
+    assert resolved.intent == "transfer.status"
+    assert resolved.payload["dossier_type"] == "funding"
+    assert resolved.payload["who_must_act_now"] == "client"
+    assert resolved.payload["primary_blocker"]
+    assert resolved.payload["next_step"]
+    assert resolved.payload["eta_hint"]

@@ -55,6 +55,32 @@ def _eta_for_status(status: str) -> str | None:
     return None
 
 
+def _dossier_type(status: str, dispute) -> str:
+    if dispute or status == "DISPUTED":
+        return "dispute"
+    if status in {"CANCELLED", "EXPIRED"}:
+        return "cancelled"
+    if status == "RELEASED":
+        return "completed"
+    return "standard"
+
+
+def _who_must_act_now(status: str, trade, dispute) -> str:
+    if dispute or status == "DISPUTED":
+        return "operations"
+    if status in {"CREATED", "AWAITING_CRYPTO"}:
+        return "seller"
+    if status in {"CRYPTO_LOCKED", "AWAITING_FIAT"}:
+        return "buyer"
+    if status == "FIAT_SENT":
+        return "seller"
+    if status == "FIAT_CONFIRMED":
+        return "platform"
+    if status == "RELEASED":
+        return "none"
+    return "platform"
+
+
 def _blocked_reasons(status: str, dispute, last_history) -> list[str]:
     reasons: list[str] = []
     if status in {"CREATED", "AWAITING_CRYPTO"}:
@@ -76,6 +102,7 @@ def _blocked_reasons(status: str, dispute, last_history) -> list[str]:
 
 def _serialize_trade_summary(trade, dispute, open_offers_count: int) -> dict:
     status = _status_text(getattr(trade, "status", ""))
+    reasons = _blocked_reasons(status, dispute, None)
     return {
         "trade_id": str(getattr(trade, "trade_id", "") or ""),
         "status": status,
@@ -88,6 +115,11 @@ def _serialize_trade_summary(trade, dispute, open_offers_count: int) -> dict:
         "open_offers_count": open_offers_count,
         "next_step": _next_step_for_status(status),
         "eta_hint": _eta_for_status(status),
+        "dossier_type": _dossier_type(status, dispute),
+        "who_must_act_now": _who_must_act_now(status, trade, dispute),
+        "blocked_reasons": reasons,
+        "primary_blocker": reasons[0] if reasons else "",
+        "current_user_role": "",
     }
 
 
@@ -163,6 +195,8 @@ async def process_p2p_message(db: AsyncSession, *, user_id, message: str) -> P2P
             "latest_offer_token": _status_text(getattr(latest_offer, "token", "")),
             "latest_offer_available": str(getattr(latest_offer, "available_amount", "") or ""),
             "latest_offer_payment_method": _status_text(getattr(latest_offer, "payment_method", "")),
+            "dossier_type": "offers_summary",
+            "who_must_act_now": "none",
         }
         return P2PChatResponse(
             status="INFO",
@@ -181,6 +215,15 @@ async def process_p2p_message(db: AsyncSession, *, user_id, message: str) -> P2P
         )
 
     summary = _serialize_trade_summary(trade, dispute, len(offers))
+    summary["current_user_role"] = (
+        "buyer"
+        if str(getattr(trade, "buyer_id", "")) == str(user_id)
+        else "seller"
+        if str(getattr(trade, "seller_id", "")) == str(user_id)
+        else ""
+    )
+    summary["blocked_reasons"] = _blocked_reasons(summary["status"], dispute, last_history)
+    summary["primary_blocker"] = summary["blocked_reasons"][0] if summary["blocked_reasons"] else ""
     if draft.intent in {"latest_trade", "track_trade"}:
         eta_text = f" Delai probable: {summary['eta_hint']}" if summary.get("eta_hint") else ""
         return P2PChatResponse(
@@ -198,7 +241,7 @@ async def process_p2p_message(db: AsyncSession, *, user_id, message: str) -> P2P
             status="INFO",
             message=f"Le trade est au statut {summary['status']}. Voici les causes probables du blocage ou de l'attente. Prochaine action recommandee: {summary['next_step']}{eta_text}",
             data=draft,
-            assumptions=_blocked_reasons(summary["status"], dispute, last_history),
+            assumptions=summary["blocked_reasons"],
             summary=summary,
             suggestions=[summary["next_step"]],
         )
@@ -208,7 +251,7 @@ async def process_p2p_message(db: AsyncSession, *, user_id, message: str) -> P2P
             status="INFO",
             message=summary["next_step"],
             data=draft,
-            assumptions=_blocked_reasons(summary["status"], dispute, last_history),
+            assumptions=summary["blocked_reasons"],
             summary=summary,
             suggestions=[summary["next_step"]],
         )

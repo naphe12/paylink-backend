@@ -71,6 +71,9 @@ def test_transfer_support_fallback_returns_next_step_guidance():
     assert "Delai probable" in response.message
     assert response.suggestions
     assert "Approvisionner" in response.suggestions[0]
+    assert response.summary["dossier_type"] == "funding"
+    assert response.summary["who_must_act_now"] == "client"
+    assert response.summary["primary_blocker"]
 
 
 def test_wallet_support_fallback_returns_next_step_guidance():
@@ -128,6 +131,10 @@ def test_escrow_support_fallback_returns_next_step_guidance():
     assert "Delai probable" in response.message
     assert response.suggestions
     assert "payout" in response.suggestions[0].lower()
+    assert response.summary["dossier_type"] == "review"
+    assert response.summary["who_must_act_now"] == "operations"
+    assert response.summary["pending_reasons"]
+    assert response.summary["primary_blocker"]
 
 
 def test_p2p_support_fallback_returns_next_step_guidance():
@@ -159,3 +166,8 @@ def test_p2p_support_fallback_returns_next_step_guidance():
     assert "Delai probable" in response.message
     assert response.suggestions
     assert "vendeur" in " ".join(response.assumptions).lower()
+    assert response.summary["dossier_type"] == "dispute"
+    assert response.summary["who_must_act_now"] == "operations"
+    assert response.summary["blocked_reasons"]
+    assert response.summary["primary_blocker"]
+    assert response.summary["current_user_role"] == "buyer"

@@ -102,6 +102,61 @@ def _build_limits_message(data: dict[str, Any]) -> str:
     )
 
 
+def _label_dossier_type(value: Any) -> str | None:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return None
+    labels = {
+        "standard": "standard",
+        "review": "en revue",
+        "refund": "refund",
+        "failed": "en echec",
+        "dispute": "en litige",
+        "completed": "termine",
+        "cancelled": "annule",
+        "deposit_follow_up": "suivi depot",
+        "withdraw_blocked": "retrait bloque",
+        "send_blocked": "envoi bloque",
+        "account_review": "compte en revue",
+        "funding": "financement requis",
+    }
+    return labels.get(raw, str(value))
+
+
+def _label_actor(value: Any) -> str | None:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return None
+    labels = {
+        "depositor": "deposant",
+        "operations": "operations",
+        "client": "client",
+        "buyer": "acheteur",
+        "seller": "vendeur",
+        "platform": "plateforme",
+        "none": "aucune action immediate",
+    }
+    return labels.get(raw, str(value))
+
+
+def _with_structured_context(message: str, data: dict[str, Any]) -> str:
+    segments: list[str] = [message]
+    dossier_type = _label_dossier_type(data.get("dossier_type"))
+    actor = _label_actor(data.get("who_must_act_now"))
+    primary_blocker = str(data.get("primary_blocker") or "").strip()
+    current_user_role = _label_actor(data.get("current_user_role"))
+
+    if dossier_type:
+        segments.append(f"Type de dossier: {dossier_type}.")
+    if actor:
+        segments.append(f"Acteur attendu maintenant: {actor}.")
+    if current_user_role:
+        segments.append(f"Votre role actuel: {current_user_role}.")
+    if primary_blocker:
+        segments.append(f"Blocage principal: {primary_blocker}")
+    return " ".join(item.strip() for item in segments if str(item).strip())
+
+
 def _with_next_step(message: str, data: dict[str, Any]) -> str:
     next_step = str(data.get("next_step") or "").strip()
     if not next_step:
@@ -269,7 +324,7 @@ async def handle_message(
     if command.intent == "wallet.block_reason":
         data = command.payload
         return response_builder.answer(
-            _with_next_step(str(data.get("explanation") or "Aucune explication disponible."), data),
+            _with_next_step(_with_structured_context(str(data.get("explanation") or "Aucune explication disponible."), data), data),
             data=data,
             parsed_intent=parsed,
         ), parsed, command.model_dump(mode="json")
@@ -385,6 +440,7 @@ async def handle_message(
         )
         if pending_reasons:
             message_out = f"{message_out} Cause probable: {pending_reasons[0]}"
+        message_out = _with_structured_context(message_out, data)
         return response_builder.answer(_with_eta(_with_next_step(message_out, data), data), data=data, parsed_intent=parsed), parsed, command.model_dump(mode="json")
 
     if command.intent == "p2p.offers_summary":
@@ -419,6 +475,7 @@ async def handle_message(
             message_out = str(data.get("next_step") or "Verifier la timeline du trade.")
         else:
             message_out = f"Votre trade P2P est actuellement au statut {data.get('trade_status')}."
+        message_out = _with_structured_context(message_out, data)
         return response_builder.answer(_with_eta(_with_next_step(message_out, data), data), data=data, parsed_intent=parsed), parsed, command.model_dump(mode="json")
 
     if command.intent == "transfer.status":
@@ -444,6 +501,7 @@ async def handle_message(
             if reference_text
             else f"Le dernier transfert est actuellement {status_text}."
         )
+        message_out = _with_structured_context(message_out, data)
         return response_builder.answer(_with_eta(_with_next_step(message_out, data), data), data=data, parsed_intent=parsed), parsed, command.model_dump(mode="json")
 
     if command.intent == "help.explain_block_reason":
@@ -464,7 +522,7 @@ async def handle_message(
             )
         return (
             response_builder.answer(
-                _with_eta(_with_next_step(str(data.get("explanation") or "Aucune explication disponible."), data), data),
+                _with_eta(_with_next_step(_with_structured_context(str(data.get("explanation") or "Aucune explication disponible."), data), data), data),
                 data=data,
                 parsed_intent=parsed,
             ),

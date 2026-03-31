@@ -2,6 +2,7 @@ from app.ai.orchestrator import handle_message
 from app.ai.metadata_service import load_runtime_metadata
 from app.ai.parser import parse_user_message
 from app.ai.resolver import resolve_intent as resolve_ai_command
+from app.ai.orchestrator import _with_structured_context, _with_next_step, _with_eta, _build_financial_overview_message
 from app.agent_chat.schemas import AgentChatDraft, ChatResponse
 from app.agent_onboarding_chat.catalog import build_onboarding_suggestions
 from app.agent_onboarding_chat.schemas import AgentOnboardingChatResponse, AgentOnboardingDraft
@@ -210,7 +211,7 @@ async def handle_agent_chat_with_ai(
         return (
             ChatResponse(
                 status="DONE",
-                message=str(ai_response.message or ""),
+                message=_build_financial_overview_message(payload),
                 data=AgentChatDraft(
                     intent="financial_overview",
                     wallet_currency=wallet_currency,
@@ -288,6 +289,9 @@ async def handle_agent_chat_with_ai(
             message_out = (
                 f"La commande escrow {payload.get('order_id') or ''} est actuellement au statut {payload.get('status') or 'inconnu'}."
             ).strip()
+            if payload.get("pending_reasons"):
+                message_out = f"{message_out} Cause probable: {list(payload.get('pending_reasons') or [None])[0]}"
+            message_out = _with_eta(_with_next_step(_with_structured_context(message_out, payload), payload), payload)
         return (
             ChatResponse(
                 status="DONE",
@@ -320,6 +324,7 @@ async def handle_agent_chat_with_ai(
                 f"Le transfert {payload.get('reference_code') or payload.get('transfer_id') or ''} "
                 f"est actuellement {payload.get('transfer_status') or 'inconnu'}."
             ).strip()
+            message_out = _with_eta(_with_next_step(_with_structured_context(message_out, payload), payload), payload)
         return (
             ChatResponse(
                 status="DONE",
@@ -350,7 +355,13 @@ async def handle_agent_chat_with_ai(
         return (
             ChatResponse(
                 status="DONE",
-                message=str(payload.get("explanation") or "Aucune explication disponible."),
+                message=_with_eta(
+                    _with_next_step(
+                        _with_structured_context(str(payload.get("explanation") or "Aucune explication disponible."), payload),
+                        payload,
+                    ),
+                    payload,
+                ),
                 data=AgentChatDraft(
                     intent="pending_reason",
                     reference_code=str(payload.get("reference_code") or "") or None,

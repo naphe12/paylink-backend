@@ -50,6 +50,26 @@ def _eta_for_status(status: str) -> str | None:
     return None
 
 
+def _dossier_type(status: str) -> str:
+    if status in {"REFUND_PENDING", "REFUNDED"}:
+        return "refund"
+    if status in {"FAILED", "CANCELLED", "EXPIRED"}:
+        return "failed"
+    if status == "PAYOUT_PENDING":
+        return "review"
+    return "standard"
+
+
+def _who_must_act_now(status: str) -> str:
+    if status == "CREATED":
+        return "depositor"
+    if status in {"FUNDED", "SWAPPED", "PAYOUT_PENDING", "REFUND_PENDING"}:
+        return "operations"
+    if status in {"PAID_OUT", "REFUNDED"}:
+        return "none"
+    return "operations"
+
+
 def _pending_reasons(order, status: str) -> list[str]:
     reasons: list[str] = []
     if status == "CREATED":
@@ -70,6 +90,7 @@ def _pending_reasons(order, status: str) -> list[str]:
 
 def _serialize_summary(order) -> dict:
     status = _status_text(order)
+    reasons = _pending_reasons(order, status)
     return {
         "order_id": str(getattr(order, "id", "") or ""),
         "status": status,
@@ -82,6 +103,10 @@ def _serialize_summary(order) -> dict:
         "payout_account": str(getattr(order, "payout_account_number", "") or ""),
         "next_step": _next_step_for_status(status),
         "eta_hint": _eta_for_status(status),
+        "dossier_type": _dossier_type(status),
+        "who_must_act_now": _who_must_act_now(status),
+        "pending_reasons": reasons,
+        "primary_blocker": reasons[0] if reasons else "",
     }
 
 
@@ -147,7 +172,7 @@ async def process_escrow_message(db: AsyncSession, *, user_id, message: str) -> 
             status="INFO",
             message=f"Le statut actuel est {status}. Voici ce qui explique probablement l'attente. Prochaine action recommandee: {summary['next_step']}{eta_text}",
             data=draft,
-            assumptions=_pending_reasons(order, status),
+            assumptions=summary["pending_reasons"],
             summary=summary,
             suggestions=[summary["next_step"]],
         )
@@ -157,7 +182,7 @@ async def process_escrow_message(db: AsyncSession, *, user_id, message: str) -> 
             status="INFO",
             message=summary["next_step"],
             data=draft,
-            assumptions=_pending_reasons(order, status),
+            assumptions=summary["pending_reasons"],
             summary=summary,
             suggestions=[summary["next_step"]],
         )
