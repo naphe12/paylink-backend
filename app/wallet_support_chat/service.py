@@ -10,19 +10,13 @@ from app.models.users import Users
 from app.models.wallet_cash_requests import WalletCashRequests
 from app.models.wallet_transactions import WalletTransactions
 from app.models.wallets import Wallets
+from app.services.assistant_suggestions import build_assistant_suggestions
 from app.wallet_support_chat.parser import parse_wallet_support_message
 from app.wallet_support_chat.schemas import WalletSupportChatResponse
 
 
 def _build_suggestions() -> list[str]:
-    return [
-        "Pourquoi mon solde a baisse ?",
-        "Je ne vois pas mon depot.",
-        "Pourquoi mon retrait est bloque ?",
-        "Pourquoi je ne peux plus envoyer ?",
-        "Quel est mon dernier mouvement wallet ?",
-        "Mon compte est-il gele ?",
-    ]
+    return build_assistant_suggestions("wallet_support")
 
 
 async def _load_context(db: AsyncSession, user_id):

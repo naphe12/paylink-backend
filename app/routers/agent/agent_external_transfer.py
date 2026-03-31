@@ -27,6 +27,7 @@ from app.models.agents import Agents
 from app.schemas.external_transfers import ExternalBeneficiaryRead, ExternalTransferCreate
 from app.routers.wallet.transfer import _external_transfer_core as create_client_external_transfer
 from app.services.external_transfer_rules import (
+    map_external_transfer_to_transaction_status,
     normalize_external_transfer_status,
     transition_external_transfer_status,
 )
@@ -110,7 +111,7 @@ async def _ensure_transfer_transaction(
         amount=amount,
         currency_code=currency_code,
         channel="external_transfer",
-        status=fallback_tx.status if fallback_tx else transfer.status or "completed",
+        status=fallback_tx.status if fallback_tx else map_external_transfer_to_transaction_status(transfer.status),
         initiated_by=fallback_tx.initiated_by if fallback_tx else transfer.user_id,
         sender_wallet=fallback_tx.sender_wallet if fallback_tx else None,
         receiver_wallet=fallback_tx.receiver_wallet if fallback_tx else None,
@@ -186,7 +187,7 @@ async def _close_external_transfer_core(
         select(Transactions).where(Transactions.related_entity_id == transfer.transfer_id)
     )
     txn = await _ensure_transfer_transaction(db, transfer, txn)
-    txn.status = "completed"
+    txn.status = map_external_transfer_to_transaction_status(transfer.status)
     txn.updated_at = datetime.utcnow()
 
     wallet_tx = WalletTransactions(
@@ -318,7 +319,7 @@ async def update_external_transfer_status(
         select(Transactions).where(Transactions.related_entity_id == transfer.transfer_id)
     )
     txn = await _ensure_transfer_transaction(db, transfer, txn)
-    txn.status = new_status
+    txn.status = map_external_transfer_to_transaction_status(transfer.status)
     txn.updated_at = datetime.utcnow()
 
     await db.commit()

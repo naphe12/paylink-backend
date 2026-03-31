@@ -10,21 +10,13 @@ from app.models.credit_lines import CreditLines
 from app.models.users import Users
 from app.models.wallet_transactions import WalletTransactions
 from app.models.wallets import Wallets
+from app.services.assistant_suggestions import build_assistant_suggestions
 from app.wallet_chat.parser import parse_wallet_message
 from app.wallet_chat.schemas import WalletChatResponse
 
 
 def _build_suggestions() -> list[str]:
-    return [
-        "Demande ton solde wallet.",
-        "Demande tes limites journalieres et mensuelles.",
-        "Demande les derniers mouvements.",
-        "Demande le statut de ton compte.",
-        "Explique les mouvements wallet du 2026-03-25.",
-        "Explique la ligne de credit du 2026-03-25.",
-        "Explique les mouvements wallet et ligne de credit du 2026-03-25.",
-        "Demande la situation de ta ligne de credit.",
-    ]
+    return build_assistant_suggestions("wallet")
 
 
 async def _get_wallet_context(db: AsyncSession, user_id):
