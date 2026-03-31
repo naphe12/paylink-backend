@@ -282,6 +282,7 @@ async def transfers_gains(
     stmt = (
         select(
             channel_field.label("channel"),
+            Transactions.currency_code.label("currency"),
             bucket,
             func.sum(Transactions.amount).label("amount_total"),
             func.count(Transactions.tx_id).label("count_total"),
@@ -291,41 +292,51 @@ async def transfers_gains(
             channel_field.in_(target_channels),
             Transactions.created_at >= date_from,
         )
-        .group_by(bucket, channel_field)
-        .order_by(bucket.desc())
+        .group_by(bucket, channel_field, Transactions.currency_code)
+        .order_by(bucket.desc(), Transactions.currency_code.asc(), channel_field.asc())
     )
 
     rows = (await db.execute(stmt)).all()
 
     serialized = []
-    total_amount = 0.0
-    total_gain = 0.0
     total_count = 0
+    totals_by_currency: dict[str, dict[str, float | int | str]] = {}
 
     for r in rows:
         amount = float(r.amount_total or 0)
         gain = amount * rate / 100
+        currency = str(getattr(r, "currency", "") or "").strip().upper() or "UNKNOWN"
         serialized.append(
             {
                 "day": r.bucket.isoformat() if r.bucket else None,
                 "channel": r.channel,
+                "currency": currency,
                 "amount": round(amount, 2),
                 "gain": round(gain, 2),
                 "count": int(r.count_total or 0),
             }
         )
-        total_amount += amount
-        total_gain += gain
+        currency_totals = totals_by_currency.setdefault(
+            currency,
+            {
+                "currency": currency,
+                "amount": 0.0,
+                "gain": 0.0,
+                "count": 0,
+            },
+        )
+        currency_totals["amount"] = round(float(currency_totals["amount"]) + amount, 2)
+        currency_totals["gain"] = round(float(currency_totals["gain"]) + gain, 2)
+        currency_totals["count"] = int(currency_totals["count"]) + int(r.count_total or 0)
         total_count += int(r.count_total or 0)
 
     return {
         "period": period,
         "charge_rate": rate,
         "totals": {
-            "amount": round(total_amount, 2),
-            "gain": round(total_gain, 2),
             "count": total_count,
         },
+        "totals_by_currency": list(totals_by_currency.values()),
         "rows": serialized,
     }
 
