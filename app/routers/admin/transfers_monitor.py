@@ -150,7 +150,7 @@ async def list_external_transfers(
     ]
 
 
-@router.get("/{transfer_ref}")
+@router.get("/detail/{transfer_ref}")
 async def get_external_transfer_detail(
     transfer_ref: str,
     db: AsyncSession = Depends(get_db),
@@ -250,7 +250,7 @@ async def transfers_summary(
 @router.get("/gains")
 async def transfers_gains(
     period: str = Query(
-        "day",
+        "month",
         description="Filtre de temps: day, week, month, year",
         regex="^(day|week|month|year)$",
     ),
@@ -275,21 +275,23 @@ async def transfers_gains(
 
     success_statuses = {"succeeded", "completed"}
     target_channels = {"external_transfer", "cash"}
+    status_field = func.lower(cast(Transactions.status, String))
+    channel_field = func.lower(cast(Transactions.channel, String))
 
     bucket = func.date_trunc(period, Transactions.created_at).label("bucket")
     stmt = (
         select(
-            Transactions.channel,
+            channel_field.label("channel"),
             bucket,
             func.sum(Transactions.amount).label("amount_total"),
             func.count(Transactions.tx_id).label("count_total"),
         )
         .where(
-            Transactions.status.in_(success_statuses),
-            Transactions.channel.in_(target_channels),
+            status_field.in_(success_statuses),
+            channel_field.in_(target_channels),
             Transactions.created_at >= date_from,
         )
-        .group_by(bucket, Transactions.channel)
+        .group_by(bucket, channel_field)
         .order_by(bucket.desc())
     )
 
@@ -551,4 +553,13 @@ async def list_user_balance_events(
         reverse=True,
     )
     return merged[offset : offset + limit]
+
+
+@router.get("/{transfer_ref}")
+async def get_external_transfer_detail_legacy(
+    transfer_ref: str,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    return await get_external_transfer_detail(transfer_ref=transfer_ref, db=db, admin=admin)
 
