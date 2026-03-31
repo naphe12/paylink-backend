@@ -96,6 +96,63 @@ def _safe_decimal(value: Any) -> Decimal:
         return Decimal("0")
 
 
+def _build_limit_snapshot(*, current_user: Users, transfer_amount: Decimal) -> dict[str, Any]:
+    daily_limit = _safe_decimal(getattr(current_user, "daily_limit", 0))
+    used_daily = _safe_decimal(getattr(current_user, "used_daily", 0))
+    monthly_limit = _safe_decimal(getattr(current_user, "monthly_limit", 0))
+    used_monthly = _safe_decimal(getattr(current_user, "used_monthly", 0))
+
+    daily_remaining = max(daily_limit - used_daily, Decimal("0"))
+    monthly_remaining = max(monthly_limit - used_monthly, Decimal("0"))
+
+    daily_exceeded = daily_limit > 0 and used_daily + transfer_amount > daily_limit
+    monthly_exceeded = monthly_limit > 0 and used_monthly + transfer_amount > monthly_limit
+
+    daily_overage = max((used_daily + transfer_amount) - daily_limit, Decimal("0")) if daily_exceeded else Decimal("0")
+    monthly_overage = max((used_monthly + transfer_amount) - monthly_limit, Decimal("0")) if monthly_exceeded else Decimal("0")
+
+    return {
+        "transfer_amount": str(transfer_amount),
+        "daily_limit": str(daily_limit),
+        "used_daily": str(used_daily),
+        "daily_remaining": str(daily_remaining),
+        "daily_exceeded": daily_exceeded,
+        "daily_overage": str(daily_overage),
+        "monthly_limit": str(monthly_limit),
+        "used_monthly": str(used_monthly),
+        "monthly_remaining": str(monthly_remaining),
+        "monthly_exceeded": monthly_exceeded,
+        "monthly_overage": str(monthly_overage),
+    }
+
+
+def _describe_limit_block(limit_snapshot: dict[str, Any], currency: str) -> str | None:
+    transfer_amount = _safe_decimal(limit_snapshot.get("transfer_amount"))
+    details: list[str] = []
+
+    if limit_snapshot.get("daily_exceeded"):
+        details.append(
+            "la limite journaliere serait depassee "
+            f"(reste {limit_snapshot.get('daily_remaining')} {currency}, "
+            f"depassement {limit_snapshot.get('daily_overage')} {currency} "
+            f"pour un transfert de {transfer_amount} {currency})"
+        )
+
+    if limit_snapshot.get("monthly_exceeded"):
+        details.append(
+            "la limite mensuelle serait depassee "
+            f"(reste {limit_snapshot.get('monthly_remaining')} {currency}, "
+            f"depassement {limit_snapshot.get('monthly_overage')} {currency} "
+            f"pour un transfert de {transfer_amount} {currency})"
+        )
+
+    if not details:
+        return None
+    if len(details) == 1:
+        return details[0]
+    return f"{details[0]} et {details[1]}"
+
+
 def _financial_diagnostic(
     *,
     current_user: Users,
@@ -787,15 +844,21 @@ async def resolve_intent(
 
     if parsed.intent == "wallet.limits":
         balance = await _load_wallet_balance(db, current_user)
+        daily_limit = _safe_decimal(getattr(current_user, "daily_limit", 0))
+        used_daily = _safe_decimal(getattr(current_user, "used_daily", 0))
+        monthly_limit = _safe_decimal(getattr(current_user, "monthly_limit", 0))
+        used_monthly = _safe_decimal(getattr(current_user, "used_monthly", 0))
         return ResolvedCommand(
             intent="wallet.limits",
             action_code="wallet.get_limits",
             payload={
                 "wallet_currency": balance.wallet_currency,
-                "daily_limit": str(getattr(current_user, "daily_limit", 0) or 0),
-                "used_daily": str(getattr(current_user, "used_daily", 0) or 0),
-                "monthly_limit": str(getattr(current_user, "monthly_limit", 0) or 0),
-                "used_monthly": str(getattr(current_user, "used_monthly", 0) or 0),
+                "daily_limit": str(daily_limit),
+                "used_daily": str(used_daily),
+                "daily_remaining": str(max(daily_limit - used_daily, Decimal("0"))),
+                "monthly_limit": str(monthly_limit),
+                "used_monthly": str(used_monthly),
+                "monthly_remaining": str(max(monthly_limit - used_monthly, Decimal("0"))),
             },
             requires_confirmation=False,
         )
@@ -1010,9 +1073,13 @@ async def resolve_intent(
             select(Transactions).where(Transactions.related_entity_id == transfer.transfer_id)
         )
         normalized_status = str(getattr(transfer, "status", "") or "").lower()
+        transfer_amount = _safe_decimal(getattr(transfer, "amount", 0))
+        transfer_currency = str(getattr(transfer, "currency", "") or "") or str(getattr(current_user, "currency_code", "") or "") or "EUR"
         shortfall_amount = str(metadata_payload.get("required_credit_topup") or "").strip()
         aml_score = metadata_payload.get("aml_risk_score")
         tx_status = str(getattr(linked_tx, "status", "") or "").lower()
+        limit_snapshot = _build_limit_snapshot(current_user=current_user, transfer_amount=transfer_amount)
+        limit_block_detail = _describe_limit_block(limit_snapshot, transfer_currency)
 
         aml_manual_review = bool(metadata_payload.get("aml_manual_review_required"))
         aml_reason_detail = _describe_aml_reason_codes(aml_reason_codes)
@@ -1034,6 +1101,8 @@ async def resolve_intent(
                 explanation = f"Le transfert est en attente car il manque encore {shortfall_amount} pour couvrir l'operation."
             else:
                 explanation = "Le transfert est en attente car la couverture disponible etait insuffisante."
+            if limit_block_detail:
+                explanation = f"{explanation} En plus, {limit_block_detail}."
         elif "aml" in review_reasons or aml_manual_review:
             explanation = _describe_aml_reason(aml_score, manual_review=aml_manual_review)
             if aml_reason_detail:
@@ -1043,6 +1112,10 @@ async def resolve_intent(
                 explanation = f"Le transfert est en attente d'un financement complementaire de {shortfall_amount} avant validation."
             else:
                 explanation = "Le transfert est en attente d'un financement complementaire avant validation."
+            if limit_block_detail:
+                explanation = f"{explanation} Cote limites, {limit_block_detail}."
+        elif limit_block_detail:
+            explanation = f"Le transfert n'a pas pu aboutir car {limit_block_detail}."
         elif normalized_status == "approved" and tx_status in {"pending", "initiated"}:
             explanation = "Le transfert est deja valide cote controle, mais l'execution finale par le partenaire est encore en cours."
         elif normalized_status == "completed":
@@ -1062,12 +1135,15 @@ async def resolve_intent(
                 "reference_code": transfer.reference_code,
                 "transfer_status": str(transfer.status or ""),
                 "transaction_status": str(getattr(linked_tx, "status", "") or "") or None,
+                "amount": str(transfer_amount),
+                "currency": transfer_currency,
                 "review_reasons": review_reasons,
                 "aml_reason_codes": aml_reason_codes,
                 "funding_pending": bool(metadata_payload.get("funding_pending")),
                 "aml_manual_review_required": aml_manual_review,
                 "required_credit_topup": shortfall_amount or None,
                 "aml_risk_score": aml_score,
+                "limits": limit_snapshot,
                 "aml_thresholds": {
                     "alert": AML_ALERT_THRESHOLD,
                     "manual_review_external": AML_MANUAL_REVIEW_THRESHOLD,

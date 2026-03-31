@@ -86,6 +86,22 @@ def _missing_fields_message(missing_fields: list[str]) -> str:
     return f"Il me manque {', '.join(humanized[:-1])} et {humanized[-1]}."
 
 
+def _build_limits_message(data: dict[str, Any]) -> str:
+    currency = str(data.get("wallet_currency") or "EUR")
+    daily_limit = _format_amount(data.get("daily_limit"))
+    used_daily = _format_amount(data.get("used_daily"))
+    daily_remaining = _format_amount(data.get("daily_remaining"))
+    monthly_limit = _format_amount(data.get("monthly_limit"))
+    used_monthly = _format_amount(data.get("used_monthly"))
+    monthly_remaining = _format_amount(data.get("monthly_remaining"))
+    return (
+        f"Limite journaliere : {used_daily} / {daily_limit} {currency}, "
+        f"reste {daily_remaining} {currency}. "
+        f"Limite mensuelle : {used_monthly} / {monthly_limit} {currency}, "
+        f"reste {monthly_remaining} {currency}."
+    )
+
+
 def _build_transfer_confirmation(payload: dict[str, Any]) -> str:
     amount = payload.get("amount") or "0"
     currency = payload.get("origin_currency") or payload.get("currency") or "EUR"
@@ -246,11 +262,7 @@ async def handle_message(
 
     if command.intent == "wallet.limits":
         data = command.payload
-        currency = data.get("wallet_currency") or "EUR"
-        message_out = (
-            f"Limite journaliere: {data.get('used_daily')} / {data.get('daily_limit')} {currency}. "
-            f"Limite mensuelle: {data.get('used_monthly')} / {data.get('monthly_limit')} {currency}."
-        )
+        message_out = _build_limits_message(data)
         await clear_conversation_state(db, session_id, current_user.user_id)
         return response_builder.answer(message_out, data=data, parsed_intent=parsed), parsed, command.model_dump(mode="json")
 
