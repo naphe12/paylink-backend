@@ -60,12 +60,14 @@ def test_transfer_gains_http_uses_month_default_and_returns_totals():
                     SimpleNamespace(
                         bucket=datetime(2026, 3, 30, tzinfo=timezone.utc),
                         channel="external_transfer",
+                        currency="EUR",
                         amount_total=150,
                         count_total=2,
                     ),
                     SimpleNamespace(
                         bucket=datetime(2026, 3, 29, tzinfo=timezone.utc),
                         channel="cash",
+                        currency="BIF",
                         amount_total=50,
                         count_total=1,
                     ),
@@ -81,8 +83,12 @@ def test_transfer_gains_http_uses_month_default_and_returns_totals():
     payload = response.json()
     assert payload["period"] == "month"
     assert payload["charge_rate"] == 2.5
-    assert payload["totals"]["amount"] == 200.0
-    assert payload["totals"]["gain"] == 5.0
     assert payload["totals"]["count"] == 3
+    assert payload["totals_by_currency"] == [
+        {"currency": "EUR", "amount": 150.0, "gain": 3.75, "count": 2},
+        {"currency": "BIF", "amount": 50.0, "gain": 1.25, "count": 1},
+    ]
     assert payload["rows"][0]["channel"] == "external_transfer"
+    assert payload["rows"][0]["currency"] == "EUR"
     assert payload["rows"][1]["channel"] == "cash"
+    assert payload["rows"][1]["currency"] == "BIF"
