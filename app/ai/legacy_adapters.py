@@ -217,8 +217,10 @@ async def handle_agent_chat_with_ai(
             ChatResponse(
                 status="INFO",
                 message=(
-                    f"Limites actuelles: {payload.get('used_daily')} / {payload.get('daily_limit')} {wallet_currency} aujourd'hui, "
-                    f"et {payload.get('used_monthly')} / {payload.get('monthly_limit')} {wallet_currency} ce mois."
+                    f"Limites actuelles: {payload.get('used_daily')} / {payload.get('daily_limit')} {wallet_currency} aujourd'hui "
+                    f"(reste {payload.get('daily_remaining')} {wallet_currency}), "
+                    f"et {payload.get('used_monthly')} / {payload.get('monthly_limit')} {wallet_currency} ce mois "
+                    f"(reste {payload.get('monthly_remaining')} {wallet_currency})."
                 ),
                 data=AgentChatDraft(
                     intent="wallet_limits",
