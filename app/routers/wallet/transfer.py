@@ -83,6 +83,16 @@ def _is_valid_external_phone(value: str | None) -> bool:
     return bool(EXTERNAL_TRANSFER_PHONE_RE.fullmatch(str(value or "").strip()))
 
 
+def _primary_wallet_for_update_stmt(user_id):
+    return (
+        select(Wallets)
+        .where(Wallets.user_id == user_id)
+        .order_by(Wallets.wallet_id.asc())
+        .limit(1)
+        .with_for_update()
+    )
+
+
 def _derive_external_transfer_aml_reason_codes(
     *,
     user: Users,
@@ -807,12 +817,7 @@ async def _external_transfer_core(
         raise HTTPException(status_code=404, detail="Utilisateur introuvable")
     if user_locked.status == "frozen":
         raise HTTPException(423, "Votre compte est gele pour raisons de securite.")
-    result = await db.execute(
-        select(Wallets)
-        .where(Wallets.user_id == current_user.user_id)
-        .with_for_update()
-    )
-    wallet = result.scalar_one_or_none()
+    wallet = await db.scalar(_primary_wallet_for_update_stmt(current_user.user_id))
     if not wallet:
         raise HTTPException(status_code=404, detail="Portefeuille introuvable")
 
@@ -1011,7 +1016,7 @@ async def _external_transfer_core(
         "destination_currency": destination_currency,
         "idempotency_key": scoped_idempotency_key,
         "override_balance_check": bool(override_balance_check),
-        "force_negative_wallet": bool(force_negative_wallet),
+        "force_negative_wallet": bool(override_balance_check),
         "final_status_override": requested_status or None,
         "processed_by_user_id": processed_by_user_id if transfer_status == "completed" else None,
         "aml_risk_score": int(risk),
@@ -1184,9 +1189,7 @@ async def _fund_pending_external_transfer_for_approval(
     if not user:
         raise HTTPException(status_code=404, detail="Utilisateur introuvable")
 
-    wallet = await db.scalar(
-        select(Wallets).where(Wallets.user_id == transfer.user_id).with_for_update()
-    )
+    wallet = await db.scalar(_primary_wallet_for_update_stmt(transfer.user_id))
     if not wallet:
         raise HTTPException(status_code=404, detail="Portefeuille introuvable")
 
@@ -1521,8 +1524,10 @@ async def internal_transfer(
     if receiver.user_id == current_user.user_id:
         raise HTTPException(400, "Vous ne pouvez pas vous envoyer a vous-meme")
 
-    w_sender = (await db.execute(select(Wallets).where(Wallets.user_id == current_user.user_id))).scalar_one()
-    w_receiver = (await db.execute(select(Wallets).where(Wallets.user_id == receiver.user_id))).scalar_one()
+    w_sender = await db.scalar(_primary_wallet_for_update_stmt(current_user.user_id))
+    w_receiver = await db.scalar(_primary_wallet_for_update_stmt(receiver.user_id))
+    if not w_sender or not w_receiver:
+        raise HTTPException(404, "Portefeuille introuvable")
 
     if w_sender.available < amount:
         raise HTTPException(400, "Solde insuffisant")

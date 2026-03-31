@@ -41,6 +41,20 @@ def _next_step_for_status(status: str) -> str:
     return "Verifier la timeline du trade pour connaitre l'etape suivante."
 
 
+def _eta_for_status(status: str) -> str | None:
+    if status in {"CREATED", "AWAITING_CRYPTO"}:
+        return "Le delai depend surtout du verrouillage crypto par le vendeur."
+    if status in {"CRYPTO_LOCKED", "AWAITING_FIAT"}:
+        return "Le delai depend maintenant de l'envoi du paiement fiat par l'acheteur."
+    if status == "FIAT_SENT":
+        return "Le delai depend de la confirmation du vendeur apres reception du fiat."
+    if status == "DISPUTED":
+        return "Le delai depend de la resolution du litige par l'equipe operations."
+    if status == "RELEASED":
+        return "Trade termine."
+    return None
+
+
 def _blocked_reasons(status: str, dispute, last_history) -> list[str]:
     reasons: list[str] = []
     if status in {"CREATED", "AWAITING_CRYPTO"}:
@@ -73,6 +87,7 @@ def _serialize_trade_summary(trade, dispute, open_offers_count: int) -> dict:
         "dispute_status": _status_text(getattr(dispute, "status", "")) if dispute else "",
         "open_offers_count": open_offers_count,
         "next_step": _next_step_for_status(status),
+        "eta_hint": _eta_for_status(status),
     }
 
 
@@ -167,21 +182,25 @@ async def process_p2p_message(db: AsyncSession, *, user_id, message: str) -> P2P
 
     summary = _serialize_trade_summary(trade, dispute, len(offers))
     if draft.intent in {"latest_trade", "track_trade"}:
+        eta_text = f" Delai probable: {summary['eta_hint']}" if summary.get("eta_hint") else ""
         return P2PChatResponse(
             status="INFO",
-            message=f"Votre trade P2P est actuellement au statut {summary['status']}.",
+            message=f"Votre trade P2P est actuellement au statut {summary['status']}. Prochaine action recommandee: {summary['next_step']}{eta_text}",
             data=draft,
             assumptions=[summary["next_step"]],
             summary=summary,
+            suggestions=[summary["next_step"]],
         )
 
     if draft.intent == "why_blocked":
+        eta_text = f" Delai probable: {summary['eta_hint']}" if summary.get("eta_hint") else ""
         return P2PChatResponse(
             status="INFO",
-            message=f"Le trade est au statut {summary['status']}. Voici les causes probables du blocage ou de l'attente.",
+            message=f"Le trade est au statut {summary['status']}. Voici les causes probables du blocage ou de l'attente. Prochaine action recommandee: {summary['next_step']}{eta_text}",
             data=draft,
             assumptions=_blocked_reasons(summary["status"], dispute, last_history),
             summary=summary,
+            suggestions=[summary["next_step"]],
         )
 
     if draft.intent == "next_step":
@@ -191,6 +210,7 @@ async def process_p2p_message(db: AsyncSession, *, user_id, message: str) -> P2P
             data=draft,
             assumptions=_blocked_reasons(summary["status"], dispute, last_history),
             summary=summary,
+            suggestions=[summary["next_step"]],
         )
 
     return P2PChatResponse(

@@ -20,8 +20,20 @@ class _FakeDb:
         return self._values.pop(0)
 
 
+def _metadata(**overrides):
+    base = {
+        "intents": {},
+        "slots": {},
+        "synonyms": {},
+        "actions": {},
+        "prompt_fragments": {},
+    }
+    base.update(overrides)
+    return RuntimeMetadata(**base)
+
+
 def test_parse_user_message_cash_deposit_entities(monkeypatch):
-    metadata = RuntimeMetadata(
+    metadata = _metadata(
         intents={"cash.deposit": {"requires_confirmation": True}},
         slots={
             "cash.deposit": [
@@ -29,8 +41,6 @@ def test_parse_user_message_cash_deposit_entities(monkeypatch):
                 {"slot_name": "currency", "required": False},
             ]
         },
-        synonyms={},
-        actions={},
     )
 
     monkeypatch.setattr(
@@ -58,7 +68,7 @@ def test_parse_user_message_cash_deposit_entities(monkeypatch):
 
 
 def test_parse_user_message_cash_withdraw_missing_fields(monkeypatch):
-    metadata = RuntimeMetadata(
+    metadata = _metadata(
         intents={"cash.withdraw": {"requires_confirmation": True}},
         slots={
             "cash.withdraw": [
@@ -67,8 +77,6 @@ def test_parse_user_message_cash_withdraw_missing_fields(monkeypatch):
                 {"slot_name": "mobile_number", "required": True},
             ]
         },
-        synonyms={},
-        actions={},
     )
 
     monkeypatch.setattr(
@@ -107,7 +115,7 @@ def test_resolve_intent_cash_withdraw_requires_provider_and_mobile():
             db,
             current_user=current_user,
             parsed=parsed,
-            metadata=RuntimeMetadata(intents={}, slots={}, synonyms={}, actions={}),
+                metadata=_metadata(),
         )
     )
 
@@ -136,7 +144,7 @@ def test_resolve_intent_wallet_block_reason_uses_backend_reasons():
             db,
             current_user=current_user,
             parsed=parsed,
-            metadata=RuntimeMetadata(intents={}, slots={}, synonyms={}, actions={}),
+                metadata=_metadata(),
         )
     )
 
@@ -144,3 +152,72 @@ def test_resolve_intent_wallet_block_reason_uses_backend_reasons():
     assert "statut du compte" in resolved.payload["explanation"].lower()
     assert any("limite journaliere" in item.lower() for item in resolved.payload["reasons"])
     assert any("demande cash recente" in item.lower() for item in resolved.payload["reasons"])
+    assert resolved.payload["next_step"]
+
+
+def test_resolve_intent_escrow_status_exposes_pending_reasons_and_next_step():
+    current_user = SimpleNamespace(user_id="user-1")
+    order = SimpleNamespace(
+        id="ord-1",
+        user_id="user-1",
+        status="PAYOUT_PENDING",
+        created_at=None,
+        deposit_network="TRON",
+        deposit_address="addr-1",
+        usdc_expected=Decimal("100"),
+        bif_target=Decimal("290000"),
+        payout_provider="Lumicash",
+        payout_account_number="+25761000000",
+        flags=["AML_REVIEW"],
+    )
+    db = _FakeDb([order])
+    parsed = ParsedIntent(intent="escrow.status", entities={})
+
+    resolved = asyncio.run(
+        ai_resolver.resolve_intent(
+            db,
+            current_user=current_user,
+            parsed=parsed,
+                metadata=_metadata(),
+        )
+    )
+
+    assert resolved.intent == "escrow.status"
+    assert resolved.payload["next_step"]
+    assert resolved.payload["eta_hint"]
+    assert any("payout fiat" in item.lower() for item in resolved.payload["pending_reasons"])
+    assert any("flags detectes" in item.lower() for item in resolved.payload["pending_reasons"])
+
+
+def test_resolve_intent_p2p_trade_status_exposes_blocked_reasons():
+    current_user = SimpleNamespace(user_id="user-1")
+    trade = SimpleNamespace(
+        trade_id="trade-1",
+        buyer_id="user-1",
+        seller_id="user-2",
+        status="FIAT_SENT",
+        token_amount=Decimal("50"),
+        token="USDT",
+        bif_amount=Decimal("150000"),
+        payment_method="LUMICASH",
+        created_at=None,
+    )
+    dispute = SimpleNamespace(status="OPEN")
+    history = SimpleNamespace(note="Paiement declare envoye")
+    db = _FakeDb([trade, dispute, history])
+    parsed = ParsedIntent(intent="p2p.trade_status", entities={"p2p_view": "why_blocked"})
+
+    resolved = asyncio.run(
+        ai_resolver.resolve_intent(
+            db,
+            current_user=current_user,
+            parsed=parsed,
+                metadata=_metadata(),
+        )
+    )
+
+    assert resolved.intent == "p2p.trade_status"
+    assert resolved.payload["next_step"]
+    assert resolved.payload["eta_hint"]
+    assert any("vendeur" in item.lower() for item in resolved.payload["blocked_reasons"])
+    assert any("litige actuel" in item.lower() for item in resolved.payload["blocked_reasons"])

@@ -153,6 +153,151 @@ def _describe_limit_block(limit_snapshot: dict[str, Any], currency: str) -> str 
     return f"{details[0]} et {details[1]}"
 
 
+def _wallet_block_next_step(*, account_status: str, reasons: list[str]) -> str:
+    normalized_status = str(account_status or "").lower()
+    joined = " ".join(str(item) for item in reasons)
+    if normalized_status in {"frozen", "suspended"}:
+        return "Verifier le statut du compte et faire intervenir le support ou la conformite pour lever le blocage."
+    if "limite journaliere" in joined.lower():
+        return "Attendre le renouvellement de la limite journaliere ou reduire le montant a un niveau compatible."
+    if "limite mensuelle" in joined.lower():
+        return "Attendre le renouvellement de la limite mensuelle ou reduire le montant pour rester dans la capacite restante."
+    if "cash recente" in joined.lower():
+        return "Attendre la fin de traitement de la demande cash en cours avant de relancer l'operation."
+    if "transfert recent" in joined.lower():
+        return "Attendre la resolution ou l'execution du transfert recent avant de relancer une nouvelle demande."
+    return "Verifier le solde, les limites et les dossiers en attente avant de relancer l'operation."
+
+
+def _transfer_next_step(*, status: str, review_reasons: list[str], metadata_payload: dict[str, Any], limit_block_detail: str | None) -> str:
+    normalized_status = str(status or "").lower()
+    if limit_block_detail:
+        return "Ajuster le montant ou attendre le renouvellement des limites avant de relancer le transfert."
+    if "insufficient_funds" in review_reasons or metadata_payload.get("funding_pending"):
+        return "Approvisionner le wallet ou la couverture de credit, puis relancer ou attendre la reprise du dossier."
+    if "aml" in review_reasons or metadata_payload.get("aml_manual_review_required"):
+        return "Attendre la revue conformite ou fournir les justificatifs demandes si le support les reclame."
+    if normalized_status in {"approved"}:
+        return "Attendre l'execution finale du partenaire ou verifier le suivi agent."
+    if normalized_status in {"pending", "initiated"}:
+        return "Verifier les details du dossier et attendre la prochaine etape de validation."
+    if normalized_status in {"completed", "succeeded"}:
+        return "Le transfert est deja termine. Verifier simplement la reception cote beneficiaire."
+    if normalized_status in {"failed", "cancelled", "reversed"}:
+        return "Verifier la cause de l'echec puis recreer un nouveau transfert si necessaire."
+    return "Verifier la reference du transfert et l'etat du dossier pour definir la prochaine action."
+
+
+def _escrow_pending_reasons(*, status: str, flags: list[str]) -> list[str]:
+    reasons: list[str] = []
+    normalized_status = str(status or "").upper()
+    if normalized_status == "CREATED":
+        reasons.append("Le depot USDC n'a pas encore ete detecte ou confirme.")
+    elif normalized_status == "FUNDED":
+        reasons.append("Le depot est recu mais la conversion ou le swap n'est pas encore finalise.")
+    elif normalized_status == "SWAPPED":
+        reasons.append("Le swap est termine mais le payout fiat n'a pas encore ete prepare.")
+    elif normalized_status == "PAYOUT_PENDING":
+        reasons.append("Le payout fiat est en cours de traitement ou de verification operateur.")
+    elif normalized_status in {"REFUND_PENDING", "REFUNDED"}:
+        reasons.append("Le dossier est en parcours de remboursement.")
+    elif normalized_status in {"FAILED", "CANCELLED", "EXPIRED"}:
+        reasons.append("Le dossier a quitte le flux nominal et demande une verification de l'issue.")
+    if flags:
+        reasons.append(f"Flags detectes: {', '.join(str(flag) for flag in flags)}.")
+    if not reasons:
+        reasons.append("Le dossier escrow suit encore son flux normal.")
+    return reasons
+
+
+def _escrow_next_step(status: str) -> str:
+    normalized_status = str(status or "").upper()
+    if normalized_status == "CREATED":
+        return "Envoyer le depot USDC vers l'adresse escrow puis attendre la detection."
+    if normalized_status == "FUNDED":
+        return "Attendre la conversion ou le swap avant le lancement du payout."
+    if normalized_status == "SWAPPED":
+        return "Attendre la preparation du payout fiat ou verifier l'operateur de paiement."
+    if normalized_status == "PAYOUT_PENDING":
+        return "Attendre la validation et l'execution finale du payout fiat."
+    if normalized_status == "PAID_OUT":
+        return "Verifier simplement la bonne reception du payout par le beneficiaire."
+    if normalized_status in {"REFUND_PENDING", "REFUNDED"}:
+        return "Suivre le remboursement ou confirmer sa bonne reception."
+    if normalized_status in {"FAILED", "CANCELLED", "EXPIRED"}:
+        return "Verifier la cause de sortie du flux puis recreer un ordre si necessaire."
+    return "Verifier le detail de la commande escrow pour connaitre l'etape suivante."
+
+
+def _p2p_blocked_reasons(*, status: str, dispute_status: str | None, last_note: str | None) -> list[str]:
+    reasons: list[str] = []
+    normalized_status = str(status or "").upper()
+    if normalized_status in {"CREATED", "AWAITING_CRYPTO"}:
+        reasons.append("La crypto n'est pas encore verrouillee dans l'escrow.")
+    elif normalized_status in {"CRYPTO_LOCKED", "AWAITING_FIAT"}:
+        reasons.append("Le trade attend encore le paiement fiat de l'acheteur.")
+    elif normalized_status == "FIAT_SENT":
+        reasons.append("Le vendeur n'a pas encore confirme la reception du fiat.")
+    elif normalized_status == "DISPUTED":
+        reasons.append("Le trade est en litige et attend une resolution.")
+    if dispute_status:
+        reasons.append(f"Litige actuel: {dispute_status}.")
+    if last_note:
+        reasons.append(f"Derniere note: {last_note}")
+    if not reasons:
+        reasons.append("Le trade suit encore son flux normal.")
+    return reasons
+
+
+def _escrow_eta_hint(status: str) -> str | None:
+    normalized_status = str(status or "").upper()
+    if normalized_status == "CREATED":
+        return "Aucun delai fiable tant que le depot USDC n'est pas detecte."
+    if normalized_status == "FUNDED":
+        return "Le traitement prend generalement quelques minutes avant conversion ou swap."
+    if normalized_status == "SWAPPED":
+        return "Le payout fiat est souvent prepare dans les prochaines minutes."
+    if normalized_status == "PAYOUT_PENDING":
+        return "Le payout fiat peut prendre de quelques minutes a quelques heures selon l'operateur."
+    if normalized_status == "PAID_OUT":
+        return "Ordre termine."
+    if normalized_status in {"REFUND_PENDING", "REFUNDED"}:
+        return "Le delai depend du traitement du remboursement."
+    return None
+
+
+def _p2p_eta_hint(status: str) -> str | None:
+    normalized_status = str(status or "").upper()
+    if normalized_status in {"CREATED", "AWAITING_CRYPTO"}:
+        return "Le delai depend surtout du verrouillage crypto par le vendeur."
+    if normalized_status in {"CRYPTO_LOCKED", "AWAITING_FIAT"}:
+        return "Le delai depend maintenant de l'envoi du paiement fiat par l'acheteur."
+    if normalized_status == "FIAT_SENT":
+        return "Le delai depend de la confirmation du vendeur apres reception du fiat."
+    if normalized_status == "DISPUTED":
+        return "Le delai depend de la resolution du litige par l'equipe operations."
+    if normalized_status == "RELEASED":
+        return "Trade termine."
+    return None
+
+
+def _transfer_eta_hint(*, status: str, review_reasons: list[str], metadata_payload: dict[str, Any], limit_block_detail: str | None) -> str | None:
+    normalized_status = str(status or "").lower()
+    if limit_block_detail:
+        return "Aucun delai fiable tant que les limites ou le montant ne sont pas ajustes."
+    if "insufficient_funds" in review_reasons or metadata_payload.get("funding_pending"):
+        return "Aucun delai fiable tant que la couverture financiere n'est pas complete."
+    if "aml" in review_reasons or metadata_payload.get("aml_manual_review_required"):
+        return "Le delai depend de la revue conformite et peut prendre plus de temps qu'un flux nominal."
+    if normalized_status == "approved":
+        return "Execution finale attendue prochainement selon le partenaire."
+    if normalized_status in {"pending", "initiated"}:
+        return "Le dossier reste en validation, sans ETA ferme a ce stade."
+    if normalized_status in {"completed", "succeeded"}:
+        return "Transfert termine."
+    return None
+
+
 def _financial_diagnostic(
     *,
     current_user: Users,
@@ -683,6 +828,10 @@ async def resolve_intent(
                 "used_monthly": str(getattr(current_user, "used_monthly", 0) or 0),
                 "reasons": reasons,
                 "explanation": " ".join(reasons),
+                "next_step": _wallet_block_next_step(
+                    account_status=str(getattr(current_user, "status", "") or ""),
+                    reasons=reasons,
+                ),
             },
             requires_confirmation=False,
         )
@@ -890,6 +1039,7 @@ async def resolve_intent(
             )
         status_value = str(getattr(getattr(order, "status", None), "value", getattr(order, "status", "")) or "")
         network_value = str(getattr(getattr(order, "deposit_network", None), "value", getattr(order, "deposit_network", "")) or "")
+        flags = [str(item) for item in (getattr(order, "flags", []) or [])]
         return ResolvedCommand(
             intent="escrow.status",
             action_code="escrow.get_status",
@@ -903,6 +1053,10 @@ async def resolve_intent(
                 "bif_target": str(getattr(order, "bif_target", "") or ""),
                 "payout_provider": str(getattr(order, "payout_provider", "") or ""),
                 "payout_account": str(getattr(order, "payout_account_number", "") or ""),
+                "flags": flags,
+                "pending_reasons": _escrow_pending_reasons(status=status_value, flags=flags),
+                "next_step": _escrow_next_step(status_value),
+                "eta_hint": _escrow_eta_hint(status_value),
             },
             requires_confirmation=False,
         )
@@ -988,7 +1142,13 @@ async def resolve_intent(
                 "dispute_status": str(getattr(getattr(dispute, "status", None), "value", getattr(dispute, "status", "")) or ""),
                 "last_note": str(getattr(last_history, "note", "") or "") or None,
                 "p2p_view": parsed.entities.get("p2p_view"),
+                "blocked_reasons": _p2p_blocked_reasons(
+                    status=trade_status,
+                    dispute_status=str(getattr(getattr(dispute, "status", None), "value", getattr(dispute, "status", "")) or "") or None,
+                    last_note=str(getattr(last_history, "note", "") or "") or None,
+                ),
                 "next_step": next_step,
+                "eta_hint": _p2p_eta_hint(trade_status),
             },
             requires_confirmation=False,
         )
@@ -1036,6 +1196,18 @@ async def resolve_intent(
                 "amount": str(transfer.amount or 0),
                 "currency": str(transfer.currency or ""),
                 "created_at": transfer.created_at.isoformat() if transfer.created_at else None,
+                "next_step": _transfer_next_step(
+                    status=str(transfer.status or ""),
+                    review_reasons=[],
+                    metadata_payload=dict(getattr(transfer, "metadata_", {}) or {}),
+                    limit_block_detail=None,
+                ),
+                "eta_hint": _transfer_eta_hint(
+                    status=str(transfer.status or ""),
+                    review_reasons=[],
+                    metadata_payload=dict(getattr(transfer, "metadata_", {}) or {}),
+                    limit_block_detail=None,
+                ),
             },
             requires_confirmation=False,
         )
@@ -1144,6 +1316,18 @@ async def resolve_intent(
                 "required_credit_topup": shortfall_amount or None,
                 "aml_risk_score": aml_score,
                 "limits": limit_snapshot,
+                "next_step": _transfer_next_step(
+                    status=str(transfer.status or ""),
+                    review_reasons=review_reasons,
+                    metadata_payload=metadata_payload,
+                    limit_block_detail=limit_block_detail,
+                ),
+                "eta_hint": _transfer_eta_hint(
+                    status=str(transfer.status or ""),
+                    review_reasons=review_reasons,
+                    metadata_payload=metadata_payload,
+                    limit_block_detail=limit_block_detail,
+                ),
                 "aml_thresholds": {
                     "alert": AML_ALERT_THRESHOLD,
                     "manual_review_external": AML_MANUAL_REVIEW_THRESHOLD,
