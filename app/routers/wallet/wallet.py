@@ -141,7 +141,17 @@ async def _load_wallet_summary_row(db: AsyncSession, user_id):
                 Wallets.available,
                 Wallets.pending,
                 Wallets.bonus_balance,
-            ).where(Wallets.user_id == user_id)
+            )
+            .where(Wallets.user_id == user_id)
+            .order_by(
+                case(
+                    (Wallets.type == "personal", 0),
+                    (Wallets.type == "consumer", 1),
+                    else_=2,
+                ),
+                Wallets.wallet_id.asc(),
+            )
+            .limit(1)
         )
     ).first()
     if row:

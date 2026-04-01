@@ -9,7 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import or_, select, text
+from sqlalchemy import case, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -84,10 +84,15 @@ def _is_valid_external_phone(value: str | None) -> bool:
 
 
 def _primary_wallet_for_update_stmt(user_id):
+    wallet_priority = case(
+        (Wallets.type == "personal", 0),
+        (Wallets.type == "consumer", 1),
+        else_=2,
+    )
     return (
         select(Wallets)
         .where(Wallets.user_id == user_id)
-        .order_by(Wallets.wallet_id.asc())
+        .order_by(wallet_priority, Wallets.wallet_id.asc())
         .limit(1)
         .with_for_update()
     )
