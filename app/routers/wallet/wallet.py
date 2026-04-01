@@ -67,6 +67,7 @@ class FinancialSummary(BaseModel):
     wallet_available: decimal.Decimal
     wallet_pending: decimal.Decimal
     wallet_currency: str
+    credit_currency: str
     bonus_balance: decimal.Decimal | None = None
     credit_limit: decimal.Decimal
     credit_used: decimal.Decimal
@@ -1320,10 +1321,12 @@ async def financial_summary(
         credit_limit = decimal.Decimal(credit_line.initial_amount or 0)
         credit_used = decimal.Decimal(credit_line.used_amount or 0)
         credit_available = max(decimal.Decimal(credit_line.outstanding_amount or 0), decimal.Decimal(0))
+        credit_currency = str(credit_line.currency_code or wallet_row.currency_code or "EUR").upper()
     else:
         credit_limit = decimal.Decimal(getattr(current_user, "credit_limit", 0) or 0)
         credit_used = decimal.Decimal(getattr(current_user, "credit_used", 0) or 0)
         credit_available = max(credit_limit - credit_used, decimal.Decimal(0))
+        credit_currency = str(wallet_row.currency_code or "EUR").upper()
 
     tontines_count = await db.scalar(
         select(func.count())
@@ -1335,6 +1338,7 @@ async def financial_summary(
         wallet_available=wallet_row.available or decimal.Decimal(0),
         wallet_pending=wallet_row.pending or decimal.Decimal(0),
         wallet_currency=wallet_row.currency_code or "EUR",
+        credit_currency=credit_currency,
         bonus_balance=wallet_row.bonus_balance,
         credit_limit=credit_limit,
         credit_used=credit_used,
@@ -1371,10 +1375,12 @@ async def financial_summary_admin(
         credit_limit = decimal.Decimal(credit_line.initial_amount or 0)
         credit_used = decimal.Decimal(credit_line.used_amount or 0)
         credit_available = max(decimal.Decimal(credit_line.outstanding_amount or 0), decimal.Decimal(0))
+        credit_currency = str(credit_line.currency_code or wallet_row.currency_code or "EUR").upper()
     else:
         credit_limit = decimal.Decimal(getattr(user, "credit_limit", 0) or 0)
         credit_used = decimal.Decimal(getattr(user, "credit_used", 0) or 0)
         credit_available = max(credit_limit - credit_used, decimal.Decimal(0))
+        credit_currency = str(wallet_row.currency_code or "EUR").upper()
 
     tontines_count = await db.scalar(
         select(func.count())
@@ -1386,6 +1392,7 @@ async def financial_summary_admin(
         wallet_available=wallet_row.available or decimal.Decimal(0),
         wallet_pending=wallet_row.pending or decimal.Decimal(0),
         wallet_currency=wallet_row.currency_code or "EUR",
+        credit_currency=credit_currency,
         bonus_balance=wallet_row.bonus_balance,
         credit_limit=credit_limit,
         credit_used=credit_used,
