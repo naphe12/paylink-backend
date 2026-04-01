@@ -843,8 +843,9 @@ async def _external_transfer_core(
     credit_available_before = credit_available
     origin_currency = await _get_sender_country_currency(db, current_user, wallet.currency_code or "EUR")
     is_bif_client = str(origin_currency or "").upper() == "BIF"
+    is_bif_wallet = str(wallet.currency_code or "").upper() == "BIF"
     destination_currency = EXTERNAL_TRANSFER_SETTLEMENT_CURRENCY
-    if is_bif_client and str(destination_currency or "").upper() == "BIF":
+    if is_bif_wallet and str(destination_currency or "").upper() == "BIF":
         fee_rate = decimal.Decimal("6.25")
     else:
         settings_row = await db.scalar(
@@ -858,7 +859,7 @@ async def _external_transfer_core(
     total_required = amount + fee_amount
     approval_available = (
         credit_available
-        if is_bif_client
+        if is_bif_wallet
         else effective_external_transfer_capacity(wallet_balance, credit_available)
     )
     insufficient_funds_review_required = total_required > approval_available and not override_balance_check
@@ -898,6 +899,7 @@ async def _external_transfer_core(
             wallet_available=wallet_balance_before,
             credit_available=credit_available_before,
             total_required=total_required,
+            prefer_credit_only=is_bif_wallet,
         )
         wallet_after = funding["wallet_after"]
         credit_used = funding["credit_used"]
@@ -1209,6 +1211,7 @@ async def _fund_pending_external_transfer_for_approval(
         raise HTTPException(status_code=400, detail="Montant de financement invalide")
 
     wallet_balance_before = decimal.Decimal(wallet.available or 0)
+    is_bif_wallet = str(wallet.currency_code or "").upper() == "BIF"
     credit_available_before = (
         max(decimal.Decimal(credit_line.outstanding_amount or 0), decimal.Decimal("0"))
         if credit_line
@@ -1278,6 +1281,7 @@ async def _fund_pending_external_transfer_for_approval(
         wallet_available=wallet_balance_before,
         credit_available=credit_available_before,
         total_required=total_required,
+        prefer_credit_only=is_bif_wallet,
     )
     credit_used = funding["credit_used"]
     credit_available_after = funding["credit_available_after"]

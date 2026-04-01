@@ -38,3 +38,17 @@ def test_compute_external_transfer_funding_keeps_negative_wallet_unchanged():
     assert funding["wallet_after"] == Decimal("-25")
     assert funding["credit_used"] == Decimal("40")
     assert funding["credit_available_after"] == Decimal("40")
+
+
+def test_compute_external_transfer_funding_can_force_credit_only_for_bif_wallets():
+    funding = compute_external_transfer_funding(
+        wallet_available=Decimal("25"),
+        credit_available=Decimal("80"),
+        total_required=Decimal("40"),
+        prefer_credit_only=True,
+    )
+
+    assert funding["wallet_debit_amount"] == Decimal("0")
+    assert funding["wallet_after"] == Decimal("25")
+    assert funding["credit_used"] == Decimal("40")
+    assert funding["credit_available_after"] == Decimal("40")
