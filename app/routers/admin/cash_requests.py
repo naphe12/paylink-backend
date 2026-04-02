@@ -29,6 +29,10 @@ from app.services.idempotency_service import (
     compute_request_hash,
     store_idempotency_response,
 )
+from app.services.cash_credit_recovery import (
+    apply_cash_deposit_with_credit_recovery,
+    apply_cash_withdraw_with_credit_usage,
+)
 from app.services.cash_request_rules import transition_cash_request_status
 from app.services.ledger import LedgerLine, LedgerService
 from app.services.wallet_history import log_wallet_movement
@@ -434,7 +438,14 @@ async def admin_cash_deposit_direct(
 
     ledger = LedgerService(db)
     amount = decimal.Decimal(payload.amount)
-    wallet.available = decimal.Decimal(wallet.available or 0) + amount
+    recovery = await apply_cash_deposit_with_credit_recovery(
+        db,
+        user=user,
+        wallet=wallet,
+        amount=amount,
+        credit_event_source="cash_deposit_admin_direct",
+        credit_history_description="Depot cash direct admin",
+    )
     movement = await log_wallet_movement(
         db,
         wallet=wallet,
@@ -456,6 +467,12 @@ async def admin_cash_deposit_direct(
             "wallet_id": str(wallet.wallet_id),
             "processed_by": str(admin.user_id),
             "note": note,
+            "credit_recovered": str(recovery["credit_recovered"]),
+            "credit_available_after": (
+                str(recovery["credit_available_after"])
+                if recovery["credit_available_after"] is not None
+                else None
+            ),
             "movement_id": str(movement.transaction_id) if movement else None,
         },
         entries=[
@@ -480,6 +497,7 @@ async def admin_cash_deposit_direct(
         "amount": float(amount),
         "currency": wallet.currency_code,
         "new_balance": float(wallet.available),
+        "credit_recovered": float(recovery["credit_recovered"]),
     }
     if scoped_idempotency_key:
         await store_idempotency_response(
@@ -546,10 +564,17 @@ async def admin_cash_withdraw_direct(
 
     ledger = LedgerService(db)
     amount = decimal.Decimal(payload.amount)
-    if decimal.Decimal(wallet.available or 0) < amount:
-        raise HTTPException(status_code=400, detail="Solde insuffisant pour effectuer ce retrait")
-
-    wallet.available = decimal.Decimal(wallet.available or 0) - amount
+    try:
+        usage = await apply_cash_withdraw_with_credit_usage(
+            db,
+            user=user,
+            wallet=wallet,
+            amount=amount,
+            credit_event_source="cash_withdraw_admin_direct",
+            credit_history_description="Retrait cash direct admin",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     movement = await log_wallet_movement(
         db,
         wallet=wallet,
@@ -571,6 +596,12 @@ async def admin_cash_withdraw_direct(
             "wallet_id": str(wallet.wallet_id),
             "processed_by": str(admin.user_id),
             "note": note,
+            "credit_consumed": str(usage["credit_consumed"]),
+            "credit_available_after": (
+                str(usage["credit_available_after"])
+                if usage["credit_available_after"] is not None
+                else None
+            ),
             "movement_id": str(movement.transaction_id) if movement else None,
         },
         entries=[
@@ -595,6 +626,7 @@ async def admin_cash_withdraw_direct(
         "amount": float(amount),
         "currency": wallet.currency_code,
         "new_balance": float(wallet.available),
+        "credit_consumed": float(usage["credit_consumed"]),
     }
     if scoped_idempotency_key:
         await store_idempotency_response(
@@ -662,7 +694,17 @@ async def approve_cash_request(
     }
 
     if request.type == WalletCashRequestType.DEPOSIT:
-        wallet.available += request.amount
+        user = await db.get(Users, wallet.user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+        recovery = await apply_cash_deposit_with_credit_recovery(
+            db,
+            user=user,
+            wallet=wallet,
+            amount=decimal.Decimal(request.amount or 0),
+            credit_event_source="cash_deposit_admin",
+            credit_history_description="Validation depot cash admin",
+        )
         movement = await log_wallet_movement(
             db,
             wallet=wallet,
@@ -678,8 +720,16 @@ async def approve_cash_request(
         await ledger.post_journal(
             tx_id=None,
             description="Validation dépôt cash",
-            metadata=metadata
-            | ({"movement_id": str(movement.transaction_id)} if movement else {}),
+            metadata=(
+                metadata
+                | ({"movement_id": str(movement.transaction_id)} if movement else {})
+                | {"credit_recovered": str(recovery["credit_recovered"])}
+                | (
+                    {"credit_available_after": str(recovery["credit_available_after"])}
+                    if recovery["credit_available_after"] is not None
+                    else {}
+                )
+            ),
             entries=[
                 LedgerLine(
                     account=cash_in,
@@ -697,12 +747,20 @@ async def approve_cash_request(
         )
     else:
         total = decimal.Decimal(request.total_amount or 0)
-        if wallet.available < total:
-            raise HTTPException(
-                status_code=400,
-                detail="Solde insuffisant pour approuver ce retrait",
+        user = await db.get(Users, wallet.user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+        try:
+            usage = await apply_cash_withdraw_with_credit_usage(
+                db,
+                user=user,
+                wallet=wallet,
+                amount=total,
+                credit_event_source="cash_withdraw_admin",
+                credit_history_description="Validation retrait cash admin",
             )
-        wallet.available -= total
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         movement = await log_wallet_movement(
             db,
             wallet=wallet,
@@ -719,7 +777,13 @@ async def approve_cash_request(
             tx_id=None,
             description="Validation retrait cash",
             metadata=metadata
-            | ({"movement_id": str(movement.transaction_id)} if movement else {}),
+            | ({"movement_id": str(movement.transaction_id)} if movement else {})
+            | {"credit_consumed": str(usage["credit_consumed"])}
+            | (
+                {"credit_available_after": str(usage["credit_available_after"])}
+                if usage["credit_available_after"] is not None
+                else {}
+            ),
             entries=[
                 LedgerLine(
                     account=wallet_account,

@@ -17,6 +17,9 @@ from app.models.users import Users
 from app.services.agent_ops import compute_agent_commission
 from app.services.limits import guard_and_increment_limits
 from app.services.aml import update_risk_score
+from app.services.cash_credit_recovery import apply_cash_deposit_with_credit_recovery
+from app.services.ledger import LedgerLine, LedgerService
+from app.services.wallet_history import log_wallet_movement
 from app.dependencies.auth import get_current_agent
 from pydantic import BaseModel, Field
 from decimal import Decimal
@@ -125,14 +128,89 @@ async def agent_cashin(
         if idem.in_progress:
             raise HTTPException(status_code=409, detail="Requete dupliquee en cours de traitement.")
 
-    amount = float(body.amount)
-    await guard_and_increment_limits(db, client, amount)
-    commission = compute_agent_commission(amount, agent.agents.commission_rate if agent.agents else None)
+    amount = Decimal(body.amount)
+    await guard_and_increment_limits(db, client, float(amount))
+    commission = compute_agent_commission(float(amount), agent.agents.commission_rate if agent.agents else None)
 
     # AML & risque
-    score = await update_risk_score(db, client, amount, channel="agent")
+    score = await update_risk_score(db, client, float(amount), channel="agent")
 
     # Enregistrer l’opération (tu peux ensuite créditer le wallet du client et débiter le float agent)
+    user_country_currency = await db.scalar(
+        select(Countries.currency_code).where(Countries.country_code == client.country_code)
+    )
+    wallet = await db.scalar(
+        select(Wallets).where(
+            Wallets.user_id == client.user_id,
+            Wallets.type == "consumer",
+        )
+    )
+    if not wallet:
+        wallet = await db.scalar(select(Wallets).where(Wallets.user_id == client.user_id))
+    if not wallet:
+        wallet = Wallets(
+            user_id=client.user_id,
+            type="consumer",
+            currency_code=(user_country_currency or "EUR"),
+            available=Decimal("0"),
+            pending=Decimal("0"),
+        )
+        db.add(wallet)
+        await db.flush()
+
+    recovery = await apply_cash_deposit_with_credit_recovery(
+        db,
+        user=client,
+        wallet=wallet,
+        amount=amount,
+        credit_event_source="agent_cashin",
+        credit_history_description="Depot cash agent",
+    )
+    movement = await log_wallet_movement(
+        db,
+        wallet=wallet,
+        user_id=client.user_id,
+        amount=amount,
+        direction="credit",
+        operation_type="cash_deposit_agent_direct",
+        reference=str(agent.user_id),
+        description=f"Depot cash agent ({agent.full_name or agent.email or agent.user_id})",
+    )
+    ledger = LedgerService(db)
+    wallet_account = await ledger.ensure_wallet_account(wallet)
+    cash_in = await ledger.get_cash_in_account(wallet.currency_code)
+    await ledger.post_journal(
+        tx_id=None,
+        description="Depot cash agent direct",
+        metadata={
+            "operation": "cash_deposit_agent_direct",
+            "target_user_id": str(client.user_id),
+            "wallet_id": str(wallet.wallet_id),
+            "processed_by": str(agent.user_id),
+            "credit_recovered": str(recovery["credit_recovered"]),
+            "credit_available_after": (
+                str(recovery["credit_available_after"])
+                if recovery["credit_available_after"] is not None
+                else None
+            ),
+            "movement_id": str(movement.transaction_id) if movement else None,
+        },
+        entries=[
+            LedgerLine(
+                account=cash_in,
+                direction="debit",
+                amount=amount,
+                currency_code=wallet.currency_code,
+            ),
+            LedgerLine(
+                account=wallet_account,
+                direction="credit",
+                amount=amount,
+                currency_code=wallet.currency_code,
+            ),
+        ],
+    )
+
     await db.execute(insert(AgentTransactions).values(
         agent_id=agent_id,
         client_user_id=client.user_id,
@@ -142,7 +220,15 @@ async def agent_cashin(
         commission=commission,
         status="completed"
     ))
-    response_payload = {"message": "Cash-in effectue", "commission": str(commission), "risk_score": score}
+    response_payload = {
+        "message": "Cash-in effectue",
+        "commission": str(commission),
+        "risk_score": score,
+        "amount": float(amount),
+        "currency": wallet.currency_code,
+        "new_balance": float(wallet.available),
+        "credit_recovered": float(recovery["credit_recovered"]),
+    }
     if scoped_idempotency_key:
         await store_idempotency_response(
             db,
@@ -189,11 +275,64 @@ async def agent_cashout(
         if idem.in_progress:
             raise HTTPException(status_code=409, detail="Requete dupliquee en cours de traitement.")
 
-    amount = float(body.amount)
-    await guard_and_increment_limits(db, client, amount)
-    commission = compute_agent_commission(amount, agent.agents.commission_rate if agent.agents else None)
+    amount = Decimal(body.amount)
+    await guard_and_increment_limits(db, client, float(amount))
+    commission = compute_agent_commission(float(amount), agent.agents.commission_rate if agent.agents else None)
 
-    score = await update_risk_score(db, client, amount, channel="agent")
+    score = await update_risk_score(db, client, float(amount), channel="agent")
+
+    wallet = await db.scalar(
+        select(Wallets).where(
+            Wallets.user_id == client.user_id,
+            Wallets.type == "consumer",
+        )
+    )
+    if not wallet:
+        wallet = await db.scalar(select(Wallets).where(Wallets.user_id == client.user_id))
+    if not wallet:
+        raise HTTPException(404, "Wallet introuvable")
+    if Decimal(wallet.available or 0) < amount:
+        raise HTTPException(400, "Solde insuffisant pour effectuer ce retrait")
+
+    wallet.available = Decimal(wallet.available or 0) - amount
+    movement = await log_wallet_movement(
+        db,
+        wallet=wallet,
+        user_id=client.user_id,
+        amount=amount,
+        direction="debit",
+        operation_type="cash_withdraw_agent_direct",
+        reference=str(agent.user_id),
+        description=f"Retrait cash agent ({agent.full_name or agent.email or agent.user_id})",
+    )
+    ledger = LedgerService(db)
+    wallet_account = await ledger.ensure_wallet_account(wallet)
+    cash_out = await ledger.get_cash_out_account(wallet.currency_code)
+    await ledger.post_journal(
+        tx_id=None,
+        description="Retrait cash agent direct",
+        metadata={
+            "operation": "cash_withdraw_agent_direct",
+            "target_user_id": str(client.user_id),
+            "wallet_id": str(wallet.wallet_id),
+            "processed_by": str(agent.user_id),
+            "movement_id": str(movement.transaction_id) if movement else None,
+        },
+        entries=[
+            LedgerLine(
+                account=wallet_account,
+                direction="debit",
+                amount=amount,
+                currency_code=wallet.currency_code,
+            ),
+            LedgerLine(
+                account=cash_out,
+                direction="credit",
+                amount=amount,
+                currency_code=wallet.currency_code,
+            ),
+        ],
+    )
 
     await db.execute(insert(AgentTransactions).values(
         agent_id=agent_id,
@@ -204,7 +343,14 @@ async def agent_cashout(
         commission=commission,
         status="completed"
     ))
-    response_payload = {"message": "Cash-out effectue", "commission": str(commission), "risk_score": score}
+    response_payload = {
+        "message": "Cash-out effectue",
+        "commission": str(commission),
+        "risk_score": score,
+        "amount": float(amount),
+        "currency": wallet.currency_code,
+        "new_balance": float(wallet.available),
+    }
     if scoped_idempotency_key:
         await store_idempotency_response(
             db,
@@ -334,7 +480,59 @@ async def agent_cash_deposit_direct(
         db.add(wallet)
         await db.flush()
 
-    wallet.available = Decimal(wallet.available or 0) + payload.amount
+    recovery = await apply_cash_deposit_with_credit_recovery(
+        db,
+        user=user,
+        wallet=wallet,
+        amount=Decimal(payload.amount),
+        credit_event_source="agent_cashin",
+        credit_history_description="Depot cash agent",
+    )
+    movement = await log_wallet_movement(
+        db,
+        wallet=wallet,
+        user_id=user.user_id,
+        amount=payload.amount,
+        direction="credit",
+        operation_type="cash_deposit_agent_direct",
+        reference=str(current_agent.user_id),
+        description=f"Depot cash agent ({current_agent.full_name or current_agent.email or current_agent.user_id})",
+    )
+    ledger = LedgerService(db)
+    wallet_account = await ledger.ensure_wallet_account(wallet)
+    cash_in = await ledger.get_cash_in_account(wallet.currency_code)
+    await ledger.post_journal(
+        tx_id=None,
+        description="Depot cash agent direct",
+        metadata={
+            "operation": "cash_deposit_agent_direct",
+            "target_user_id": str(user.user_id),
+            "wallet_id": str(wallet.wallet_id),
+            "processed_by": str(current_agent.user_id),
+            "note": payload.note,
+            "credit_recovered": str(recovery["credit_recovered"]),
+            "credit_available_after": (
+                str(recovery["credit_available_after"])
+                if recovery["credit_available_after"] is not None
+                else None
+            ),
+            "movement_id": str(movement.transaction_id) if movement else None,
+        },
+        entries=[
+            LedgerLine(
+                account=cash_in,
+                direction="debit",
+                amount=payload.amount,
+                currency_code=wallet.currency_code,
+            ),
+            LedgerLine(
+                account=wallet_account,
+                direction="credit",
+                amount=payload.amount,
+                currency_code=wallet.currency_code,
+            ),
+        ],
+    )
 
     await db.execute(insert(AgentTransactions).values(
         agent_id=agent_row.agent_id,
@@ -351,6 +549,7 @@ async def agent_cash_deposit_direct(
         "amount": float(payload.amount),
         "currency": wallet.currency_code,
         "new_balance": float(wallet.available),
+        "credit_recovered": float(recovery["credit_recovered"]),
     }
     if scoped_idempotency_key:
         await store_idempotency_response(

@@ -134,6 +134,17 @@ def _dedupe_balance_events(legacy_items: list[dict], wallet_items: list[dict]) -
     return merged
 
 
+def _combined_capacity_value(
+    wallet_value: decimal.Decimal,
+    wallet_currency: str,
+    credit_value: decimal.Decimal,
+    credit_currency: str,
+) -> tuple[decimal.Decimal | None, str | None]:
+    if str(wallet_currency or "").upper() != str(credit_currency or "").upper():
+        return None, None
+    return decimal.Decimal(wallet_value or 0) + decimal.Decimal(credit_value or 0), str(wallet_currency or "").upper()
+
+
 def _build_cash_request_reference(request_id, request_type) -> str:
     type_token = str(getattr(request_type, "value", request_type) or "").strip().upper()
     prefix = {
@@ -1439,6 +1450,140 @@ async def financial_summary_admin(
         credit_available=credit_available,
         tontines_count=int(tontines_count or 0),
     )
+
+
+@router.get("/admin/financial-capacity-timeline/{user_id}")
+async def admin_financial_capacity_timeline(
+    user_id: str,
+    limit: int = Query(100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    current_admin: Users = Depends(get_current_admin),
+):
+    user = await db.get(Users, uuid.UUID(user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+
+    summary = await financial_summary_admin(user_id=user_id, db=db, current_admin=current_admin)
+    wallet_currency = str(summary.wallet_currency or "EUR").upper()
+    credit_currency = str(summary.credit_currency or wallet_currency).upper()
+
+    wallet_rows = (
+        await db.execute(
+            select(ClientBalanceEvents)
+            .where(ClientBalanceEvents.user_id == user.user_id)
+            .order_by(desc(ClientBalanceEvents.occurred_at), desc(ClientBalanceEvents.created_at))
+            .limit(limit)
+        )
+    ).scalars().all()
+    credit_rows = (
+        await db.execute(
+            select(CreditLineHistory)
+            .where(CreditLineHistory.user_id == user.user_id)
+            .order_by(desc(CreditLineHistory.created_at))
+            .limit(limit)
+        )
+    ).scalars().all()
+
+    wallet_state = decimal.Decimal(summary.wallet_available or 0)
+    credit_state = decimal.Decimal(summary.credit_available or 0)
+    merged_events = sorted(
+        [
+            {
+                "kind": "wallet",
+                "event_at": row.occurred_at or row.created_at,
+                "source": row.source,
+                "description": None,
+                "row": row,
+            }
+            for row in wallet_rows
+        ]
+        + [
+            {
+                "kind": "credit",
+                "event_at": row.created_at,
+                "source": "credit_line_history",
+                "description": row.description,
+                "row": row,
+            }
+            for row in credit_rows
+        ],
+        key=lambda item: item["event_at"] or datetime.min,
+        reverse=True,
+    )
+
+    items = []
+    for item in merged_events:
+        if item["kind"] == "wallet":
+            row = item["row"]
+            wallet_before = decimal.Decimal(row.balance_before or 0)
+            wallet_after = decimal.Decimal(row.balance_after or 0)
+            credit_before = credit_state
+            credit_after = credit_state
+            wallet_state = wallet_before
+            wallet_delta = decimal.Decimal(row.amount_delta or 0)
+            credit_delta = decimal.Decimal("0")
+        else:
+            row = item["row"]
+            wallet_before = wallet_state
+            wallet_after = wallet_state
+            credit_before = decimal.Decimal(row.credit_available_before or 0)
+            credit_after = decimal.Decimal(row.credit_available_after or 0)
+            credit_state = credit_before
+            wallet_delta = decimal.Decimal("0")
+            credit_delta = decimal.Decimal(row.amount or 0)
+
+        capacity_before, capacity_currency = _combined_capacity_value(
+            wallet_before,
+            wallet_currency,
+            credit_before,
+            credit_currency,
+        )
+        capacity_after, _ = _combined_capacity_value(
+            wallet_after,
+            wallet_currency,
+            credit_after,
+            credit_currency,
+        )
+        items.append(
+            {
+                "event_at": item["event_at"].isoformat() if item["event_at"] else None,
+                "event_type": item["kind"],
+                "source": item["source"],
+                "description": item["description"],
+                "wallet_currency": wallet_currency,
+                "wallet_delta": float(wallet_delta),
+                "wallet_before": float(wallet_before),
+                "wallet_after": float(wallet_after),
+                "credit_currency": credit_currency,
+                "credit_delta": float(credit_delta),
+                "credit_before": float(credit_before),
+                "credit_after": float(credit_after),
+                "capacity_currency": capacity_currency,
+                "capacity_before": float(capacity_before) if capacity_before is not None else None,
+                "capacity_after": float(capacity_after) if capacity_after is not None else None,
+            }
+        )
+
+    current_capacity, current_capacity_currency = _combined_capacity_value(
+        decimal.Decimal(summary.wallet_available or 0),
+        wallet_currency,
+        decimal.Decimal(summary.credit_available or 0),
+        credit_currency,
+    )
+    return {
+        "user_id": str(user.user_id),
+        "full_name": user.full_name,
+        "email": user.email,
+        "current": {
+            "wallet_available": float(summary.wallet_available or 0),
+            "wallet_currency": wallet_currency,
+            "credit_available": float(summary.credit_available or 0),
+            "credit_currency": credit_currency,
+            "capacity_total": float(current_capacity) if current_capacity is not None else None,
+            "capacity_currency": current_capacity_currency,
+        },
+        "items": items,
+    }
 
 
 @router.get("/overview", response_model=ClientDashboardOverview)
