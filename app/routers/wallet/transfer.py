@@ -9,7 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import or_, select, text
+from sqlalchemy import case, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -84,10 +84,15 @@ def _is_valid_external_phone(value: str | None) -> bool:
 
 
 def _primary_wallet_for_update_stmt(user_id):
+    wallet_priority = case(
+        (Wallets.type == "personal", 0),
+        (Wallets.type == "consumer", 1),
+        else_=2,
+    )
     return (
         select(Wallets)
         .where(Wallets.user_id == user_id)
-        .order_by(Wallets.wallet_id.asc())
+        .order_by(wallet_priority, Wallets.wallet_id.asc())
         .limit(1)
         .with_for_update()
     )
@@ -843,8 +848,9 @@ async def _external_transfer_core(
     credit_available_before = credit_available
     origin_currency = await _get_sender_country_currency(db, current_user, wallet.currency_code or "EUR")
     is_bif_client = str(origin_currency or "").upper() == "BIF"
+    is_bif_wallet = str(wallet.currency_code or "").upper() == "BIF"
     destination_currency = EXTERNAL_TRANSFER_SETTLEMENT_CURRENCY
-    if is_bif_client and str(destination_currency or "").upper() == "BIF":
+    if is_bif_wallet and str(destination_currency or "").upper() == "BIF":
         fee_rate = decimal.Decimal("6.25")
     else:
         settings_row = await db.scalar(
@@ -858,7 +864,7 @@ async def _external_transfer_core(
     total_required = amount + fee_amount
     approval_available = (
         credit_available
-        if is_bif_client
+        if is_bif_wallet
         else effective_external_transfer_capacity(wallet_balance, credit_available)
     )
     insufficient_funds_review_required = total_required > approval_available and not override_balance_check
@@ -898,6 +904,7 @@ async def _external_transfer_core(
             wallet_available=wallet_balance_before,
             credit_available=credit_available_before,
             total_required=total_required,
+            prefer_credit_only=is_bif_wallet,
         )
         wallet_after = funding["wallet_after"]
         credit_used = funding["credit_used"]
@@ -1105,7 +1112,7 @@ async def _external_transfer_core(
                 CreditLineEvents(
                     credit_line_id=credit_line.credit_line_id,
                     user_id=current_user.user_id,
-                    amount_delta=credit_used,
+                    amount_delta=-credit_used,
                     currency_code=credit_line.currency_code,
                     old_limit=credit_available_before,
                     new_limit=max(decimal.Decimal("0"), credit_available_after),
@@ -1209,6 +1216,7 @@ async def _fund_pending_external_transfer_for_approval(
         raise HTTPException(status_code=400, detail="Montant de financement invalide")
 
     wallet_balance_before = decimal.Decimal(wallet.available or 0)
+    is_bif_wallet = str(wallet.currency_code or "").upper() == "BIF"
     credit_available_before = (
         max(decimal.Decimal(credit_line.outstanding_amount or 0), decimal.Decimal("0"))
         if credit_line
@@ -1278,6 +1286,7 @@ async def _fund_pending_external_transfer_for_approval(
         wallet_available=wallet_balance_before,
         credit_available=credit_available_before,
         total_required=total_required,
+        prefer_credit_only=is_bif_wallet,
     )
     credit_used = funding["credit_used"]
     credit_available_after = funding["credit_available_after"]
@@ -1398,7 +1407,7 @@ async def _fund_pending_external_transfer_for_approval(
             CreditLineEvents(
                 credit_line_id=credit_line.credit_line_id,
                 user_id=user.user_id,
-                amount_delta=credit_used,
+                amount_delta=-credit_used,
                 currency_code=credit_line.currency_code,
                 old_limit=credit_available_before,
                 new_limit=max(decimal.Decimal("0"), credit_available_after),
