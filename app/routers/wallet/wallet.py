@@ -1,6 +1,7 @@
 # app/routers/wallet.py
 import decimal
 import uuid
+from datetime import timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Header
 from fastapi.encoders import jsonable_encoder
@@ -100,6 +101,37 @@ class ClientDashboardOverview(BaseModel):
     kpis: DashboardKpis
     monthly_transfer_volume: list[DashboardSeriesPoint]
     yearly_transfer_volume: list[DashboardSeriesPoint]
+
+
+def _balance_event_dedupe_key(item: dict) -> tuple:
+    event_at = item.get("occurred_at") or item.get("created_at")
+    normalized_at = None
+    if event_at is not None:
+        if getattr(event_at, "tzinfo", None) is not None:
+            normalized_at = int(event_at.astimezone(timezone.utc).timestamp())
+        else:
+            normalized_at = int(event_at.replace(microsecond=0).timestamp())
+    return (
+        str(item.get("currency") or ""),
+        str(item.get("source") or ""),
+        float(item.get("amount_delta") or 0),
+        float(item.get("balance_after") or 0),
+        normalized_at,
+    )
+
+
+def _dedupe_balance_events(legacy_items: list[dict], wallet_items: list[dict]) -> list[dict]:
+    seen_legacy = {_balance_event_dedupe_key(item) for item in legacy_items}
+    merged = list(legacy_items)
+    for item in wallet_items:
+        if _balance_event_dedupe_key(item) in seen_legacy:
+            continue
+        merged.append(item)
+    merged.sort(
+        key=lambda item: item.get("occurred_at") or item.get("created_at"),
+        reverse=True,
+    )
+    return merged
 
 
 def _build_cash_request_reference(request_id, request_type) -> str:
@@ -1036,7 +1068,7 @@ async def get_balance_events(
     legacy_rows = (await db.execute(legacy_stmt)).scalars().all()
     wallet_rows = (await db.execute(wallet_stmt)).mappings().all()
 
-    merged = [
+    legacy_items = [
         {
             "event_id": str(r.event_id),
             "balance_before": float(r.balance_before) if r.balance_before is not None else None,
@@ -1049,13 +1081,14 @@ async def get_balance_events(
         }
         for r in legacy_rows
     ]
+    wallet_items = []
     for tx in wallet_rows:
         raw_amount = float(tx["amount"] or 0)
         direction = _normalize_wallet_direction(tx["direction"])
         signed_delta = raw_amount if direction == "credit" else -raw_amount
         balance_after = float(tx["balance_after"]) if tx["balance_after"] is not None else None
         balance_before = balance_after - signed_delta if balance_after is not None else None
-        merged.append(
+        wallet_items.append(
             {
                 "event_id": f"wallet-{tx['transaction_id']}",
                 "balance_before": balance_before,
@@ -1068,10 +1101,7 @@ async def get_balance_events(
             }
         )
 
-    merged.sort(
-        key=lambda item: item.get("occurred_at") or item.get("created_at"),
-        reverse=True,
-    )
+    merged = _dedupe_balance_events(legacy_items, wallet_items)
     return merged[offset : offset + limit]
 
 from decimal import Decimal

@@ -1112,7 +1112,7 @@ async def _external_transfer_core(
                 CreditLineEvents(
                     credit_line_id=credit_line.credit_line_id,
                     user_id=current_user.user_id,
-                    amount_delta=credit_used,
+                    amount_delta=-credit_used,
                     currency_code=credit_line.currency_code,
                     old_limit=credit_available_before,
                     new_limit=max(decimal.Decimal("0"), credit_available_after),
@@ -1407,7 +1407,7 @@ async def _fund_pending_external_transfer_for_approval(
             CreditLineEvents(
                 credit_line_id=credit_line.credit_line_id,
                 user_id=user.user_id,
-                amount_delta=credit_used,
+                amount_delta=-credit_used,
                 currency_code=credit_line.currency_code,
                 old_limit=credit_available_before,
                 new_limit=max(decimal.Decimal("0"), credit_available_after),

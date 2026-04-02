@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
@@ -30,6 +30,38 @@ DESTINATION_CURRENCY_MAP = {
     "democratic republic of congo": "CDF",
     "rdc": "CDF",
 }
+
+
+def _balance_event_dedupe_key(item: dict) -> tuple:
+    event_at = item.get("occurred_at") or item.get("created_at")
+    normalized_at = None
+    if event_at is not None:
+        if getattr(event_at, "tzinfo", None) is not None:
+            normalized_at = int(event_at.astimezone(timezone.utc).timestamp())
+        else:
+            normalized_at = int(event_at.replace(microsecond=0).timestamp())
+    return (
+        str(item.get("user_id") or ""),
+        str(item.get("currency") or ""),
+        str(item.get("source") or ""),
+        float(item.get("amount_delta") or 0),
+        float(item.get("balance_after") or 0),
+        normalized_at,
+    )
+
+
+def _dedupe_balance_events(legacy_items: list[dict], wallet_items: list[dict]) -> list[dict]:
+    seen_legacy = {_balance_event_dedupe_key(item) for item in legacy_items}
+    merged = list(legacy_items)
+    for item in wallet_items:
+        if _balance_event_dedupe_key(item) in seen_legacy:
+            continue
+        merged.append(item)
+    merged.sort(
+        key=lambda item: item.get("occurred_at") or item.get("created_at"),
+        reverse=True,
+    )
+    return merged
 
 
 def _resolve_local_currency(country: str | None, stored_currency: str | None) -> str | None:
@@ -397,7 +429,7 @@ async def list_balance_events(
 
     legacy_rows = (await db.execute(legacy_stmt)).all()
     wallet_rows = (await db.execute(wallet_stmt)).all()
-    merged = [
+    legacy_items = [
         {
             "event_id": str(ev.event_id),
             "user_id": str(ev.user_id),
@@ -415,6 +447,7 @@ async def list_balance_events(
         }
         for ev, full_name, email, phone in legacy_rows
     ]
+    wallet_items = []
     for (
         transaction_id,
         wallet_user_id,
@@ -437,7 +470,7 @@ async def list_balance_events(
         signed_delta = raw_amount if direction == "credit" else -raw_amount
         balance_after = float(balance_after_raw) if balance_after_raw is not None else None
         balance_before = balance_after - signed_delta if balance_after is not None else None
-        merged.append(
+        wallet_items.append(
             {
                 "event_id": f"wallet-{transaction_id}",
                 "user_id": str(wallet_user_id) if wallet_user_id else None,
@@ -453,10 +486,7 @@ async def list_balance_events(
                 "created_at": created_at,
             }
         )
-    merged.sort(
-        key=lambda item: item.get("occurred_at") or item.get("created_at"),
-        reverse=True,
-    )
+    merged = _dedupe_balance_events(legacy_items, wallet_items)
     if source:
         normalized_source = source.strip().lower()
         merged = [
@@ -507,7 +537,7 @@ async def list_user_balance_events(
     )
     legacy_rows = (await db.execute(legacy_stmt)).all()
     wallet_rows = (await db.execute(wallet_stmt)).all()
-    merged = [
+    legacy_items = [
         {
             "event_id": str(ev.event_id),
             "user_id": str(ev.user_id),
@@ -523,6 +553,7 @@ async def list_user_balance_events(
         }
         for ev, full_name, email in legacy_rows
     ]
+    wallet_items = []
     for (
         transaction_id,
         wallet_user_id,
@@ -544,7 +575,7 @@ async def list_user_balance_events(
         signed_delta = raw_amount if direction == "credit" else -raw_amount
         balance_after = float(balance_after_raw) if balance_after_raw is not None else None
         balance_before = balance_after - signed_delta if balance_after is not None else None
-        merged.append(
+        wallet_items.append(
             {
                 "event_id": f"wallet-{transaction_id}",
                 "user_id": str(wallet_user_id) if wallet_user_id else None,
@@ -559,10 +590,7 @@ async def list_user_balance_events(
                 "created_at": created_at,
             }
         )
-    merged.sort(
-        key=lambda item: item.get("occurred_at") or item.get("created_at"),
-        reverse=True,
-    )
+    merged = _dedupe_balance_events(legacy_items, wallet_items)
     return merged[offset : offset + limit]
 
 
