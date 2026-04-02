@@ -4,7 +4,8 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select, or_, desc, cast, String
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import func, select, or_, desc, cast, String, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -15,6 +16,17 @@ from app.models.transactions import Transactions
 from app.models.users import Users
 from app.models.general_settings import GeneralSettings
 from app.models.external_transfers import ExternalTransfers
+from app.models.credit_lines import CreditLines
+from app.models.wallets import Wallets
+from app.routers.wallet.transfer import (
+    EXTERNAL_TRANSFER_SETTLEMENT_CURRENCY,
+    _get_sender_country_currency,
+    _resolve_fx_rate,
+)
+from app.services.external_transfer_capacity import (
+    compute_external_transfer_funding,
+    effective_external_transfer_capacity,
+)
 
 EXTERNAL_CHANNELS = {
     "external_transfer",
@@ -78,6 +90,34 @@ def serialize_decimal(value: Optional[Decimal]) -> float:
     return float(value or 0)
 
 
+class AdminExternalTransferSimulationRequest(BaseModel):
+    user_id: UUID
+    amount: Decimal = Field(..., gt=Decimal("0"), le=Decimal("100000000"))
+    currency: str = Field(..., min_length=3, max_length=10)
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str) -> str:
+        raw = str(value or "").strip().upper()
+        if not raw:
+            raise ValueError("currency invalide")
+        return raw
+
+
+def _primary_wallet_stmt(user_id: UUID):
+    wallet_priority = case(
+        (Wallets.type == "personal", 0),
+        (Wallets.type == "consumer", 1),
+        else_=2,
+    )
+    return (
+        select(Wallets)
+        .where(Wallets.user_id == user_id)
+        .order_by(wallet_priority, Wallets.wallet_id.asc())
+        .limit(1)
+    )
+
+
 def _extract_transfer_flags(metadata: dict | None) -> dict:
     payload = dict(metadata or {})
     return {
@@ -87,6 +127,150 @@ def _extract_transfer_flags(metadata: dict | None) -> dict:
         "aml_manual_review_required": bool(payload.get("aml_manual_review_required")),
         "funding_pending": bool(payload.get("funding_pending")),
         "required_credit_topup": payload.get("required_credit_topup"),
+    }
+
+
+@router.post("/simulate-external")
+async def simulate_external_transfer(
+    payload: AdminExternalTransferSimulationRequest,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    user = await db.get(Users, payload.user_id)
+    if not user:
+        return {
+            "possible": False,
+            "reasons": ["Utilisateur introuvable."],
+            "refusal_reasons": ["user_not_found"],
+        }
+
+    wallet = await db.scalar(_primary_wallet_stmt(payload.user_id))
+    if not wallet:
+        return {
+            "possible": False,
+            "reasons": ["Portefeuille principal introuvable."],
+            "refusal_reasons": ["wallet_not_found"],
+        }
+
+    credit_line = await db.scalar(
+        select(CreditLines)
+        .where(
+            CreditLines.user_id == payload.user_id,
+            CreditLines.deleted_at.is_(None),
+            CreditLines.status == "active",
+        )
+        .order_by(CreditLines.created_at.desc())
+    )
+
+    wallet_balance = Decimal(wallet.available or 0)
+    wallet_currency = str(wallet.currency_code or "EUR").upper()
+    credit_available = (
+        max(Decimal(credit_line.outstanding_amount or 0), Decimal("0"))
+        if credit_line
+        else max(Decimal(user.credit_limit or 0) - Decimal(user.credit_used or 0), Decimal("0"))
+    )
+    credit_currency = (
+        str(credit_line.currency_code or wallet_currency).upper()
+        if credit_line
+        else wallet_currency
+    )
+    sender_currency = await _get_sender_country_currency(db, user, wallet_currency)
+    requested_currency = payload.currency
+    is_bif_wallet = wallet_currency == "BIF"
+    destination_currency = EXTERNAL_TRANSFER_SETTLEMENT_CURRENCY
+
+    if is_bif_wallet and destination_currency == "BIF":
+        fee_rate = Decimal("6.25")
+    else:
+        settings_row = await db.scalar(select(GeneralSettings).order_by(GeneralSettings.created_at.desc()))
+        fee_rate = Decimal(getattr(settings_row, "charge", 0) or 0)
+    fee_amount = (payload.amount * fee_rate / Decimal(100)).quantize(Decimal("0.01"))
+    total_required = payload.amount + fee_amount
+
+    fx_rate = await _resolve_fx_rate(db, sender_currency, destination_currency)
+    local_amount = (payload.amount * fx_rate).quantize(Decimal("0.01"))
+
+    approval_capacity = (
+        credit_available
+        if is_bif_wallet
+        else effective_external_transfer_capacity(wallet_balance, credit_available)
+    )
+    funding = compute_external_transfer_funding(
+        wallet_available=wallet_balance,
+        credit_available=credit_available,
+        total_required=total_required,
+        prefer_credit_only=is_bif_wallet,
+    )
+    capacity_after = (
+        funding["credit_available_after"]
+        if is_bif_wallet
+        else effective_external_transfer_capacity(
+            funding["wallet_after"],
+            funding["credit_available_after"],
+        )
+    )
+
+    reasons: list[str] = []
+    refusal_reasons: list[str] = []
+    if requested_currency != sender_currency:
+        refusal_reasons.append("currency_mismatch")
+        reasons.append(
+            f"Devise demandee {requested_currency} non compatible: ce client transfere en {sender_currency}."
+        )
+    if total_required > approval_capacity:
+        refusal_reasons.append("insufficient_capacity")
+        shortfall = (total_required - approval_capacity).quantize(Decimal("0.01"))
+        reasons.append(
+            f"Capacite insuffisante: il manque {shortfall} {wallet_currency} pour couvrir montant + frais."
+        )
+    if is_bif_wallet:
+        reasons.append("Regle wallet BIF: seule la ligne de credit finance le transfert externe.")
+    elif credit_available > Decimal("0"):
+        reasons.append("Regle standard: le wallet est consomme d'abord, puis la ligne de credit si necessaire.")
+    else:
+        reasons.append("Aucune ligne de credit active: seul le wallet est utilise.")
+
+    possible = not refusal_reasons
+
+    return {
+        "possible": possible,
+        "reasons": reasons,
+        "refusal_reasons": refusal_reasons,
+        "user": {
+            "user_id": str(user.user_id),
+            "full_name": user.full_name,
+            "email": user.email,
+        },
+        "rule": {
+            "wallet_bif_credit_only": is_bif_wallet,
+            "sender_currency": sender_currency,
+            "requested_currency": requested_currency,
+            "destination_currency": destination_currency,
+        },
+        "amounts": {
+            "amount": serialize_decimal(payload.amount),
+            "fee_rate": serialize_decimal(fee_rate),
+            "fee_amount": serialize_decimal(fee_amount),
+            "total_required": serialize_decimal(total_required),
+            "fx_rate": serialize_decimal(fx_rate),
+            "local_amount": serialize_decimal(local_amount),
+        },
+        "before": {
+            "wallet_balance": serialize_decimal(wallet_balance),
+            "wallet_currency": wallet_currency,
+            "credit_available": serialize_decimal(credit_available),
+            "credit_currency": credit_currency,
+            "financial_capacity": serialize_decimal(approval_capacity),
+        },
+        "after": {
+            "wallet_balance": serialize_decimal(funding["wallet_after"]),
+            "wallet_currency": wallet_currency,
+            "credit_available": serialize_decimal(funding["credit_available_after"]),
+            "credit_currency": credit_currency,
+            "financial_capacity": serialize_decimal(capacity_after),
+            "wallet_debit_amount": serialize_decimal(funding["wallet_debit_amount"]),
+            "credit_used": serialize_decimal(funding["credit_used"]),
+        },
     }
 
 
