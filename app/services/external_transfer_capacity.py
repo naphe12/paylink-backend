@@ -29,10 +29,17 @@ def compute_external_transfer_funding(
         credit_used = min(credit, total)
         residual_after_credit = total - credit_used
     else:
-        wallet_debit_amount = min(max(wallet, ZERO), total)
-        remaining_after_wallet = total - wallet_debit_amount
-        credit_used = min(credit, remaining_after_wallet)
-        residual_after_credit = remaining_after_wallet - credit_used
+        if wallet < ZERO:
+            # For non-BIF wallets already below zero, keep consuming credit for coverage
+            # but still reflect the full transfer on the wallet balance.
+            wallet_debit_amount = total
+            credit_used = min(credit, total)
+            residual_after_credit = total - credit_used
+        else:
+            wallet_debit_amount = min(max(wallet, ZERO), total)
+            remaining_after_wallet = total - wallet_debit_amount
+            credit_used = min(credit, remaining_after_wallet)
+            residual_after_credit = remaining_after_wallet - credit_used
 
     return {
         "wallet_debit_amount": wallet_debit_amount,
