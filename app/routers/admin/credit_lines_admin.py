@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 from decimal import Decimal
 from datetime import datetime
 from uuid import UUID
@@ -20,6 +20,113 @@ from app.services.wallet_history import log_wallet_movement
 from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/admin/credit-lines", tags=["Admin Credit Lines"])
+
+
+CreditLineCorrectionScenario = Literal[
+    "credit_available_adjustment",
+    "debit_available_adjustment",
+    "set_available_balance",
+    "restore_full_availability",
+]
+
+
+class CreditLineCorrectionPreviewRequest(BaseModel):
+    credit_line_id: UUID
+    scenario: CreditLineCorrectionScenario
+    amount: Decimal | None = Field(default=None, gt=0)
+    target_available: Decimal | None = Field(default=None, ge=0)
+    reason: str = Field(..., min_length=3, max_length=300)
+    note: str | None = Field(default=None, max_length=500)
+
+
+def _serialize_decimal(value: Decimal | None) -> float:
+    return float(value or 0)
+
+
+def _credit_line_correction_operation_code(scenario: CreditLineCorrectionScenario) -> int:
+    return {
+        "credit_available_adjustment": 9010,
+        "debit_available_adjustment": 9011,
+        "set_available_balance": 9012,
+        "restore_full_availability": 9013,
+    }[scenario]
+
+
+def _build_credit_line_correction_preview(credit_line: CreditLines, payload: CreditLineCorrectionPreviewRequest) -> dict:
+    limit_before = Decimal(credit_line.initial_amount or 0)
+    available_before = max(Decimal(credit_line.outstanding_amount or 0), Decimal("0"))
+    used_before = Decimal(credit_line.used_amount or 0)
+    scenario = payload.scenario
+
+    if scenario == "credit_available_adjustment":
+        if payload.amount is None:
+            raise HTTPException(400, "Le montant est requis pour ce scenario.")
+        signed_delta = Decimal(payload.amount)
+        available_after = available_before + signed_delta
+    elif scenario == "debit_available_adjustment":
+        if payload.amount is None:
+            raise HTTPException(400, "Le montant est requis pour ce scenario.")
+        signed_delta = -Decimal(payload.amount)
+        available_after = available_before + signed_delta
+    elif scenario == "set_available_balance":
+        if payload.target_available is None:
+            raise HTTPException(400, "Le disponible cible est requis pour ce scenario.")
+        available_after = Decimal(payload.target_available)
+        signed_delta = available_after - available_before
+    elif scenario == "restore_full_availability":
+        available_after = limit_before
+        signed_delta = available_after - available_before
+    else:
+        raise HTTPException(400, "Scenario non supporte.")
+
+    if signed_delta == 0:
+        raise HTTPException(400, "Aucune correction a appliquer: le delta calcule est nul.")
+    if available_after < 0:
+        raise HTTPException(400, "Le disponible apres correction ne peut pas etre negatif.")
+    if available_after > limit_before:
+        raise HTTPException(400, "Le disponible apres correction ne peut pas depasser la limite initiale.")
+
+    used_after = limit_before - available_after
+    if used_after < 0:
+        raise HTTPException(400, "Le credit utilise apres correction ne peut pas etre negatif.")
+
+    warnings: list[str] = []
+    if used_after == 0:
+        warnings.append("La ligne de credit sera entierement disponible apres correction.")
+    if available_after == 0:
+        warnings.append("La ligne de credit n'aura plus de disponible apres correction.")
+
+    description = payload.reason.strip()
+    if payload.note:
+        description = f"{description} | {payload.note.strip()}"
+
+    return {
+        "credit_line_id": str(credit_line.credit_line_id),
+        "user_id": str(credit_line.user_id),
+        "currency_code": str(credit_line.currency_code or "").upper(),
+        "scenario": scenario,
+        "amount": _serialize_decimal(abs(signed_delta)),
+        "signed_delta": _serialize_decimal(signed_delta),
+        "credit_limit_before": _serialize_decimal(limit_before),
+        "credit_limit_after": _serialize_decimal(limit_before),
+        "credit_available_before": _serialize_decimal(available_before),
+        "credit_available_after": _serialize_decimal(available_after),
+        "credit_used_before": _serialize_decimal(used_before),
+        "credit_used_after": _serialize_decimal(used_after),
+        "operation_code": _credit_line_correction_operation_code(scenario),
+        "reason": payload.reason,
+        "note": payload.note,
+        "description": description,
+        "warnings": warnings,
+        "implications": [
+            "Met a jour credit_lines.outstanding_amount.",
+            "Recalcule credit_lines.used_amount en gardant la limite initiale.",
+            "Synchronise users.credit_limit et users.credit_used.",
+            "Cree un credit_line_event et un credit_line_history admin.",
+            "Ne modifie ni le wallet, ni le pending, ni le bonus.",
+        ],
+        "can_apply": True,
+    }
 
 
 async def _get_latest_credit_line(db: AsyncSession, user_id: UUID):
@@ -330,6 +437,93 @@ async def increase_credit_line(
 
 class CreditLineDecrease(BaseModel):
     amount: Decimal = Field(..., gt=0)
+
+
+@router.post("/corrections/preview")
+async def preview_credit_line_correction(
+    payload: CreditLineCorrectionPreviewRequest,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    credit_line = await db.scalar(
+        select(CreditLines).where(CreditLines.credit_line_id == payload.credit_line_id)
+    )
+    if not credit_line:
+        raise HTTPException(404, "Ligne de credit introuvable")
+
+    user = await db.scalar(select(Users).where(Users.user_id == credit_line.user_id))
+    preview = _build_credit_line_correction_preview(credit_line, payload)
+    preview.update(
+        {
+            "full_name": getattr(user, "full_name", None),
+            "email": getattr(user, "email", None),
+            "status": credit_line.status,
+            "source": credit_line.source,
+        }
+    )
+    return preview
+
+
+@router.post("/corrections/apply")
+async def apply_credit_line_correction(
+    payload: CreditLineCorrectionPreviewRequest,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    credit_line = await db.scalar(
+        select(CreditLines).where(CreditLines.credit_line_id == payload.credit_line_id)
+    )
+    if not credit_line:
+        raise HTTPException(404, "Ligne de credit introuvable")
+
+    user = await db.scalar(select(Users).where(Users.user_id == credit_line.user_id))
+    if not user:
+        raise HTTPException(404, "Utilisateur introuvable")
+
+    preview = _build_credit_line_correction_preview(credit_line, payload)
+    available_after = Decimal(str(preview["credit_available_after"]))
+    used_after = Decimal(str(preview["credit_used_after"]))
+    signed_delta = Decimal(str(preview["signed_delta"]))
+    available_before = Decimal(str(preview["credit_available_before"]))
+
+    credit_line.outstanding_amount = available_after
+    credit_line.used_amount = used_after
+    credit_line.updated_at = datetime.utcnow()
+    user.credit_limit = Decimal(credit_line.initial_amount or 0)
+    user.credit_used = used_after
+
+    db.add(
+        CreditLineEvents(
+            credit_line_id=credit_line.credit_line_id,
+            user_id=credit_line.user_id,
+            amount_delta=signed_delta,
+            currency_code=credit_line.currency_code,
+            old_limit=available_before,
+            new_limit=available_after,
+            operation_code=preview["operation_code"],
+            status="corrected",
+            source="admin_correction",
+            occurred_at=datetime.utcnow(),
+        )
+    )
+    db.add(
+        CreditLineHistory(
+            user_id=credit_line.user_id,
+            transaction_id=None,
+            amount=signed_delta,
+            credit_available_before=available_before,
+            credit_available_after=available_after,
+            description=preview["description"],
+        )
+    )
+    await db.commit()
+
+    detail = await get_credit_line_detail(credit_line.credit_line_id, db, admin)
+    return {
+        "message": "Correction du disponible de ligne de credit appliquee.",
+        "preview": preview,
+        "detail": detail,
+    }
 
 
 @router.post("/{credit_line_id}/decrease")
