@@ -510,3 +510,128 @@ def filter_operator_urgency_items(
                 continue
         filtered.append(item)
     return filtered
+
+
+def summarize_operator_urgency_owner_load(items: list[dict]) -> list[dict]:
+    buckets: dict[str, dict] = {}
+    now = datetime.now(timezone.utc)
+    for item in items:
+        workflow = item.get("operator_workflow") or {}
+        owner_user_id = str(workflow.get("owner_user_id") or "")
+        owner_label = str(item.get("owner") or owner_user_id or "Non assigne")
+        owner_key = _normalize_owner_label(owner_label) or "__unassigned__"
+        follow_up_at = (workflow or {}).get("follow_up_at")
+        overdue_follow_up = bool(follow_up_at and follow_up_at <= now)
+        bucket = buckets.get(owner_key) or {
+            "owner_key": owner_key,
+            "owner_label": owner_label if owner_key != "__unassigned__" else "Non assigne",
+            "count": 0,
+            "blocked_count": 0,
+            "overdue_follow_up_count": 0,
+            "critical_count": 0,
+        }
+        bucket["count"] += 1
+        if str(item.get("operator_status") or "").lower() == "blocked":
+            bucket["blocked_count"] += 1
+        if overdue_follow_up:
+            bucket["overdue_follow_up_count"] += 1
+        if str(item.get("priority") or "").lower() == "critical":
+            bucket["critical_count"] += 1
+        buckets[owner_key] = bucket
+
+    return sorted(
+        buckets.values(),
+        key=lambda row: (
+            -int(row["critical_count"]),
+            -int(row["blocked_count"]),
+            -int(row["overdue_follow_up_count"]),
+            -int(row["count"]),
+            str(row["owner_label"]),
+        ),
+    )
+
+
+def summarize_operator_urgency_queues(items: list[dict]) -> list[dict]:
+    buckets: dict[str, dict] = {}
+    now = datetime.now(timezone.utc)
+    for item in items:
+        kind = str(item.get("kind") or "unknown")
+        workflow = item.get("operator_workflow") or {}
+        follow_up_at = workflow.get("follow_up_at")
+        overdue_follow_up = bool(follow_up_at and follow_up_at <= now)
+        bucket = buckets.get(kind) or {
+            "kind": kind,
+            "total": 0,
+            "blocked_count": 0,
+            "overdue_follow_up_count": 0,
+            "stale_count": 0,
+            "critical_count": 0,
+        }
+        bucket["total"] += 1
+        if str(item.get("operator_status") or "").lower() == "blocked":
+            bucket["blocked_count"] += 1
+        if overdue_follow_up:
+            bucket["overdue_follow_up_count"] += 1
+        if bool(item.get("stale")):
+            bucket["stale_count"] += 1
+        if str(item.get("priority") or "").lower() == "critical":
+            bucket["critical_count"] += 1
+        buckets[kind] = bucket
+
+    return sorted(
+        buckets.values(),
+        key=lambda row: (-int(row["critical_count"]), -int(row["overdue_follow_up_count"]), -int(row["total"]), str(row["kind"])),
+    )
+
+
+def sort_operator_urgency_items(items: list[dict], *, sort_by: str | None = None, sort_dir: str | None = None) -> list[dict]:
+    normalized_sort_by = str(sort_by or "last_action_at").strip().lower()
+    normalized_sort_dir = "asc" if str(sort_dir or "").strip().lower() == "asc" else "desc"
+    now = datetime.now(timezone.utc)
+
+    def parse_dt(value):
+        if not value:
+            return datetime.fromtimestamp(0, tz=timezone.utc)
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        try:
+            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return datetime.fromtimestamp(0, tz=timezone.utc)
+
+    def overdue_score(item):
+        workflow = item.get("operator_workflow") or {}
+        follow_up_at = workflow.get("follow_up_at")
+        if not follow_up_at:
+            return 0
+        dt = parse_dt(follow_up_at)
+        return 1 if dt <= now else 0
+
+    def critical_score(item):
+        return 1 if str(item.get("priority") or "").lower() == "critical" else 0
+
+    def stale_score(item):
+        return 1 if bool(item.get("stale")) else 0
+
+    def key_fn(item):
+        if normalized_sort_by == "priority":
+            return (critical_score(item), stale_score(item), parse_dt(item.get("last_action_at")))
+        if normalized_sort_by == "owner":
+            return (str(item.get("owner") or "").lower(), parse_dt(item.get("last_action_at")))
+        if normalized_sort_by == "kind":
+            return (str(item.get("kind") or "").lower(), parse_dt(item.get("last_action_at")))
+        if normalized_sort_by == "status":
+            return (str(item.get("operator_status") or "").lower(), critical_score(item), parse_dt(item.get("last_action_at")))
+        if normalized_sort_by == "follow_up":
+            workflow = item.get("operator_workflow") or {}
+            return (overdue_score(item), parse_dt(workflow.get("follow_up_at")), parse_dt(item.get("last_action_at")))
+        return parse_dt(item.get("last_action_at"))
+
+    return sorted(items, key=key_fn, reverse=normalized_sort_dir == "desc")
+
+
+def paginate_operator_urgency_items(items: list[dict], *, limit: int, offset: int) -> list[dict]:
+    safe_offset = max(0, int(offset or 0))
+    safe_limit = max(1, int(limit or 50))
+    return items[safe_offset : safe_offset + safe_limit]
