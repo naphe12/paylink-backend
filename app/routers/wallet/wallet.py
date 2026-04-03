@@ -140,9 +140,21 @@ def _combined_capacity_value(
     credit_value: decimal.Decimal,
     credit_currency: str,
 ) -> tuple[decimal.Decimal | None, str | None]:
-    if str(wallet_currency or "").upper() != str(credit_currency or "").upper():
+    normalized_wallet_currency = str(wallet_currency or "").upper()
+    normalized_credit_currency = str(credit_currency or normalized_wallet_currency).upper()
+    wallet_amount = decimal.Decimal(wallet_value or 0)
+    credit_amount = max(decimal.Decimal(credit_value or 0), decimal.Decimal(0))
+
+    if normalized_wallet_currency == "BIF":
+        return credit_amount, normalized_credit_currency
+
+    if wallet_amount < 0:
+        return credit_amount, normalized_credit_currency
+
+    if normalized_wallet_currency != normalized_credit_currency:
         return None, None
-    return decimal.Decimal(wallet_value or 0) + decimal.Decimal(credit_value or 0), str(wallet_currency or "").upper()
+
+    return wallet_amount + credit_amount, normalized_wallet_currency
 
 
 def _build_cash_request_reference(request_id, request_type) -> str:
@@ -1522,6 +1534,8 @@ async def admin_financial_capacity_timeline(
             wallet_state = wallet_before
             wallet_delta = decimal.Decimal(row.amount_delta or 0)
             credit_delta = decimal.Decimal("0")
+            operation_amount = abs(wallet_delta)
+            operation_currency = wallet_currency
         else:
             row = item["row"]
             wallet_before = wallet_state
@@ -1531,6 +1545,8 @@ async def admin_financial_capacity_timeline(
             credit_state = credit_before
             wallet_delta = decimal.Decimal("0")
             credit_delta = decimal.Decimal(row.amount or 0)
+            operation_amount = abs(credit_delta)
+            operation_currency = credit_currency
 
         capacity_before, capacity_currency = _combined_capacity_value(
             wallet_before,
@@ -1550,6 +1566,8 @@ async def admin_financial_capacity_timeline(
                 "event_type": item["kind"],
                 "source": item["source"],
                 "description": item["description"],
+                "operation_amount": float(operation_amount),
+                "operation_currency": operation_currency,
                 "wallet_currency": wallet_currency,
                 "wallet_delta": float(wallet_delta),
                 "wallet_before": float(wallet_before),
