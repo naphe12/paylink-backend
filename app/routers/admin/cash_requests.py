@@ -227,15 +227,23 @@ async def list_cash_users(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
 ):
-    stmt = select(Users).order_by(Users.created_at.desc()).limit(limit)
+    stmt = (
+        select(Users)
+        .where(Users.role == "client")
+        .order_by(Users.created_at.desc())
+        .limit(limit)
+    )
     if q and q.strip():
         pattern = f"%{q.strip()}%"
         stmt = (
             select(Users)
             .where(
+                (Users.role == "client")
+                & (
                 (Users.full_name.ilike(pattern))
                 | (Users.email.ilike(pattern))
                 | (Users.phone_e164.ilike(pattern))
+                )
             )
             .order_by(Users.created_at.desc())
             .limit(limit)
