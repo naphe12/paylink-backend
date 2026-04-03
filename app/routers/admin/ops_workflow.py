@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -8,7 +9,9 @@ from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
 from app.models.users import Users
 from app.schemas.operator_workflow import (
-    OperatorUrgencyItemRead,
+    OperatorUrgencyListRead,
+    OperatorWorkflowBatchResultRead,
+    OperatorWorkflowBatchUpsert,
     OperatorWorkflowRead,
     OperatorWorkflowSummaryRead,
     OperatorWorkflowUpsert,
@@ -18,6 +21,10 @@ from app.services.operator_workflow_service import (
     fetch_operator_work_item,
     fetch_operator_workflow_summary,
     filter_operator_urgency_items,
+    paginate_operator_urgency_items,
+    sort_operator_urgency_items,
+    summarize_operator_urgency_owner_load,
+    summarize_operator_urgency_queues,
     upsert_operator_work_item,
 )
 
@@ -25,6 +32,18 @@ from app.services.operator_workflow_service import (
 router = APIRouter(prefix="/admin/ops/work-items", tags=["Admin OPS Workflow"])
 
 ALLOWED_ENTITY_TYPES = {"escrow_order", "p2p_dispute", "payment_intent"}
+
+
+def _parse_dt(value):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
 
 async def _ensure_entity_exists(db: AsyncSession, *, entity_type: str, entity_id: str) -> None:
@@ -53,18 +72,23 @@ async def get_operator_workflow_summary(
     )
 
 
-@router.get("/urgencies", response_model=list[OperatorUrgencyItemRead])
+@router.get("/urgencies", response_model=OperatorUrgencyListRead)
 async def get_operator_urgency_items(
     kind: str | None = Query(None),
     operator_status: str | None = Query(None),
     owner_key: str | None = Query(None),
     view: str | None = Query(None),
     q: str | None = Query(None),
+    overdue_only: bool = Query(False),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    sort_by: str = Query("last_action_at"),
+    sort_dir: str = Query("desc"),
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_admin),
 ):
     items = await fetch_operator_urgency_items(db)
-    return filter_operator_urgency_items(
+    filtered = filter_operator_urgency_items(
         items,
         kind=kind,
         operator_status=operator_status,
@@ -74,6 +98,28 @@ async def get_operator_urgency_items(
         current_user_id=str(current_user.user_id),
         current_owner_label=getattr(current_user, "full_name", None) or getattr(current_user, "email", None),
     )
+    if overdue_only:
+        filtered = [
+            item
+            for item in filtered
+            if (item.get("operator_workflow") or {}).get("follow_up_at")
+            and (_parse_dt((item.get("operator_workflow") or {}).get("follow_up_at")) or datetime.max.replace(tzinfo=timezone.utc))
+            <= datetime.now(timezone.utc)
+        ]
+    owner_load = summarize_operator_urgency_owner_load(filtered)
+    queue_summary = summarize_operator_urgency_queues(filtered)
+    sorted_items = sort_operator_urgency_items(filtered, sort_by=sort_by, sort_dir=sort_dir)
+    paginated = paginate_operator_urgency_items(sorted_items, limit=limit, offset=offset)
+    return {
+        "items": paginated,
+        "total": len(filtered),
+        "limit": limit,
+        "offset": offset,
+        "sort_by": sort_by,
+        "sort_dir": sort_dir,
+        "owner_load": owner_load,
+        "queue_summary": queue_summary,
+    }
 
 
 @router.get("/{entity_type}/{entity_id}", response_model=OperatorWorkflowRead | None)
@@ -115,3 +161,27 @@ async def put_operator_work_item(
     )
     await db.commit()
     return result
+
+
+@router.post("/batch", response_model=OperatorWorkflowBatchResultRead)
+async def batch_upsert_operator_work_items(
+    payload: OperatorWorkflowBatchUpsert,
+    db: AsyncSession = Depends(get_db),
+    _: Users = Depends(get_current_admin),
+):
+    changes = payload.model_dump(exclude_unset=True, exclude={"targets"})
+    results = []
+    for target in payload.targets:
+        normalized = str(target.entity_type).strip().lower()
+        if normalized not in ALLOWED_ENTITY_TYPES:
+            raise HTTPException(status_code=400, detail="entity_type non supporte.")
+        await _ensure_entity_exists(db, entity_type=normalized, entity_id=str(target.entity_id))
+        result = await upsert_operator_work_item(
+            db,
+            entity_type=normalized,
+            entity_id=str(target.entity_id),
+            changes=changes,
+        )
+        results.append(result)
+    await db.commit()
+    return {"updated": len(results), "items": results}

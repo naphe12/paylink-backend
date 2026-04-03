@@ -193,6 +193,7 @@ def test_request_escrow_refund_http_passes_step_up_method(monkeypatch):
     from app.routers.escrow import escrow as escrow_router_module
 
     monkeypatch.setattr(step_up_module.settings, "ADMIN_STEP_UP_ENABLED", True)
+    monkeypatch.setattr(step_up_module.settings, "APP_ENV", "dev")
     monkeypatch.setattr(step_up_module.settings, "ADMIN_STEP_UP_ALLOW_HEADER_FALLBACK", True)
     monkeypatch.setattr(escrow_router_module.EscrowService, "get_order", fake_get_order)
     monkeypatch.setattr(escrow_router_module.EscrowDisputeService, "request_refund", fake_request_refund)

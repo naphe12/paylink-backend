@@ -26,7 +26,14 @@ from app.dependencies.auth import get_current_user, get_current_user_db,get_opti
 from app.models.user_auth import UserAuth
 from app.models.users import Users
 from app.schemas.users import UsersCreate, UsersRead
-from app.dependencies.step_up import create_admin_step_up_token
+from app.dependencies.step_up import (
+    bind_admin_step_up_token_to_request,
+    create_admin_step_up_token,
+    is_admin_step_up_header_fallback_enabled,
+    register_admin_step_up_token,
+)
+from app.services.audit_service import audit_log
+from app.services.auth_sessions import get_request_ip, get_request_user_agent
 from app.services.mailer import send_email
 from app.services.mailjet_service import MailjetEmailService
 from app.services.auth_sessions import issue_refresh_session, revoke_refresh_session, rotate_refresh_session
@@ -222,6 +229,7 @@ class AdminStepUpRequest(BaseModel):
 @router.post("/admin-step-up")
 async def issue_admin_step_up(
     data: AdminStepUpRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user_db),
 ):
@@ -233,6 +241,32 @@ async def issue_admin_step_up(
         raise HTTPException(status_code=401, detail="Mot de passe admin incorrect")
 
     token = create_admin_step_up_token(user=current_user, action=data.action)
+    await register_admin_step_up_token(token=token, user=current_user, action=data.action)
+    await bind_admin_step_up_token_to_request(token=token, request=request)
+    request_id = getattr(getattr(request, "state", None), "request_id", None)
+    if hasattr(db, "execute"):
+        try:
+            await audit_log(
+                db,
+                actor_user_id=str(current_user.user_id),
+                actor_role=str(current_user.role),
+                action="ADMIN_STEP_UP_ISSUED",
+                entity_type="ADMIN_STEP_UP",
+                entity_id=None,
+                before_state=None,
+                after_state={
+                    "requested_action": data.action or "*",
+                    "expires_in_seconds": int(max(int(settings.ADMIN_STEP_UP_TOKEN_EXPIRE_MINUTES or 5), 1) * 60),
+                    "session_bound": bool(request.headers.get("authorization")),
+                    "request_id": request_id,
+                },
+                ip=get_request_ip(request),
+                user_agent=get_request_user_agent(request),
+            )
+            if hasattr(db, "commit"):
+                await db.commit()
+        except Exception:
+            pass
     return {
         "token": token,
         "token_type": "admin_step_up",
@@ -252,7 +286,7 @@ async def get_admin_step_up_status(
     return {
         "enabled": bool(settings.ADMIN_STEP_UP_ENABLED),
         "header_name": str(settings.ADMIN_STEP_UP_HEADER_NAME or "X-Admin-Confirm"),
-        "header_fallback_enabled": bool(settings.ADMIN_STEP_UP_ALLOW_HEADER_FALLBACK),
+        "header_fallback_enabled": is_admin_step_up_header_fallback_enabled(),
         "token_header_name": str(settings.ADMIN_STEP_UP_TOKEN_HEADER_NAME or "X-Admin-Step-Up-Token"),
         "token_expires_in_seconds": int(max(int(settings.ADMIN_STEP_UP_TOKEN_EXPIRE_MINUTES or 5), 1) * 60),
     }

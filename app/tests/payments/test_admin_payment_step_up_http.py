@@ -103,6 +103,7 @@ def test_manual_reconcile_passes_step_up_method(monkeypatch):
     from app.routers.admin import payments as admin_payments_module
 
     monkeypatch.setattr(step_up_module.settings, "ADMIN_STEP_UP_ENABLED", True)
+    monkeypatch.setattr(step_up_module.settings, "APP_ENV", "dev")
     monkeypatch.setattr(step_up_module.settings, "ADMIN_STEP_UP_ALLOW_HEADER_FALLBACK", True)
     monkeypatch.setattr(admin_payments_module, "admin_reconcile_payment_intent", fake_admin_reconcile_payment_intent)
     monkeypatch.setattr(admin_payments_module, "get_admin_payment_intent_detail", fake_get_admin_payment_intent_detail)

@@ -147,15 +147,22 @@ def test_get_operator_urgencies_http(monkeypatch):
     from app.routers.admin import ops_workflow as module
 
     monkeypatch.setattr(module, "fetch_operator_urgency_items", fake_fetch_urgencies)
+    monkeypatch.setattr(module, "summarize_operator_urgency_owner_load", lambda items: [{"owner_key": "ops escrow", "owner_label": "Ops Escrow", "count": 1, "blocked_count": 1, "overdue_follow_up_count": 0, "critical_count": 1}])
+    monkeypatch.setattr(module, "summarize_operator_urgency_queues", lambda items: [{"kind": "escrow", "total": 1, "blocked_count": 1, "overdue_follow_up_count": 0, "stale_count": 1, "critical_count": 1}])
+    monkeypatch.setattr(module, "sort_operator_urgency_items", lambda items, **kwargs: items)
+    monkeypatch.setattr(module, "paginate_operator_urgency_items", lambda items, **kwargs: items)
 
     client = _build_test_client()
     response = client.get("/admin/ops/work-items/urgencies")
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload[0]["entity_type"] == "escrow_order"
-    assert payload[0]["priority"] == "critical"
-    assert payload[0]["to"] == "/dashboard/admin/escrow?queue=stale"
+    assert payload["total"] == 1
+    assert payload["items"][0]["entity_type"] == "escrow_order"
+    assert payload["items"][0]["priority"] == "critical"
+    assert payload["items"][0]["to"] == "/dashboard/admin/escrow?queue=stale"
+    assert payload["queue_summary"][0]["kind"] == "escrow"
+    assert payload["owner_load"][0]["owner_label"] == "Ops Escrow"
 
 
 def test_get_operator_urgencies_http_with_filters(monkeypatch):
@@ -202,6 +209,21 @@ def test_get_operator_urgencies_http_with_filters(monkeypatch):
 
     monkeypatch.setattr(module, "fetch_operator_urgency_items", fake_fetch_urgencies)
     monkeypatch.setattr(module, "filter_operator_urgency_items", fake_filter)
+    monkeypatch.setattr(module, "summarize_operator_urgency_owner_load", lambda items: [{"owner_key": "desk arbitrage", "owner_label": "Desk Arbitrage", "count": 1, "blocked_count": 1, "overdue_follow_up_count": 0, "critical_count": 1}])
+    monkeypatch.setattr(module, "summarize_operator_urgency_queues", lambda items: [{"kind": "escrow", "total": 1, "blocked_count": 1, "overdue_follow_up_count": 0, "stale_count": 1, "critical_count": 1}])
+
+    def fake_sort(items, **kwargs):
+        assert kwargs["sort_by"] == "last_action_at"
+        assert kwargs["sort_dir"] == "desc"
+        return items
+
+    def fake_paginate(items, **kwargs):
+        assert kwargs["limit"] == 50
+        assert kwargs["offset"] == 0
+        return items
+
+    monkeypatch.setattr(module, "sort_operator_urgency_items", fake_sort)
+    monkeypatch.setattr(module, "paginate_operator_urgency_items", fake_paginate)
 
     client = _build_test_client()
     client.app.dependency_overrides[current_admin_dep] = override_get_current_admin
@@ -211,5 +233,60 @@ def test_get_operator_urgencies_http_with_filters(monkeypatch):
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload[0]["title"] == "filtered"
-    assert payload[0]["owner"] == "Desk Arbitrage"
+    assert payload["items"][0]["title"] == "filtered"
+    assert payload["items"][0]["owner"] == "Desk Arbitrage"
+    assert payload["owner_load"][0]["owner_key"] == "desk arbitrage"
+
+
+def test_batch_upsert_operator_work_items_http(monkeypatch):
+    first_id = uuid4()
+    second_id = uuid4()
+    calls = []
+
+    async def fake_ensure_entity_exists(db, *, entity_type, entity_id):
+        calls.append(("ensure", entity_type, entity_id))
+
+    async def fake_upsert(db, *, entity_type, entity_id, changes):
+        calls.append(("upsert", entity_type, entity_id, changes))
+        return {
+            "work_item_id": str(uuid4()),
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "operator_status": changes["operator_status"],
+            "owner_user_id": None,
+            "owner_name": None,
+            "blocked_reason": changes.get("blocked_reason"),
+            "notes": changes.get("notes"),
+            "follow_up_at": None,
+            "last_action_at": "2026-03-29T12:00:00Z",
+            "created_at": "2026-03-29T12:00:00Z",
+            "updated_at": "2026-03-29T12:00:00Z",
+        }
+
+    from app.routers.admin import ops_workflow as module
+
+    monkeypatch.setattr(module, "_ensure_entity_exists", fake_ensure_entity_exists)
+    monkeypatch.setattr(module, "upsert_operator_work_item", fake_upsert)
+
+    client = _build_test_client()
+    response = client.post(
+        "/admin/ops/work-items/batch",
+        json={
+            "targets": [
+                {"entity_type": "payment_intent", "entity_id": str(first_id)},
+                {"entity_type": "payment_intent", "entity_id": str(second_id)},
+            ],
+            "operator_status": "blocked",
+            "blocked_reason": "Provider outage",
+            "notes": "Batch action",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["updated"] == 2
+    assert len(payload["items"]) == 2
+    assert calls[0] == ("ensure", "payment_intent", str(first_id))
+    assert calls[2] == ("ensure", "payment_intent", str(second_id))
+    assert calls[1][3]["operator_status"] == "blocked"
+    assert calls[1][3]["blocked_reason"] == "Provider outage"

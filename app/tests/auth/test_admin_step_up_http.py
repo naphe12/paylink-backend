@@ -57,9 +57,12 @@ def test_issue_admin_step_up_token_http(monkeypatch):
 
 def test_get_admin_step_up_status_http(monkeypatch):
     from app.routers.auth import auth as auth_router_module
+    from app.dependencies import step_up as step_up_module
 
     monkeypatch.setattr(auth_router_module.settings, "ADMIN_STEP_UP_ENABLED", True)
     monkeypatch.setattr(auth_router_module.settings, "ADMIN_STEP_UP_TOKEN_EXPIRE_MINUTES", 7)
+    monkeypatch.setattr(step_up_module.settings, "APP_ENV", "prod")
+    monkeypatch.setattr(step_up_module.settings, "ADMIN_STEP_UP_ALLOW_HEADER_FALLBACK", True)
 
     client = _build_test_client(auth_record=SimpleNamespace(password_hash="hashed"))
     response = client.get("/auth/admin-step-up/status")
