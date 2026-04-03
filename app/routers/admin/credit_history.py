@@ -14,6 +14,65 @@ from app.models.users import Users
 router = APIRouter(prefix="/admin/credit-history", tags=["Admin Credit History"])
 
 
+@router.get("/users")
+async def list_credit_history_users(
+    mode: str = Query("all"),
+    q: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    admin: Users = Depends(get_current_admin),
+):
+    normalized_mode = str(mode or "all").strip().lower()
+
+    history_users_stmt = (
+        select(CreditLineHistory.user_id.label("user_id"))
+        .group_by(CreditLineHistory.user_id)
+    )
+    event_users_stmt = (
+        select(CreditLineEvents.user_id.label("user_id"))
+        .group_by(CreditLineEvents.user_id)
+    )
+
+    if normalized_mode == "history":
+        user_ids_subquery = history_users_stmt.subquery()
+    elif normalized_mode == "events":
+        user_ids_subquery = event_users_stmt.subquery()
+    else:
+        user_ids_subquery = history_users_stmt.union(event_users_stmt).subquery()
+
+    stmt = (
+        select(
+            Users.user_id,
+            Users.full_name,
+            Users.email,
+            Users.phone_e164,
+        )
+        .join(user_ids_subquery, user_ids_subquery.c.user_id == Users.user_id)
+        .where(Users.role == "client")
+        .order_by(Users.full_name.asc(), Users.created_at.desc())
+        .limit(limit)
+    )
+
+    if q and q.strip():
+        pattern = f"%{q.strip()}%"
+        stmt = stmt.where(
+            (Users.full_name.ilike(pattern))
+            | (Users.email.ilike(pattern))
+            | (Users.phone_e164.ilike(pattern))
+        )
+
+    rows = (await db.execute(stmt)).all()
+    return [
+        {
+            "user_id": str(user_id),
+            "full_name": full_name,
+            "email": email,
+            "phone_e164": phone_e164,
+        }
+        for user_id, full_name, email, phone_e164 in rows
+    ]
+
+
 @router.get("/")
 async def list_credit_history(
     user_id: UUID | None = Query(None),
