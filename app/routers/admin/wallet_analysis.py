@@ -10,6 +10,14 @@ from app.dependencies.auth import get_current_admin
 router = APIRouter(prefix="/admin/wallet-analysis", tags=["Admin Wallet Analysis"])
 
 
+async def _relation_exists(db: AsyncSession, relation_name: str) -> bool:
+    result = await db.execute(
+        text("SELECT to_regclass(:relation_name) IS NOT NULL AS exists"),
+        {"relation_name": relation_name},
+    )
+    return bool(result.scalar())
+
+
 @router.get("")
 @router.get("/")
 async def get_wallet_analysis(
@@ -47,45 +55,51 @@ async def get_wallet_analysis(
         "cutoff_date": cutoff_date,
         "limit": limit,
     }
+    legacy_clients_exists = await _relation_exists(db, "legacy.clients")
+    legacy_credit_du_exists = await _relation_exists(db, "legacy.client_credit_du")
+    paylink_credit_payments_exists = await _relation_exists(db, "paylink.credit_line_payments")
+    legacy_sending_logs_exists = await _relation_exists(db, "legacy.sending_logs")
 
-    legacy_clients = (
-        await db.execute(
-            text(
-                """
-                WITH target_user AS (
-                  SELECT
-                    user_id,
-                    lower(coalesce(email, '')) AS email_norm,
-                    regexp_replace(coalesce(phone_e164, ''), '\\D', '', 'g') AS phone_norm,
-                    lower(coalesce(username, '')) AS username_norm
-                  FROM paylink.users
-                  WHERE user_id = CAST(:user_id AS uuid)
-                )
-                SELECT
-                  c.id,
-                  c.name,
-                  c.email,
-                  c.phone,
-                  c.username,
-                  c.balance,
-                  CASE
-                    WHEN lower(coalesce(c.email, '')) = tu.email_norm AND tu.email_norm <> '' THEN 'email'
-                    WHEN regexp_replace(coalesce(c.phone, ''), '\\D', '', 'g') = tu.phone_norm AND tu.phone_norm <> '' THEN 'phone'
-                    WHEN lower(coalesce(c.username, '')) = tu.username_norm AND tu.username_norm <> '' THEN 'username'
-                    ELSE 'unknown'
-                  END AS match_type
-                FROM legacy.clients c
-                CROSS JOIN target_user tu
-                WHERE
-                  (lower(coalesce(c.email, '')) = tu.email_norm AND tu.email_norm <> '')
-                  OR (regexp_replace(coalesce(c.phone, ''), '\\D', '', 'g') = tu.phone_norm AND tu.phone_norm <> '')
-                  OR (lower(coalesce(c.username, '')) = tu.username_norm AND tu.username_norm <> '')
-                ORDER BY c.id
-                """
-            ),
-            params,
-        )
-    ).mappings().all()
+    legacy_clients = []
+    if legacy_clients_exists:
+        legacy_clients = (
+            await db.execute(
+                text(
+                    """
+                    WITH target_user AS (
+                      SELECT
+                        user_id,
+                        lower(coalesce(email, '')) AS email_norm,
+                        regexp_replace(coalesce(phone_e164, ''), '\\D', '', 'g') AS phone_norm,
+                        lower(coalesce(username, '')) AS username_norm
+                      FROM paylink.users
+                      WHERE user_id = CAST(:user_id AS uuid)
+                    )
+                    SELECT
+                      c.id,
+                      c.name,
+                      c.email,
+                      c.phone,
+                      c.username,
+                      c.balance,
+                      CASE
+                        WHEN lower(coalesce(c.email, '')) = tu.email_norm AND tu.email_norm <> '' THEN 'email'
+                        WHEN regexp_replace(coalesce(c.phone, ''), '\\D', '', 'g') = tu.phone_norm AND tu.phone_norm <> '' THEN 'phone'
+                        WHEN lower(coalesce(c.username, '')) = tu.username_norm AND tu.username_norm <> '' THEN 'username'
+                        ELSE 'unknown'
+                      END AS match_type
+                    FROM legacy.clients c
+                    CROSS JOIN target_user tu
+                    WHERE
+                      (lower(coalesce(c.email, '')) = tu.email_norm AND tu.email_norm <> '')
+                      OR (regexp_replace(coalesce(c.phone, ''), '\\D', '', 'g') = tu.phone_norm AND tu.phone_norm <> '')
+                      OR (lower(coalesce(c.username, '')) = tu.username_norm AND tu.username_norm <> '')
+                    ORDER BY c.id
+                    """
+                ),
+                params,
+            )
+        ).mappings().all()
 
     wallet_rows = (
         await db.execute(
@@ -126,175 +140,227 @@ async def get_wallet_analysis(
         )
     ).mappings().first()
 
-    credit_due_summary = (
-        await db.execute(
-            text(
-                """
-                WITH matched_clients AS (
-                  SELECT c.id
-                  FROM legacy.clients c
-                  JOIN paylink.users u
-                    ON (
-                      lower(coalesce(c.email, '')) = lower(coalesce(u.email, ''))
-                      OR regexp_replace(coalesce(c.phone, ''), '\\D', '', 'g') = regexp_replace(coalesce(u.phone_e164, ''), '\\D', '', 'g')
-                      OR lower(coalesce(c.username, '')) = lower(coalesce(u.username, ''))
+    credit_due_summary = {
+        "total_rows": 0,
+        "total_credit_used": 0,
+        "total_credit_repaid": 0,
+        "net_credit_delta": 0,
+        "rows_after_cutoff": 0,
+    }
+    if legacy_clients_exists and legacy_credit_du_exists:
+        credit_due_summary = (
+            await db.execute(
+                text(
+                    """
+                    WITH matched_clients AS (
+                      SELECT c.id
+                      FROM legacy.clients c
+                      JOIN paylink.users u
+                        ON (
+                          lower(coalesce(c.email, '')) = lower(coalesce(u.email, ''))
+                          OR regexp_replace(coalesce(c.phone, ''), '\\D', '', 'g') = regexp_replace(coalesce(u.phone_e164, ''), '\\D', '', 'g')
+                          OR lower(coalesce(c.username, '')) = lower(coalesce(u.username, ''))
+                        )
+                      WHERE u.user_id = CAST(:user_id AS uuid)
                     )
-                  WHERE u.user_id = CAST(:user_id AS uuid)
-                )
+                    SELECT
+                      COUNT(*)::int AS total_rows,
+                      COALESCE(SUM(CASE WHEN montant > 0 THEN montant ELSE 0 END), 0) AS total_credit_used,
+                      COALESCE(SUM(CASE WHEN montant < 0 THEN ABS(montant) ELSE 0 END), 0) AS total_credit_repaid,
+                      COALESCE(SUM(montant), 0) AS net_credit_delta,
+                      COUNT(*) FILTER (WHERE created_at >= CAST(:cutoff_date AS timestamptz))::int AS rows_after_cutoff
+                    FROM legacy.client_credit_du
+                    WHERE clientid IN (SELECT id FROM matched_clients)
+                    """
+                ),
+                params,
+            )
+        ).mappings().first() or credit_due_summary
+
+    credit_payment_summary = {
+        "total_rows": 0,
+        "total_amount": 0,
+        "total_amount_eur": 0,
+        "first_payment_at": None,
+        "last_payment_at": None,
+        "rows_after_cutoff": 0,
+    }
+    if paylink_credit_payments_exists:
+        credit_payment_summary = (
+            await db.execute(
+                text(
+                    """
+                    SELECT
+                      COUNT(*)::int AS total_rows,
+                      COALESCE(SUM(amount), 0) AS total_amount,
+                      COALESCE(SUM(amount_eur), 0) AS total_amount_eur,
+                      MIN(COALESCE(occurred_at, created_at)) AS first_payment_at,
+                      MAX(COALESCE(occurred_at, created_at)) AS last_payment_at,
+                      COUNT(*) FILTER (WHERE COALESCE(occurred_at, created_at) >= CAST(:cutoff_date AS timestamptz))::int AS rows_after_cutoff
+                    FROM paylink.credit_line_payments
+                    WHERE user_id = CAST(:user_id AS uuid)
+                    """
+                ),
+                params,
+            )
+        ).mappings().first() or credit_payment_summary
+
+    sending_summary = {
+        "total_rows": 0,
+        "total_amount": 0,
+        "total_amount_with_fees": 0,
+        "total_sending_amount": 0,
+        "total_receiving_amount": 0,
+        "total_charge": 0,
+        "first_sending_at": None,
+        "last_sending_at": None,
+        "rows_after_cutoff": 0,
+    }
+    if legacy_clients_exists and legacy_sending_logs_exists:
+        sending_summary = (
+            await db.execute(
+                text(
+                    """
+                    WITH matched_clients AS (
+                      SELECT c.id
+                      FROM legacy.clients c
+                      JOIN paylink.users u
+                        ON (
+                          lower(coalesce(c.email, '')) = lower(coalesce(u.email, ''))
+                          OR regexp_replace(coalesce(c.phone, ''), '\\D', '', 'g') = regexp_replace(coalesce(u.phone_e164, ''), '\\D', '', 'g')
+                          OR lower(coalesce(c.username, '')) = lower(coalesce(u.username, ''))
+                        )
+                      WHERE u.user_id = CAST(:user_id AS uuid)
+                    )
+                    SELECT
+                      COUNT(*)::int AS total_rows,
+                      COALESCE(SUM(amount), 0) AS total_amount,
+                      COALESCE(SUM(total_amount), 0) AS total_amount_with_fees,
+                      COALESCE(SUM(sending_amount), 0) AS total_sending_amount,
+                      COALESCE(SUM(receiving_amount), 0) AS total_receiving_amount,
+                      COALESCE(SUM(charge), 0) AS total_charge,
+                      MIN(created_at) AS first_sending_at,
+                      MAX(created_at) AS last_sending_at,
+                      COUNT(*) FILTER (WHERE created_at >= CAST(:cutoff_date AS timestamptz))::int AS rows_after_cutoff
+                    FROM legacy.sending_logs
+                    WHERE user_id IN (SELECT id FROM matched_clients)
+                    """
+                ),
+                params,
+            )
+        ).mappings().first() or sending_summary
+
+    timeline_rows = []
+    if legacy_clients_exists:
+        timeline_parts = [
+            """
+            SELECT
+              occurred_at AS event_at,
+              'client_balance_event'::text AS source,
+              amount_delta::numeric AS amount,
+              currency::text AS currency,
+              source AS subtype,
+              legacy_id::text AS reference
+            FROM paylink.client_balance_events
+            WHERE user_id = CAST(:user_id AS uuid)
+            """
+        ]
+        if legacy_credit_du_exists:
+            timeline_parts.append(
+                """
                 SELECT
-                  COUNT(*)::int AS total_rows,
-                  COALESCE(SUM(CASE WHEN montant > 0 THEN montant ELSE 0 END), 0) AS total_credit_used,
-                  COALESCE(SUM(CASE WHEN montant < 0 THEN ABS(montant) ELSE 0 END), 0) AS total_credit_repaid,
-                  COALESCE(SUM(montant), 0) AS net_credit_delta,
-                  COUNT(*) FILTER (WHERE created_at >= CAST(:cutoff_date AS timestamptz))::int AS rows_after_cutoff
+                  created_at AS event_at,
+                  'legacy_credit_du'::text AS source,
+                  montant::numeric AS amount,
+                  currency::text AS currency,
+                  CASE WHEN montant > 0 THEN 'credit_used' WHEN montant < 0 THEN 'credit_repaid' ELSE 'neutral' END AS subtype,
+                  id::text AS reference
                 FROM legacy.client_credit_du
                 WHERE clientid IN (SELECT id FROM matched_clients)
                 """
-            ),
-            params,
-        )
-    ).mappings().first()
-
-    credit_payment_summary = (
-        await db.execute(
-            text(
+            )
+        if paylink_credit_payments_exists:
+            timeline_parts.append(
                 """
-                WITH matched_clients AS (
-                  SELECT c.id
-                  FROM legacy.clients c
-                  JOIN paylink.users u
-                    ON (
-                      lower(coalesce(c.email, '')) = lower(coalesce(u.email, ''))
-                      OR regexp_replace(coalesce(c.phone, ''), '\\D', '', 'g') = regexp_replace(coalesce(u.phone_e164, ''), '\\D', '', 'g')
-                      OR lower(coalesce(c.username, '')) = lower(coalesce(u.username, ''))
-                    )
-                  WHERE u.user_id = CAST(:user_id AS uuid)
-                )
                 SELECT
-                  COUNT(*)::int AS total_rows,
-                  COALESCE(SUM(amount), 0) AS total_amount,
-                  COALESCE(SUM(amount_eur), 0) AS total_amount_eur,
-                  MIN(created_at) AS first_payment_at,
-                  MAX(created_at) AS last_payment_at,
-                  COUNT(*) FILTER (WHERE created_at >= CAST(:cutoff_date AS timestamptz))::int AS rows_after_cutoff
-                FROM legacy.credit_line_payments
-                WHERE clientid IN (SELECT id FROM matched_clients)
+                  COALESCE(occurred_at, created_at) AS event_at,
+                  'credit_line_payment'::text AS source,
+                  amount::numeric AS amount,
+                  currency_code::text AS currency,
+                  'payment'::text AS subtype,
+                  payment_id::text AS reference
+                FROM paylink.credit_line_payments
+                WHERE user_id = CAST(:user_id AS uuid)
                 """
-            ),
-            params,
-        )
-    ).mappings().first()
-
-    sending_summary = (
-        await db.execute(
-            text(
+            )
+        if legacy_sending_logs_exists:
+            timeline_parts.append(
                 """
-                WITH matched_clients AS (
-                  SELECT c.id
-                  FROM legacy.clients c
-                  JOIN paylink.users u
-                    ON (
-                      lower(coalesce(c.email, '')) = lower(coalesce(u.email, ''))
-                      OR regexp_replace(coalesce(c.phone, ''), '\\D', '', 'g') = regexp_replace(coalesce(u.phone_e164, ''), '\\D', '', 'g')
-                      OR lower(coalesce(c.username, '')) = lower(coalesce(u.username, ''))
-                    )
-                  WHERE u.user_id = CAST(:user_id AS uuid)
-                )
                 SELECT
-                  COUNT(*)::int AS total_rows,
-                  COALESCE(SUM(amount), 0) AS total_amount,
-                  COALESCE(SUM(total_amount), 0) AS total_amount_with_fees,
-                  COALESCE(SUM(sending_amount), 0) AS total_sending_amount,
-                  COALESCE(SUM(receiving_amount), 0) AS total_receiving_amount,
-                  COALESCE(SUM(charge), 0) AS total_charge,
-                  MIN(created_at) AS first_sending_at,
-                  MAX(created_at) AS last_sending_at,
-                  COUNT(*) FILTER (WHERE created_at >= CAST(:cutoff_date AS timestamptz))::int AS rows_after_cutoff
+                  created_at AS event_at,
+                  'legacy_sending'::text AS source,
+                  amount::numeric AS amount,
+                  currency::text AS currency,
+                  status::text AS subtype,
+                  id::text AS reference
                 FROM legacy.sending_logs
                 WHERE user_id IN (SELECT id FROM matched_clients)
                 """
-            ),
-            params,
-        )
-    ).mappings().first()
-
-    timeline_rows = (
-        await db.execute(
-            text(
-                """
-                WITH matched_clients AS (
-                  SELECT c.id
-                  FROM legacy.clients c
-                  JOIN paylink.users u
-                    ON (
-                      lower(coalesce(c.email, '')) = lower(coalesce(u.email, ''))
-                      OR regexp_replace(coalesce(c.phone, ''), '\\D', '', 'g') = regexp_replace(coalesce(u.phone_e164, ''), '\\D', '', 'g')
-                      OR lower(coalesce(c.username, '')) = lower(coalesce(u.username, ''))
+            )
+        timeline_rows = (
+            await db.execute(
+                text(
+                    f"""
+                    WITH matched_clients AS (
+                      SELECT c.id
+                      FROM legacy.clients c
+                      JOIN paylink.users u
+                        ON (
+                          lower(coalesce(c.email, '')) = lower(coalesce(u.email, ''))
+                          OR regexp_replace(coalesce(c.phone, ''), '\\D', '', 'g') = regexp_replace(coalesce(u.phone_e164, ''), '\\D', '', 'g')
+                          OR lower(coalesce(c.username, '')) = lower(coalesce(u.username, ''))
+                        )
+                      WHERE u.user_id = CAST(:user_id AS uuid)
+                    ),
+                    unioned AS (
+                      {" UNION ALL ".join(timeline_parts)}
                     )
-                  WHERE u.user_id = CAST(:user_id AS uuid)
+                    SELECT
+                      event_at,
+                      source,
+                      amount,
+                      currency,
+                      subtype,
+                      reference
+                    FROM unioned
+                    ORDER BY event_at DESC NULLS LAST
+                    LIMIT :limit
+                    """
                 ),
-                unioned AS (
-                  SELECT
-                    occurred_at AS event_at,
-                    'client_balance_event'::text AS source,
-                    amount_delta::numeric AS amount,
-                    currency::text AS currency,
-                    source AS subtype,
-                    legacy_id::text AS reference
-                  FROM paylink.client_balance_events
-                  WHERE user_id = CAST(:user_id AS uuid)
-
-                  UNION ALL
-
-                  SELECT
-                    created_at AS event_at,
-                    'legacy_credit_du'::text AS source,
-                    montant::numeric AS amount,
-                    currency::text AS currency,
-                    CASE WHEN montant > 0 THEN 'credit_used' WHEN montant < 0 THEN 'credit_repaid' ELSE 'neutral' END AS subtype,
-                    id::text AS reference
-                  FROM legacy.client_credit_du
-                  WHERE clientid IN (SELECT id FROM matched_clients)
-
-                  UNION ALL
-
-                  SELECT
-                    created_at AS event_at,
-                    'legacy_credit_payment'::text AS source,
-                    amount::numeric AS amount,
-                    currency::text AS currency,
-                    'payment'::text AS subtype,
-                    id::text AS reference
-                  FROM legacy.credit_line_payments
-                  WHERE clientid IN (SELECT id FROM matched_clients)
-
-                  UNION ALL
-
-                  SELECT
-                    created_at AS event_at,
-                    'legacy_sending'::text AS source,
-                    amount::numeric AS amount,
-                    currency::text AS currency,
-                    status::text AS subtype,
-                    id::text AS reference
-                  FROM legacy.sending_logs
-                  WHERE user_id IN (SELECT id FROM matched_clients)
-                )
-                SELECT
-                  event_at,
-                  source,
-                  amount,
-                  currency,
-                  subtype,
-                  reference
-                FROM unioned
-                ORDER BY event_at DESC NULLS LAST
-                LIMIT :limit
-                """
-            ),
-            params,
-        )
-    ).mappings().all()
+                params,
+            )
+        ).mappings().all()
+    else:
+        timeline_rows = (
+            await db.execute(
+                text(
+                    """
+                    SELECT
+                      occurred_at AS event_at,
+                      'client_balance_event'::text AS source,
+                      amount_delta::numeric AS amount,
+                      currency::text AS currency,
+                      source AS subtype,
+                      legacy_id::text AS reference
+                    FROM paylink.client_balance_events
+                    WHERE user_id = CAST(:user_id AS uuid)
+                    ORDER BY occurred_at DESC NULLS LAST
+                    LIMIT :limit
+                    """
+                ),
+                params,
+            )
+        ).mappings().all()
 
     gap_summary = {
         "cutoff_date": cutoff_date,
