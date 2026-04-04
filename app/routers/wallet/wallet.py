@@ -443,6 +443,7 @@ async def list_agent_accounts(
             AgentAccounts.id,
             AgentAccounts.service,
             AgentAccounts.account_service,
+            AgentAccounts.country_code,
             Agents.display_name,
             Agents.agent_id,
         )
@@ -457,8 +458,9 @@ async def list_agent_accounts(
             "agent_name": display_name,
             "service": service,
             "account_service": account_service,
+            "country_code": country_code,
         }
-        for account_id, service, account_service, display_name, agent_id in rows
+        for account_id, service, account_service, country_code, display_name, agent_id in rows
     ]
 
 

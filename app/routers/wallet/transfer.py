@@ -6,8 +6,9 @@ from datetime import datetime
 from datetime import timedelta
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import Response
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import case, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -63,7 +64,14 @@ from app.services.idempotency_service import (
 from app.models.general_settings import GeneralSettings
 from app.models.fx_custom_rates import FxCustomRates
 from app.models.fxconversions import FxConversions
-from app.core.security import create_access_token
+from app.core.security import create_access_token, decode_access_token
+from app.services.payment_note_service import (
+    build_external_transfer_payment_note_pdf,
+    build_external_transfer_payment_note_png,
+    build_payment_instruction_sentence,
+    format_note_amount,
+    resolve_payment_instruction,
+)
 from app.services.external_transfer_rules import (
     map_external_transfer_to_transaction_status,
     transition_external_transfer_status,
@@ -169,6 +177,66 @@ async def _get_sender_country_currency(
         if country_currency:
             return str(country_currency).upper()
     return str(fallback_currency or "EUR").upper()
+
+
+async def _build_payment_note_context(
+    db: AsyncSession,
+    *,
+    transfer: ExternalTransfers,
+    current_user: Users,
+    amount: decimal.Decimal,
+    origin_currency: str,
+    data: ExternalTransferCreate,
+) -> dict | None:
+    instruction = await resolve_payment_instruction(
+        db,
+        user=current_user,
+        origin_currency=origin_currency,
+    )
+    if not instruction:
+        return None
+
+    payment_sentence = build_payment_instruction_sentence(
+        amount=amount,
+        currency=origin_currency,
+        account_service=instruction["account_service"],
+    )
+    backend_base = str(getattr(settings, "BACKEND_URL", "") or "").strip()
+    payment_note_url = None
+    if backend_base:
+        note_token = create_access_token(
+            data={
+                "sub": str(current_user.user_id),
+                "action": "external_transfer_payment_note",
+                "transfer_id": str(transfer.transfer_id),
+            },
+            expires_delta=timedelta(days=14),
+        )
+        payment_note_url = (
+            f"{backend_base.rstrip('/')}/wallet/transfer/external/{transfer.transfer_id}/payment-note.png"
+            f"?token={note_token}"
+        )
+
+    note_payload = {
+        "reference_code": transfer.reference_code or str(transfer.transfer_id),
+        "client_name": current_user.full_name or "",
+        "recipient_name": data.recipient_name,
+        "country_destination": data.country_destination,
+        "amount_text": format_note_amount(amount, origin_currency),
+        "payment_sentence": payment_sentence,
+        "service": instruction["service"],
+        "account_service": instruction["account_service"],
+        "account_country_code": instruction["country_code"],
+        "payment_currency": instruction["payment_currency"],
+    }
+    return {
+        "instruction": instruction,
+        "payment_sentence": payment_sentence,
+        "payment_note_url": payment_note_url,
+        "note_payload": note_payload,
+        "note_filename": f"note-paiement-{transfer.reference_code or transfer.transfer_id}.png",
+        "note_pdf_filename": f"note-paiement-{transfer.reference_code or transfer.transfer_id}.pdf",
+    }
 
 
 def _serialize_external_transfer_read(transfer: ExternalTransfers) -> dict:
@@ -513,6 +581,35 @@ async def _notify_external_transfer(
                     exc,
                 )
 
+    payment_note_context = None
+    should_send_payment_note = False
+    if notify_client and current_user.email:
+        client_wallet = await db.scalar(
+            select(Wallets)
+            .where(Wallets.user_id == current_user.user_id)
+            .order_by(
+                case(
+                    (Wallets.type == "personal", 0),
+                    (Wallets.type == "consumer", 1),
+                    else_=2,
+                ),
+                Wallets.wallet_id.asc(),
+            )
+            .limit(1)
+        )
+        client_wallet_available = decimal.Decimal(getattr(client_wallet, "available", 0) or 0)
+        should_send_payment_note = credit_used > decimal.Decimal("0") or client_wallet_available < decimal.Decimal("0")
+
+    if notify_client and current_user.email and should_send_payment_note:
+        payment_note_context = await _build_payment_note_context(
+            db,
+            transfer=transfer,
+            current_user=current_user,
+            amount=amount,
+            origin_currency=origin_currency,
+            data=data,
+        )
+
     if notify_client and current_user.email:
         try:
             await send_transaction_emails(
@@ -531,6 +628,15 @@ async def _notify_external_transfer(
                 country=data.country_destination,
                 transfer_id=transfer.reference_code,
                 status=transfer.status,
+                payment_instruction_sentence=(
+                    payment_note_context["payment_sentence"] if payment_note_context else None
+                ),
+                payment_account_display=(
+                    payment_note_context["instruction"]["account_display"] if payment_note_context else None
+                ),
+                payment_note_url=(
+                    payment_note_context["payment_note_url"] if payment_note_context else None
+                ),
                 year=datetime.utcnow().year,
             )
         except Exception as exc:
@@ -559,6 +665,20 @@ async def _notify_external_transfer(
             "country": data.country_destination,
         }
         receipt_bytes = build_external_transfer_receipt(receipt_payload)
+        note_bytes = (
+            build_external_transfer_payment_note_pdf(payment_note_context["note_payload"])
+            if payment_note_context
+            else None
+        )
+        attachments = [{"name": f"recu-{transfer.reference_code}.pdf", "content": receipt_bytes}]
+        if note_bytes and payment_note_context:
+            attachments.append(
+                {
+                    "name": payment_note_context["note_pdf_filename"],
+                    "content": note_bytes,
+                    "content_type": "application/pdf",
+                }
+            )
         try:
             await send_transaction_emails(
                 db,
@@ -576,10 +696,17 @@ async def _notify_external_transfer(
                 partner_name=data.partner_name,
                 country=data.country_destination,
                 status=transfer.status,
+                payment_instruction_sentence=(
+                    payment_note_context["payment_sentence"] if payment_note_context else None
+                ),
+                payment_account_display=(
+                    payment_note_context["instruction"]["account_display"] if payment_note_context else None
+                ),
+                payment_note_url=(
+                    payment_note_context["payment_note_url"] if payment_note_context else None
+                ),
                 year=datetime.utcnow().year,
-                attachments=[
-                    {"name": f"recu-{transfer.reference_code}.pdf", "content": receipt_bytes}
-                ],
+                attachments=attachments,
             )
         except Exception as exc:
             logger.exception(
@@ -673,6 +800,61 @@ async def _notify_external_transfer_task(
             transfer_id,
             exc,
         )
+
+
+@router.get("/external/{transfer_id}/payment-note.png")
+async def download_external_transfer_payment_note(
+    transfer_id: str,
+    token: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
+    payload = decode_access_token(token)
+    if payload.get("action") != "external_transfer_payment_note":
+        raise HTTPException(status_code=403, detail="Token invalide pour cette note")
+    if str(payload.get("transfer_id") or "") != str(transfer_id):
+        raise HTTPException(status_code=403, detail="Token transfer mismatch")
+
+    transfer = await db.scalar(
+        select(ExternalTransfers).where(ExternalTransfers.transfer_id == UUID(str(transfer_id)))
+    )
+    if not transfer:
+        raise HTTPException(status_code=404, detail="Transfert introuvable")
+
+    if str(payload.get("sub") or "") != str(transfer.user_id):
+        raise HTTPException(status_code=403, detail="Token utilisateur invalide")
+
+    current_user = await db.scalar(select(Users).where(Users.user_id == transfer.user_id))
+    if not current_user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+
+    metadata = dict(transfer.metadata_ or {})
+    origin_currency = str(metadata.get("origin_currency") or transfer.currency or "EUR").upper()
+    transfer_data = ExternalTransferCreate(
+        partner_name=transfer.partner_name,
+        country_destination=transfer.country_destination,
+        recipient_name=transfer.recipient_name,
+        recipient_phone=transfer.recipient_phone,
+        recipient_email=_normalize_optional_email(metadata.get("recipient_email")),
+        amount=decimal.Decimal(transfer.amount or 0),
+    )
+    payment_note_context = await _build_payment_note_context(
+        db,
+        transfer=transfer,
+        current_user=current_user,
+        amount=decimal.Decimal(transfer.amount or 0),
+        origin_currency=origin_currency,
+        data=transfer_data,
+    )
+    if not payment_note_context:
+        raise HTTPException(status_code=404, detail="Informations de paiement introuvables")
+
+    note_bytes = build_external_transfer_payment_note_png(payment_note_context["note_payload"])
+    filename = payment_note_context["note_filename"]
+    return Response(
+        content=note_bytes,
+        media_type="image/png",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
 
 
 @router.get("/external/beneficiaries")

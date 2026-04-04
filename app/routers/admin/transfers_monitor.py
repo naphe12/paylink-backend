@@ -3,7 +3,8 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select, or_, desc, cast, String, case
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,9 +21,13 @@ from app.models.credit_lines import CreditLines
 from app.models.wallets import Wallets
 from app.routers.wallet.transfer import (
     EXTERNAL_TRANSFER_SETTLEMENT_CURRENCY,
+    _build_payment_note_context,
+    _normalize_optional_email,
     _get_sender_country_currency,
     _resolve_fx_rate,
 )
+from app.schemas.external_transfers import ExternalTransferCreate
+from app.services.payment_note_service import build_external_transfer_payment_note_png
 from app.services.external_transfer_capacity import (
     compute_external_transfer_funding,
     effective_external_transfer_capacity,
@@ -310,6 +315,7 @@ async def list_external_transfers(
             Users.user_id,
             Users.full_name,
             Users.email,
+            ExternalTransfers.transfer_id,
             ExternalTransfers.local_amount,
             ExternalTransfers.currency.label("local_currency"),
             ExternalTransfers.country_destination,
@@ -346,6 +352,7 @@ async def list_external_transfers(
     return [
         {
             "tx_id": str(r.tx_id),
+            "transfer_id": str(r.transfer_id) if getattr(r, "transfer_id", None) else None,
             "amount": serialize_decimal(r.amount),
             "currency": r.currency_code,
             "channel": r.channel,
@@ -364,6 +371,59 @@ async def list_external_transfers(
         }
         for r in rows
     ]
+
+
+@router.get("/{transfer_id}/payment-note.png")
+async def get_admin_external_transfer_payment_note(
+    transfer_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    transfer = await db.scalar(
+        select(ExternalTransfers).where(ExternalTransfers.transfer_id == transfer_id)
+    )
+    if not transfer:
+        raise HTTPException(status_code=404, detail="Transfert introuvable")
+
+    current_user = await db.scalar(select(Users).where(Users.user_id == transfer.user_id))
+    if not current_user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+
+    metadata = dict(transfer.metadata_ or {})
+    origin_currency = str(metadata.get("origin_currency") or transfer.currency or "EUR").upper()
+    credit_used_amount = Decimal(str(metadata.get("credit_used_amount") or "0"))
+    wallet = await db.scalar(_primary_wallet_stmt(transfer.user_id))
+    wallet_available = Decimal(getattr(wallet, "available", 0) or 0)
+    should_send_payment_note = credit_used_amount > Decimal("0") or wallet_available < Decimal("0")
+    if not should_send_payment_note:
+        raise HTTPException(status_code=404, detail="Aucune note requise pour ce transfert")
+
+    transfer_data = ExternalTransferCreate(
+        partner_name=transfer.partner_name,
+        country_destination=transfer.country_destination,
+        recipient_name=transfer.recipient_name,
+        recipient_phone=transfer.recipient_phone,
+        recipient_email=_normalize_optional_email(metadata.get("recipient_email")),
+        amount=Decimal(transfer.amount or 0),
+    )
+    payment_note_context = await _build_payment_note_context(
+        db,
+        transfer=transfer,
+        current_user=current_user,
+        amount=Decimal(transfer.amount or 0),
+        origin_currency=origin_currency,
+        data=transfer_data,
+    )
+    if not payment_note_context:
+        raise HTTPException(status_code=404, detail="Informations de paiement introuvables")
+
+    note_bytes = build_external_transfer_payment_note_png(payment_note_context["note_payload"])
+    filename = payment_note_context["note_filename"]
+    return Response(
+        content=note_bytes,
+        media_type="image/png",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
 
 
 @router.get("/detail/{transfer_ref}")
