@@ -139,11 +139,11 @@ def build_external_transfer_payment_note_png(payload: dict[str, Any]) -> bytes:
     height = 1500
     image = Image.new("RGB", (width, height), _BG_COLOR)
     draw = ImageDraw.Draw(image)
-    title_font = _font(38)
-    subtitle_font = _font(24)
-    section_font = _font(28)
-    body_font = _font(24)
-    small_font = _font(20)
+    title_font = _font(40)
+    subtitle_font = _font(26)
+    section_font = _font(30)
+    body_font = _font(28)
+    small_font = _font(22)
 
     draw.rounded_rectangle(
         (48, 48, width - 48, height - 48),
@@ -171,7 +171,7 @@ def build_external_transfer_payment_note_png(payload: dict[str, Any]) -> bytes:
                 radius=18,
                 fill=(249, 250, 251),
             )
-            draw.text((116, y + 32), label.upper(), fill=_MUTED_COLOR, font=small_font)
+            draw.text((116, y + 32), label.upper(), fill=(0, 0, 0), font=small_font)
             for index, line in enumerate(value_lines):
                 draw.text((430, y + 30 + (index * 22)), line, fill=_TEXT_COLOR, font=body_font)
             y += row_height + 20
@@ -193,7 +193,7 @@ def build_external_transfer_payment_note_png(payload: dict[str, Any]) -> bytes:
     draw.text((88, y), "Instruction", fill=_ACCENT_COLOR, font=section_font)
     y += 28
     for line in wrap(sentence, width=48):
-        draw.text((96, y), line, fill=_TEXT_COLOR, font=body_font)
+        draw.text((96, y), line, fill=(0, 0, 0), font=body_font)
         y += 28
     y += 10
 
@@ -230,7 +230,7 @@ def build_external_transfer_payment_note_pdf(payload: dict[str, Any]) -> bytes:
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 20)
     pdf.cell(0, 12, "PesaPaid - Note de paiement", ln=True, align="C")
-    pdf.set_font("Helvetica", "", 13)
+    pdf.set_font("Helvetica", "B", 14)
     pdf.cell(0, 8, str(payload.get("reference_code") or "-"), ln=True, align="C")
     pdf.ln(6)
 
@@ -240,12 +240,12 @@ def build_external_transfer_payment_note_pdf(payload: dict[str, Any]) -> bytes:
         pdf.set_font("Helvetica", "B", 15)
         pdf.set_text_color(17, 94, 155)
         pdf.cell(0, 9, title, ln=True)
-        pdf.set_font("Helvetica", "", 13)
+        pdf.set_font("Helvetica", "B", 14)
         pdf.set_text_color(0, 0, 0)
         for label, value in rows:
-            pdf.set_font("Helvetica", "B", 12)
+            pdf.set_font("Helvetica", "B", 14)
             pdf.cell(58, 7, f"{label} :", ln=0)
-            pdf.set_font("Helvetica", "", 13)
+            pdf.set_font("Helvetica", "B", 14)
             pdf.multi_cell(0, 7, str(value or "-"))
         pdf.ln(1)
 
@@ -264,7 +264,7 @@ def build_external_transfer_payment_note_pdf(payload: dict[str, Any]) -> bytes:
     pdf.set_font("Helvetica", "B", 15)
     pdf.set_text_color(17, 94, 155)
     pdf.cell(0, 9, "Instruction", ln=True)
-    pdf.set_font("Helvetica", "", 13)
+    pdf.set_font("Helvetica", "B", 14)
     pdf.set_text_color(0, 0, 0)
     pdf.multi_cell(0, 7, str(payload.get("payment_sentence") or "-"))
     pdf.ln(1)
@@ -279,8 +279,8 @@ def build_external_transfer_payment_note_pdf(payload: dict[str, Any]) -> bytes:
         ],
     )
 
-    pdf.set_font("Helvetica", "I", 11)
-    pdf.set_text_color(75, 85, 99)
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.set_text_color(0, 0, 0)
     pdf.multi_cell(
         0,
         5.5,
