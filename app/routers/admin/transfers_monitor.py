@@ -444,6 +444,64 @@ async def get_admin_external_transfer_payment_note(
     )
 
 
+@router.get("/{transfer_id}/payment-note-context")
+async def get_admin_external_transfer_payment_note_context(
+    transfer_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    transfer = await db.scalar(
+        select(ExternalTransfers).where(ExternalTransfers.transfer_id == transfer_id)
+    )
+    if not transfer:
+        raise HTTPException(status_code=404, detail="Transfert introuvable")
+
+    current_user = await db.scalar(select(Users).where(Users.user_id == transfer.user_id))
+    if not current_user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+
+    metadata = dict(transfer.metadata_ or {})
+    origin_currency = str(metadata.get("origin_currency") or transfer.currency or "EUR").upper()
+    credit_used_amount = Decimal(str(metadata.get("credit_used_amount") or "0"))
+    wallet = await db.scalar(_primary_wallet_stmt(transfer.user_id))
+    wallet_available = Decimal(getattr(wallet, "available", 0) or 0)
+    payment_note_required = _is_payment_note_required(
+        transfer=transfer,
+        metadata=metadata,
+        credit_used=credit_used_amount,
+        wallet_available=wallet_available,
+    ) or _is_recent_payment_note_candidate(transfer.created_at)
+
+    transfer_data = ExternalTransferCreate(
+        partner_name=transfer.partner_name,
+        country_destination=transfer.country_destination,
+        recipient_name=transfer.recipient_name,
+        recipient_phone=transfer.recipient_phone,
+        recipient_email=_normalize_optional_email(metadata.get("recipient_email")),
+        amount=Decimal(transfer.amount or 0),
+    )
+    payment_note_context = await _build_payment_note_context(
+        db,
+        transfer=transfer,
+        current_user=current_user,
+        amount=Decimal(transfer.amount or 0),
+        origin_currency=origin_currency,
+        data=transfer_data,
+    )
+    if not payment_note_context:
+        raise HTTPException(status_code=404, detail="Informations de paiement introuvables")
+
+    return {
+        "transfer_id": str(transfer.transfer_id),
+        "reference_code": transfer.reference_code,
+        "created_at": transfer.created_at.isoformat() if transfer.created_at else None,
+        "status": str(transfer.status or ""),
+        "payment_note_required": payment_note_required,
+        "note_payload": payment_note_context["note_payload"],
+        "payment_sentence": payment_note_context["payment_sentence"],
+    }
+
+
 @router.get("/detail/{transfer_ref}")
 async def get_external_transfer_detail(
     transfer_ref: str,
