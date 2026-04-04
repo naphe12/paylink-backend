@@ -37,6 +37,7 @@ from app.services.external_transfer_capacity import (
 EXTERNAL_CHANNELS = {
     "external_transfer",
 }
+RECENT_PAYMENT_NOTE_WINDOW_DAYS = 30
 
 router = APIRouter(prefix="/admin/transfers", tags=["Admin Transfers"])
 
@@ -134,6 +135,14 @@ def _extract_transfer_flags(metadata: dict | None) -> dict:
         "funding_pending": bool(payload.get("funding_pending")),
         "required_credit_topup": payload.get("required_credit_topup"),
     }
+
+
+def _is_recent_payment_note_candidate(created_at: datetime | None) -> bool:
+    if created_at is None:
+        return False
+    reference = datetime.now(timezone.utc)
+    value = created_at if getattr(created_at, "tzinfo", None) else created_at.replace(tzinfo=timezone.utc)
+    return value >= (reference - timedelta(days=RECENT_PAYMENT_NOTE_WINDOW_DAYS))
 
 
 @router.post("/simulate-external")
@@ -370,7 +379,7 @@ async def list_external_transfers(
             "transfer_metadata": dict(r.transfer_metadata or {}),
             "payment_note_required": _is_payment_note_required(
                 metadata=dict(r.transfer_metadata or {})
-            ),
+            ) or _is_recent_payment_note_candidate(r.created_at),
             **_extract_transfer_flags(dict(r.transfer_metadata or {})),
         }
         for r in rows
@@ -403,7 +412,7 @@ async def get_admin_external_transfer_payment_note(
         metadata=metadata,
         credit_used=credit_used_amount,
         wallet_available=wallet_available,
-    )
+    ) or _is_recent_payment_note_candidate(transfer.created_at)
     if not should_send_payment_note:
         raise HTTPException(status_code=404, detail="Aucune note requise pour ce transfert")
 
