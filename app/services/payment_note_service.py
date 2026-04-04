@@ -136,14 +136,14 @@ def build_payment_instruction_sentence(
 
 def build_external_transfer_payment_note_png(payload: dict[str, Any]) -> bytes:
     width = 1200
-    height = 1500
+    height = 1360
     image = Image.new("RGB", (width, height), _BG_COLOR)
     draw = ImageDraw.Draw(image)
-    title_font = _font(40)
-    subtitle_font = _font(26)
+    title_font = _font(42)
+    subtitle_font = _font(28)
     section_font = _font(30)
-    body_font = _font(28)
-    small_font = _font(22)
+    body_font = _font(30)
+    small_font = _font(24)
 
     draw.rounded_rectangle(
         (48, 48, width - 48, height - 48),
@@ -157,25 +157,27 @@ def build_external_transfer_payment_note_png(payload: dict[str, Any]) -> bytes:
     draw.text((88, 148), "Note de paiement", fill=(230, 238, 246), font=subtitle_font)
     draw.text((width - 360, 108), str(payload.get("reference_code") or "-"), fill=(255, 255, 255), font=section_font)
 
-    y = 268
+    y = 262
 
     def section(title: str, rows: list[tuple[str, str]]) -> None:
         nonlocal y
-        draw.text((88, y), title, fill=_ACCENT_COLOR, font=section_font)
-        y += 18
+        draw.text((88, y), title, fill=(0, 0, 0), font=section_font)
+        y += 16
         for label, value in rows:
-            value_lines = wrap(value or "-", width=38) or ["-"]
-            row_height = max(64, 20 + (len(value_lines) * 22) + 16)
+            value_lines = wrap(value or "-", width=34) or ["-"]
+            row_height = max(78, 24 + (len(value_lines) * 26) + 18)
             draw.rounded_rectangle(
                 (88, y + 18, width - 88, y + 18 + row_height),
-                radius=18,
-                fill=(249, 250, 251),
+                radius=20,
+                fill=(250, 250, 252),
+                outline=(230, 232, 238),
+                width=2,
             )
-            draw.text((116, y + 32), label.upper(), fill=(0, 0, 0), font=small_font)
+            draw.text((116, y + 34), label.upper(), fill=(0, 0, 0), font=small_font)
             for index, line in enumerate(value_lines):
-                draw.text((430, y + 30 + (index * 22)), line, fill=_TEXT_COLOR, font=body_font)
-            y += row_height + 20
-        y += 12
+                draw.text((430, y + 32 + (index * 26)), line, fill=(0, 0, 0), font=body_font)
+            y += row_height + 16
+        y += 8
 
     section(
         "Transfert",
@@ -188,14 +190,6 @@ def build_external_transfer_payment_note_png(payload: dict[str, Any]) -> bytes:
             ("Pays destination", str(payload.get("country_destination") or "-")),
         ],
     )
-
-    sentence = str(payload.get("payment_sentence") or "").strip()
-    draw.text((88, y), "Instruction", fill=_ACCENT_COLOR, font=section_font)
-    y += 28
-    for line in wrap(sentence, width=48):
-        draw.text((96, y), line, fill=(0, 0, 0), font=body_font)
-        y += 28
-    y += 10
 
     section(
         "Informations de paiement",
@@ -211,9 +205,9 @@ def build_external_transfer_payment_note_png(payload: dict[str, Any]) -> bytes:
         "Veuillez effectuer le paiement exactement sur le compte indique. "
         "Conservez cette note comme reference de paiement."
     )
-    for line in wrap(footer, width=68):
-        draw.text((88, y), line, fill=_MUTED_COLOR, font=small_font)
-        y += 24
+    for line in wrap(footer, width=58):
+        draw.text((88, y), line, fill=(0, 0, 0), font=small_font)
+        y += 22
 
     buffer = BytesIO()
     image.save(buffer, format="PNG")
