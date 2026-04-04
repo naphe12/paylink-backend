@@ -228,6 +228,7 @@ async def _build_payment_note_context(
         "sent_amount_text": format_note_amount(amount, origin_currency),
         "fee_amount_text": format_note_amount(fee_amount, origin_currency),
         "amount_text": format_note_amount(total_payment_amount, origin_currency),
+        "recipient_amount_text": format_note_amount(transfer.local_amount or amount, transfer.currency or "BIF"),
         "payment_sentence": payment_sentence,
         "service": instruction["service"],
         "account_service": instruction["account_service"],
