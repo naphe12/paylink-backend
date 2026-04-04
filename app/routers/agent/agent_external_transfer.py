@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, func, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -529,6 +529,52 @@ async def list_external_users(
     """
     Liste tous les clients utilisables pour un transfert externe agent.
     """
+    last_external_transfer_at_sq = (
+        select(func.max(ExternalTransfers.created_at))
+        .where(ExternalTransfers.user_id == Users.user_id)
+        .correlate(Users)
+        .scalar_subquery()
+    )
+    last_wallet_activity_at_sq = (
+        select(func.max(WalletTransactions.created_at))
+        .where(WalletTransactions.user_id == Users.user_id)
+        .correlate(Users)
+        .scalar_subquery()
+    )
+    last_agent_activity_at_sq = (
+        select(func.max(AgentTransactions.created_at))
+        .where(AgentTransactions.client_user_id == Users.user_id)
+        .correlate(Users)
+        .scalar_subquery()
+    )
+    recent_activity_at = func.greatest(
+        func.coalesce(last_external_transfer_at_sq, Users.created_at),
+        func.coalesce(last_wallet_activity_at_sq, Users.created_at),
+        func.coalesce(last_agent_activity_at_sq, Users.created_at),
+        Users.created_at,
+    )
+    recent_activity_type = case(
+        (
+            func.coalesce(last_external_transfer_at_sq, Users.created_at)
+            >= func.coalesce(last_wallet_activity_at_sq, Users.created_at),
+            case(
+                (
+                    func.coalesce(last_external_transfer_at_sq, Users.created_at)
+                    >= func.coalesce(last_agent_activity_at_sq, Users.created_at),
+                    "transfer",
+                ),
+                else_="agent_operation",
+            ),
+        ),
+        else_=case(
+            (
+                func.coalesce(last_wallet_activity_at_sq, Users.created_at)
+                >= func.coalesce(last_agent_activity_at_sq, Users.created_at),
+                "wallet_operation",
+            ),
+            else_="agent_operation",
+        ),
+    )
     wallet_currency_sq = (
         select(Wallets.currency_code)
         .where(
@@ -546,9 +592,11 @@ async def list_external_users(
             Users.email,
             Users.phone_e164,
             wallet_currency_sq.label("wallet_currency"),
+            recent_activity_at.label("recent_activity_at"),
+            recent_activity_type.label("recent_activity_type"),
         )
         .where(Users.role.in_(["client", "user"]))
-        .order_by(Users.full_name.asc())
+        .order_by(recent_activity_at.desc(), Users.full_name.asc())
     )
     rows = (await db.execute(stmt)).all()
     return [
@@ -558,6 +606,8 @@ async def list_external_users(
             "email": r.email,
             "phone": r.phone_e164,
             "currency": str(r.wallet_currency or "EUR").upper(),
+            "recent_activity_at": r.recent_activity_at,
+            "recent_activity_type": r.recent_activity_type,
         }
         for r in rows
     ]

@@ -8,7 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Header, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import insert, update, select, func, or_
+from sqlalchemy import insert, update, select, func, or_, case
 from app.core.database import get_db
 from app.core.security import agent_required, get_current_user
 from app.models.agent_transactions import AgentTransactions
@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from decimal import Decimal
 from app.models.agent_commissions import AgentCommissions
 from app.models.wallets import Wallets
+from app.models.external_transfers import ExternalTransfers
 from app.models.transactions import Transactions
 from app.models.agents import Agents
 from app.schemas.users import UsersCreate, UsersRead
@@ -371,6 +372,52 @@ async def agent_cash_users(
 ):
     # Ensure caller has an agent profile.
     await _require_agent(db, current_agent)
+    last_external_transfer_at_sq = (
+        select(func.max(ExternalTransfers.created_at))
+        .where(ExternalTransfers.user_id == Users.user_id)
+        .correlate(Users)
+        .scalar_subquery()
+    )
+    last_wallet_activity_at_sq = (
+        select(func.max(WalletTransactions.created_at))
+        .where(WalletTransactions.user_id == Users.user_id)
+        .correlate(Users)
+        .scalar_subquery()
+    )
+    last_agent_activity_at_sq = (
+        select(func.max(AgentTransactions.created_at))
+        .where(AgentTransactions.client_user_id == Users.user_id)
+        .correlate(Users)
+        .scalar_subquery()
+    )
+    recent_activity_at = func.greatest(
+        func.coalesce(last_external_transfer_at_sq, Users.created_at),
+        func.coalesce(last_wallet_activity_at_sq, Users.created_at),
+        func.coalesce(last_agent_activity_at_sq, Users.created_at),
+        Users.created_at,
+    )
+    recent_activity_type = case(
+        (
+            func.coalesce(last_external_transfer_at_sq, Users.created_at)
+            >= func.coalesce(last_wallet_activity_at_sq, Users.created_at),
+            case(
+                (
+                    func.coalesce(last_external_transfer_at_sq, Users.created_at)
+                    >= func.coalesce(last_agent_activity_at_sq, Users.created_at),
+                    "transfer",
+                ),
+                else_="agent_operation",
+            ),
+        ),
+        else_=case(
+            (
+                func.coalesce(last_wallet_activity_at_sq, Users.created_at)
+                >= func.coalesce(last_agent_activity_at_sq, Users.created_at),
+                "wallet_operation",
+            ),
+            else_="agent_operation",
+        ),
+    )
     stmt = (
         select(
             Users.user_id,
@@ -379,9 +426,12 @@ async def agent_cash_users(
             Users.phone_e164,
             Users.country_code,
             Countries.currency_code.label("country_currency_code"),
+            recent_activity_at.label("recent_activity_at"),
+            recent_activity_type.label("recent_activity_type"),
         )
         .join(Countries, Countries.country_code == Users.country_code, isouter=True)
-        .order_by(Users.created_at.desc())
+        .where(Users.role.in_(["client", "user"]))
+        .order_by(recent_activity_at.desc(), Users.created_at.desc())
         .limit(limit)
     )
     if q and q.strip():
@@ -394,16 +444,19 @@ async def agent_cash_users(
                 Users.phone_e164,
                 Users.country_code,
                 Countries.currency_code.label("country_currency_code"),
+                recent_activity_at.label("recent_activity_at"),
+                recent_activity_type.label("recent_activity_type"),
             )
             .join(Countries, Countries.country_code == Users.country_code, isouter=True)
             .where(
+                Users.role.in_(["client", "user"]),
                 or_(
                     Users.full_name.ilike(pattern),
                     Users.email.ilike(pattern),
                     Users.phone_e164.ilike(pattern),
                 )
             )
-            .order_by(Users.created_at.desc())
+            .order_by(recent_activity_at.desc(), Users.created_at.desc())
             .limit(limit)
         )
     rows = (await db.execute(stmt)).all()
@@ -415,6 +468,8 @@ async def agent_cash_users(
             "phone_e164": r.phone_e164,
             "country_code": r.country_code,
             "currency_code": r.country_currency_code or "EUR",
+            "recent_activity_at": r.recent_activity_at,
+            "recent_activity_type": r.recent_activity_type,
         }
         for r in rows
     ]
