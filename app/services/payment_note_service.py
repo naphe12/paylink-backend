@@ -136,14 +136,14 @@ def build_payment_instruction_sentence(
 
 def build_external_transfer_payment_note_png(payload: dict[str, Any]) -> bytes:
     width = 1200
-    height = 1600
+    height = 1500
     image = Image.new("RGB", (width, height), _BG_COLOR)
     draw = ImageDraw.Draw(image)
-    title_font = _font(34)
-    subtitle_font = _font(20)
-    section_font = _font(24)
-    body_font = _font(20)
-    small_font = _font(18)
+    title_font = _font(40)
+    subtitle_font = _font(26)
+    section_font = _font(30)
+    body_font = _font(28)
+    small_font = _font(22)
 
     draw.rounded_rectangle(
         (48, 48, width - 48, height - 48),
@@ -157,43 +157,45 @@ def build_external_transfer_payment_note_png(payload: dict[str, Any]) -> bytes:
     draw.text((88, 148), "Note de paiement", fill=(230, 238, 246), font=subtitle_font)
     draw.text((width - 360, 108), str(payload.get("reference_code") or "-"), fill=(255, 255, 255), font=section_font)
 
-    y = 280
+    y = 268
 
     def section(title: str, rows: list[tuple[str, str]]) -> None:
         nonlocal y
         draw.text((88, y), title, fill=_ACCENT_COLOR, font=section_font)
-        y += 22
+        y += 18
         for label, value in rows:
-            value_lines = wrap(value or "-", width=42) or ["-"]
-            row_height = max(68, 24 + (len(value_lines) * 24) + 18)
+            value_lines = wrap(value or "-", width=38) or ["-"]
+            row_height = max(64, 20 + (len(value_lines) * 22) + 16)
             draw.rounded_rectangle(
                 (88, y + 18, width - 88, y + 18 + row_height),
                 radius=18,
                 fill=(249, 250, 251),
             )
-            draw.text((116, y + 34), label.upper(), fill=_MUTED_COLOR, font=small_font)
+            draw.text((116, y + 32), label.upper(), fill=(0, 0, 0), font=small_font)
             for index, line in enumerate(value_lines):
-                draw.text((430, y + 34 + (index * 24)), line, fill=_TEXT_COLOR, font=body_font)
-            y += row_height + 24
-        y += 18
+                draw.text((430, y + 30 + (index * 22)), line, fill=_TEXT_COLOR, font=body_font)
+            y += row_height + 20
+        y += 12
 
     section(
         "Transfert",
         [
             ("Client", str(payload.get("client_name") or "-")),
             ("Beneficiaire", str(payload.get("recipient_name") or "-")),
-            ("Montant", str(payload.get("amount_text") or "-")),
+            ("Montant envoye", str(payload.get("sent_amount_text") or "-")),
+            ("Charges", str(payload.get("fee_amount_text") or "-")),
+            ("Montant a payer", str(payload.get("amount_text") or "-")),
             ("Pays destination", str(payload.get("country_destination") or "-")),
         ],
     )
 
     sentence = str(payload.get("payment_sentence") or "").strip()
     draw.text((88, y), "Instruction", fill=_ACCENT_COLOR, font=section_font)
-    y += 34
-    for line in wrap(sentence, width=56):
-        draw.text((96, y), line, fill=_TEXT_COLOR, font=body_font)
-        y += 34
-    y += 14
+    y += 28
+    for line in wrap(sentence, width=48):
+        draw.text((96, y), line, fill=(0, 0, 0), font=body_font)
+        y += 28
+    y += 10
 
     section(
         "Informations de paiement",
@@ -209,9 +211,9 @@ def build_external_transfer_payment_note_png(payload: dict[str, Any]) -> bytes:
         "Veuillez effectuer le paiement exactement sur le compte indique. "
         "Conservez cette note comme reference de paiement."
     )
-    for line in wrap(footer, width=78):
+    for line in wrap(footer, width=68):
         draw.text((88, y), line, fill=_MUTED_COLOR, font=small_font)
-        y += 28
+        y += 24
 
     buffer = BytesIO()
     image.save(buffer, format="PNG")
@@ -226,44 +228,46 @@ def build_external_transfer_payment_note_pdf(payload: dict[str, Any]) -> bytes:
     pdf.set_fill_color(11, 59, 100)
     pdf.rect(0, 0, 210, 34, "F")
     pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Helvetica", "B", 18)
+    pdf.set_font("Helvetica", "B", 20)
     pdf.cell(0, 12, "PesaPaid - Note de paiement", ln=True, align="C")
-    pdf.set_font("Helvetica", "", 11)
+    pdf.set_font("Helvetica", "B", 14)
     pdf.cell(0, 8, str(payload.get("reference_code") or "-"), ln=True, align="C")
-    pdf.ln(8)
+    pdf.ln(6)
 
     pdf.set_text_color(0, 0, 0)
 
     def section(title: str, rows: list[tuple[str, str]]) -> None:
-        pdf.set_font("Helvetica", "B", 13)
+        pdf.set_font("Helvetica", "B", 15)
         pdf.set_text_color(17, 94, 155)
         pdf.cell(0, 9, title, ln=True)
-        pdf.set_font("Helvetica", "", 11)
+        pdf.set_font("Helvetica", "B", 14)
         pdf.set_text_color(0, 0, 0)
         for label, value in rows:
-            pdf.set_font("Helvetica", "B", 11)
-            pdf.cell(55, 8, f"{label} :", ln=0)
-            pdf.set_font("Helvetica", "", 11)
-            pdf.multi_cell(0, 8, str(value or "-"))
-        pdf.ln(2)
+            pdf.set_font("Helvetica", "B", 14)
+            pdf.cell(58, 7, f"{label} :", ln=0)
+            pdf.set_font("Helvetica", "B", 14)
+            pdf.multi_cell(0, 7, str(value or "-"))
+        pdf.ln(1)
 
     section(
         "Transfert",
         [
             ("Client", str(payload.get("client_name") or "-")),
             ("Beneficiaire", str(payload.get("recipient_name") or "-")),
-            ("Montant", str(payload.get("amount_text") or "-")),
+            ("Montant envoye", str(payload.get("sent_amount_text") or "-")),
+            ("Charges", str(payload.get("fee_amount_text") or "-")),
+            ("Montant a payer", str(payload.get("amount_text") or "-")),
             ("Pays destination", str(payload.get("country_destination") or "-")),
         ],
     )
 
-    pdf.set_font("Helvetica", "B", 13)
+    pdf.set_font("Helvetica", "B", 15)
     pdf.set_text_color(17, 94, 155)
     pdf.cell(0, 9, "Instruction", ln=True)
-    pdf.set_font("Helvetica", "", 11)
+    pdf.set_font("Helvetica", "B", 14)
     pdf.set_text_color(0, 0, 0)
-    pdf.multi_cell(0, 8, str(payload.get("payment_sentence") or "-"))
-    pdf.ln(2)
+    pdf.multi_cell(0, 7, str(payload.get("payment_sentence") or "-"))
+    pdf.ln(1)
 
     section(
         "Informations de paiement",
@@ -275,11 +279,11 @@ def build_external_transfer_payment_note_pdf(payload: dict[str, Any]) -> bytes:
         ],
     )
 
-    pdf.set_font("Helvetica", "I", 10)
-    pdf.set_text_color(75, 85, 99)
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.set_text_color(0, 0, 0)
     pdf.multi_cell(
         0,
-        6,
+        5.5,
         "Veuillez effectuer le paiement exactement sur le compte indique. "
         "Conservez cette note comme reference de paiement.",
     )
