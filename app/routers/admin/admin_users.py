@@ -1,7 +1,7 @@
 # app/routers/admin_users.py
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import update, select, func, case
+from sqlalchemy import update, select, func, case, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.dependencies.auth import  get_current_admin
@@ -9,6 +9,7 @@ from app.models.users import Users
 from app.models.external_transfers import ExternalTransfers
 from app.models.wallet_transactions import WalletTransactions
 from app.models.agent_transactions import AgentTransactions
+from app.models.wallets import Wallets
 from app.schemas.users import UsersCreate, UsersRead
 from app.services.user_provisioning import create_client_user
 from app.services.wallet_service import ensure_user_financial_accounts
@@ -45,6 +46,7 @@ async def list_users(
     q: str = "",
     status: str = "",
     role: str = "",
+    exclude_wallet_currency: str = "",
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin)
 ):
@@ -120,6 +122,15 @@ async def list_users(
         stmt = stmt.where(Users.status == status)
     if role:
         stmt = stmt.where(Users.role == role)
+    if exclude_wallet_currency:
+        stmt = stmt.where(
+            ~exists(
+                select(Wallets.wallet_id).where(
+                    Wallets.user_id == Users.user_id,
+                    func.upper(Wallets.currency_code) == exclude_wallet_currency.upper(),
+                )
+            )
+        )
     rows = (await db.execute(stmt)).all()
     return [
         {
