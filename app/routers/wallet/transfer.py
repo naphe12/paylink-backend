@@ -188,6 +188,7 @@ async def _build_payment_note_context(
     origin_currency: str,
     data: ExternalTransferCreate,
 ) -> dict | None:
+    metadata = dict(transfer.metadata_ or {})
     instruction = await resolve_payment_instruction(
         db,
         user=current_user,
@@ -196,8 +197,10 @@ async def _build_payment_note_context(
     if not instruction:
         return None
 
+    fee_amount = decimal.Decimal(str(metadata.get("fee_amount") or "0"))
+    total_payment_amount = amount + fee_amount
     payment_sentence = build_payment_instruction_sentence(
-        amount=amount,
+        amount=total_payment_amount,
         currency=origin_currency,
         account_service=instruction["account_service"],
     )
@@ -222,7 +225,9 @@ async def _build_payment_note_context(
         "client_name": current_user.full_name or "",
         "recipient_name": data.recipient_name,
         "country_destination": data.country_destination,
-        "amount_text": format_note_amount(amount, origin_currency),
+        "sent_amount_text": format_note_amount(amount, origin_currency),
+        "fee_amount_text": format_note_amount(fee_amount, origin_currency),
+        "amount_text": format_note_amount(total_payment_amount, origin_currency),
         "payment_sentence": payment_sentence,
         "service": instruction["service"],
         "account_service": instruction["account_service"],
