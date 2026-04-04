@@ -643,6 +643,11 @@ async def transfer_money(
     receiver_wallet = await _get_primary_wallet(db, receiver_user.user_id)
     if not receiver_wallet:
         raise HTTPException(status_code=404, detail="Portefeuille destinataire introuvable")
+    if str(sender_wallet.currency_code or "").upper() != str(receiver_wallet.currency_code or "").upper():
+        raise HTTPException(
+            status_code=400,
+            detail="Transfert interne impossible entre portefeuilles de devises differentes.",
+        )
 
     # 💱 Transfert atomique
     sender_wallet.available -= amount
@@ -1172,6 +1177,13 @@ async def send_money(
         _primary_wallet_stmt(receiver.user_id)
     )
     receiver_wallet = result.scalar_one_or_none()
+    if not receiver_wallet:
+        raise HTTPException(404, "Portefeuille destinataire introuvable")
+    if str(sender_wallet.currency_code or "").upper() != str(receiver_wallet.currency_code or "").upper():
+        raise HTTPException(
+            400,
+            "Transfert interne impossible entre portefeuilles de devises differentes.",
+        )
 
     await reset_limits_if_needed(db, current_user)
     # 3) Vérifier solde suffisant

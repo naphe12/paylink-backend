@@ -1752,6 +1752,11 @@ async def internal_transfer(
     w_receiver = await db.scalar(_primary_wallet_for_update_stmt(receiver.user_id))
     if not w_sender or not w_receiver:
         raise HTTPException(404, "Portefeuille introuvable")
+    if str(w_sender.currency_code or "").upper() != str(w_receiver.currency_code or "").upper():
+        raise HTTPException(
+            400,
+            "Transfert interne impossible entre portefeuilles de devises differentes.",
+        )
 
     if w_sender.available < amount:
         raise HTTPException(400, "Solde insuffisant")

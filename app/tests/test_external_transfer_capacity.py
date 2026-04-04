@@ -27,17 +27,30 @@ def test_compute_external_transfer_funding_does_not_push_wallet_below_zero():
     assert funding["credit_available_after"] == Decimal("65")
 
 
-def test_compute_external_transfer_funding_pushes_negative_wallet_lower_for_non_bif():
+def test_compute_external_transfer_funding_uses_credit_first_for_negative_wallet():
     funding = compute_external_transfer_funding(
         wallet_available=Decimal("-25"),
         credit_available=Decimal("80"),
         total_required=Decimal("40"),
     )
 
-    assert funding["wallet_debit_amount"] == Decimal("40")
-    assert funding["wallet_after"] == Decimal("-65")
+    assert funding["wallet_debit_amount"] == Decimal("0")
+    assert funding["wallet_after"] == Decimal("-25")
     assert funding["credit_used"] == Decimal("40")
     assert funding["credit_available_after"] == Decimal("40")
+
+
+def test_compute_external_transfer_funding_pushes_negative_wallet_only_for_uncovered_residual():
+    funding = compute_external_transfer_funding(
+        wallet_available=Decimal("-25"),
+        credit_available=Decimal("80"),
+        total_required=Decimal("100"),
+    )
+
+    assert funding["wallet_debit_amount"] == Decimal("20")
+    assert funding["wallet_after"] == Decimal("-45")
+    assert funding["credit_used"] == Decimal("80")
+    assert funding["credit_available_after"] == Decimal("0")
 
 
 def test_compute_external_transfer_funding_can_force_credit_only_for_bif_wallets():

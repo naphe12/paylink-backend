@@ -28,6 +28,21 @@ class LedgerService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
+    @staticmethod
+    def _candidate_codes(code: str) -> list[str]:
+        normalized_code = str(code or "").strip()
+        if not normalized_code:
+            return []
+
+        aliases = [normalized_code]
+        legacy_map = {
+            "LEDGER::CREDIT_LINE": ["LEDGER_CREDIT"],
+            "LEDGER::CASH_IN": ["LEDGER_CASH_IN", "WALLET_CASH_IN"],
+            "LEDGER::CASH_OUT": ["LEDGER_CASH_OUT", "WALLET_CASH_OUT"],
+        }
+        aliases.extend(legacy_map.get(normalized_code, []))
+        return aliases
+
     async def ensure_wallet_account(self, wallet: Wallets) -> LedgerAccounts:
         stmt = select(LedgerAccounts).where(
             LedgerAccounts.metadata_["wallet_id"].astext == str(wallet.wallet_id)
@@ -51,7 +66,7 @@ class LedgerService:
 
     async def get_account_by_code(self, code: str) -> LedgerAccounts:
         normalized_code = str(code or "").strip()
-        candidate_codes = [normalized_code] if normalized_code else []
+        candidate_codes = self._candidate_codes(normalized_code)
 
         account = await self.db.scalar(
             select(LedgerAccounts).where(LedgerAccounts.code.in_(candidate_codes))
@@ -77,7 +92,7 @@ class LedgerService:
         suffix = "IN" if normalized_direction == "in" else "OUT"
         candidate_codes = [
             f"LEDGER::CASH_{suffix}_{normalized_currency}",
-            f"LEDGER::CASH_{suffix}",
+            *self._candidate_codes(f"LEDGER::CASH_{suffix}"),
         ]
 
         account = await self.db.scalar(
@@ -105,8 +120,9 @@ class LedgerService:
         currency_code: str,
         metadata: Mapping[str, Any] | None = None,
     ) -> LedgerAccounts:
+        candidate_codes = self._candidate_codes(code)
         account = await self.db.scalar(
-            select(LedgerAccounts).where(LedgerAccounts.code == code)
+            select(LedgerAccounts).where(LedgerAccounts.code.in_(candidate_codes))
         )
         if account:
             return account
