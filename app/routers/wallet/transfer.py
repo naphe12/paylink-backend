@@ -262,6 +262,24 @@ def _serialize_external_transfer_read(transfer: ExternalTransfers) -> dict:
     ).model_dump(mode="json")
 
 
+def _is_payment_note_required(
+    *,
+    transfer: ExternalTransfers | None = None,
+    metadata: dict | None = None,
+    credit_used: decimal.Decimal | None = None,
+    wallet_available: decimal.Decimal | None = None,
+) -> bool:
+    payload = dict(metadata or getattr(transfer, "metadata_", {}) or {})
+    stored_flag = payload.get("payment_note_required")
+    if stored_flag is not None:
+        return bool(stored_flag)
+    if credit_used is not None and credit_used > decimal.Decimal("0"):
+        return True
+    if wallet_available is not None and wallet_available < decimal.Decimal("0"):
+        return True
+    return bool(getattr(transfer, "credit_used", False))
+
+
 async def _resolve_fx_rate(
     db: AsyncSession,
     origin: str,
@@ -598,7 +616,12 @@ async def _notify_external_transfer(
             .limit(1)
         )
         client_wallet_available = decimal.Decimal(getattr(client_wallet, "available", 0) or 0)
-        should_send_payment_note = credit_used > decimal.Decimal("0") or client_wallet_available < decimal.Decimal("0")
+        should_send_payment_note = _is_payment_note_required(
+            transfer=transfer,
+            metadata=dict(transfer.metadata_ or {}),
+            credit_used=credit_used,
+            wallet_available=client_wallet_available,
+        )
 
     if notify_client and current_user.email and should_send_payment_note:
         payment_note_context = await _build_payment_note_context(
@@ -1217,6 +1240,10 @@ async def _external_transfer_core(
         "required_credit_topup": str(shortfall_amount) if insufficient_funds_review_required else None,
         "total_required": str(total_required),
         "recipient_email": data.recipient_email,
+        "wallet_balance_after_transfer": str(wallet_after),
+        "payment_note_required": bool(
+            credit_used > decimal.Decimal("0") or wallet_after < decimal.Decimal("0")
+        ),
     }
     if override_context and isinstance(override_context, dict):
         metadata["override_context"] = {

@@ -22,6 +22,7 @@ from app.models.wallets import Wallets
 from app.routers.wallet.transfer import (
     EXTERNAL_TRANSFER_SETTLEMENT_CURRENCY,
     _build_payment_note_context,
+    _is_payment_note_required,
     _normalize_optional_email,
     _get_sender_country_currency,
     _resolve_fx_rate,
@@ -367,6 +368,9 @@ async def list_external_transfers(
             "local_currency": _resolve_local_currency(r.country_destination, r.local_currency),
             "reference_code": r.reference_code,
             "transfer_metadata": dict(r.transfer_metadata or {}),
+            "payment_note_required": _is_payment_note_required(
+                metadata=dict(r.transfer_metadata or {})
+            ),
             **_extract_transfer_flags(dict(r.transfer_metadata or {})),
         }
         for r in rows
@@ -394,7 +398,12 @@ async def get_admin_external_transfer_payment_note(
     credit_used_amount = Decimal(str(metadata.get("credit_used_amount") or "0"))
     wallet = await db.scalar(_primary_wallet_stmt(transfer.user_id))
     wallet_available = Decimal(getattr(wallet, "available", 0) or 0)
-    should_send_payment_note = credit_used_amount > Decimal("0") or wallet_available < Decimal("0")
+    should_send_payment_note = _is_payment_note_required(
+        transfer=transfer,
+        metadata=metadata,
+        credit_used=credit_used_amount,
+        wallet_available=wallet_available,
+    )
     if not should_send_payment_note:
         raise HTTPException(status_code=404, detail="Aucune note requise pour ce transfert")
 
