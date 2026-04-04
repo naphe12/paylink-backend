@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
+from pathlib import Path
 from textwrap import wrap
 from typing import Any
 
@@ -46,7 +47,31 @@ _ACCENT_COLOR = (17, 94, 155)
 _BORDER_COLOR = (222, 226, 234)
 
 
-def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    candidates = []
+    if bold:
+        candidates.extend(
+            [
+                "C:/Windows/Fonts/arialbd.ttf",
+                "C:/Windows/Fonts/calibrib.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+            ]
+        )
+    candidates.extend(
+        [
+            "C:/Windows/Fonts/arial.ttf",
+            "C:/Windows/Fonts/calibri.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        ]
+    )
+    for candidate in candidates:
+        try:
+            if Path(candidate).exists():
+                return ImageFont.truetype(candidate, size)
+        except Exception:
+            continue
     try:
         return ImageFont.truetype("DejaVuSans.ttf", size)
     except Exception:
@@ -136,14 +161,14 @@ def build_payment_instruction_sentence(
 
 def build_external_transfer_payment_note_png(payload: dict[str, Any]) -> bytes:
     width = 1200
-    height = 1360
+    height = 1260
     image = Image.new("RGB", (width, height), _BG_COLOR)
     draw = ImageDraw.Draw(image)
-    title_font = _font(42)
-    subtitle_font = _font(28)
-    section_font = _font(30)
-    body_font = _font(30)
-    small_font = _font(24)
+    brand_font = _font(72, bold=True)
+    subtitle_font = _font(24, bold=True)
+    section_font = _font(28, bold=True)
+    body_font = _font(28, bold=True)
+    small_font = _font(22, bold=True)
 
     draw.rounded_rectangle(
         (48, 48, width - 48, height - 48),
@@ -153,18 +178,21 @@ def build_external_transfer_payment_note_png(payload: dict[str, Any]) -> bytes:
         width=2,
     )
     draw.rounded_rectangle((48, 48, width - 48, 230), radius=28, fill=_HEADER_COLOR)
-    draw.text((88, 92), "PesaPaid", fill=(255, 255, 255), font=title_font)
-    draw.text((88, 148), "Note de paiement", fill=(230, 238, 246), font=subtitle_font)
-    draw.text((width - 360, 108), str(payload.get("reference_code") or "-"), fill=(255, 255, 255), font=section_font)
+    brand_text = "PesaPaid"
+    brand_box = draw.textbbox((0, 0), brand_text, font=brand_font)
+    brand_width = brand_box[2] - brand_box[0]
+    draw.text(((width - brand_width) / 2, 74), brand_text, fill=(255, 255, 255), font=brand_font)
+    draw.text((92, 162), "Note de paiement", fill=(255, 255, 255), font=subtitle_font)
+    draw.text((width - 360, 160), str(payload.get("reference_code") or "-"), fill=(255, 255, 255), font=subtitle_font)
 
-    y = 262
+    y = 260
 
     def section(title: str, rows: list[tuple[str, str]]) -> None:
         nonlocal y
         draw.text((88, y), title, fill=(0, 0, 0), font=section_font)
         y += 16
         for label, value in rows:
-            value_lines = wrap(value or "-", width=34) or ["-"]
+            value_lines = wrap(value or "-", width=30) or ["-"]
             row_height = max(78, 24 + (len(value_lines) * 26) + 18)
             draw.rounded_rectangle(
                 (88, y + 18, width - 88, y + 18 + row_height),
@@ -184,8 +212,6 @@ def build_external_transfer_payment_note_png(payload: dict[str, Any]) -> bytes:
         [
             ("Client", str(payload.get("client_name") or "-")),
             ("Beneficiaire", str(payload.get("recipient_name") or "-")),
-            ("Montant envoye", str(payload.get("sent_amount_text") or "-")),
-            ("Charges", str(payload.get("fee_amount_text") or "-")),
             ("Montant a payer", str(payload.get("amount_text") or "-")),
             ("Pays destination", str(payload.get("country_destination") or "-")),
         ],
