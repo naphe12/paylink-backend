@@ -8,6 +8,7 @@ import traceback
 import uuid
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -792,25 +793,26 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 @app.exception_handler(RequestValidationError)
 async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
     request_id = _get_request_id(request)
+    validation_errors = jsonable_encoder(exc.errors())
     await persist_app_error(
         request,
         exc,
         status_code=422,
         handled=True,
         error_type="RequestValidationError",
-        stack_trace=_truncate(json.dumps(exc.errors(), ensure_ascii=False), 12000),
+        stack_trace=_truncate(json.dumps(validation_errors, ensure_ascii=False), 12000),
     )
     logger.warning(
         "Validation exception path=%s method=%s request_id=%s errors=%s",
         request.url.path,
         request.method,
         request_id,
-        exc.errors(),
+        validation_errors,
     )
     return JSONResponse(
         status_code=422,
         content={
-            "detail": exc.errors(),
+            "detail": validation_errors,
             "path": request.url.path,
             "method": request.method,
             "request_id": request_id,

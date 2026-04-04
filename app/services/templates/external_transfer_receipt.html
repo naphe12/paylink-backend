@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Reçu de transfert externe</title>
+  <title>Recu de transfert externe</title>
   <style>
     body { font-family: "Segoe UI", Tahoma, sans-serif; background: #f5f7fb; color: #1f2937; margin: 0; padding: 0; }
     .container { max-width: 620px; margin: 22px auto; background: #ffffff; border-radius: 14px; overflow: hidden; box-shadow: 0 6px 20px rgba(0,0,0,0.08); }
@@ -20,31 +20,43 @@
   <div class="container">
     <div class="header">
       <div style="font-size: 40px;">&#128179;</div>
-      <h1>Reçu de votre transfert externe</h1>
+      <h1>Recu de votre transfert externe</h1>
     </div>
 
     <div class="content">
       <p style="margin: 0 0 10px 0;">Bonjour {{ client_name }},</p>
       <p style="margin: 0;">
-        Nous avons bien enregistré votre demande de transfert externe. Vous trouverez en pièce jointe un reçu PDF avec les détails de l'opération.
+        Nous avons bien enregistre votre demande de transfert externe. Vous trouverez en piece jointe un recu PDF avec les details de l'operation.
       </p>
 
       <div class="card">
-        <p class="row"><span class="label">Référence :</span> {{ reference }}</p>
-        <p class="row"><span class="label">Montant envoyé :</span> {{ amount }} {{ currency }}</p>
-        <p class="row"><span class="label">Montant à remettre :</span> {{ payout_amount }}</p>
+        <p class="row"><span class="label">Reference :</span> {{ reference }}</p>
+        <p class="row"><span class="label">Montant envoye :</span> {{ amount }} {{ currency }}</p>
+        <p class="row"><span class="label">Montant a remettre :</span> {{ payout_amount }}</p>
         <p class="row"><span class="label">Destinataire :</span> {{ receiver_name }} • {{ receiver_phone }}</p>
         <p class="row"><span class="label">Partenaire / Pays :</span> {{ partner_name }} / {{ country }}</p>
         <p class="row"><span class="label">Statut :</span> {{ status }}</p>
       </div>
 
+      {% if payment_instruction_sentence %}
+      <div class="card">
+        <p class="row"><span class="label">Paiement :</span> {{ payment_instruction_sentence }}</p>
+        {% if payment_account_display %}
+        <p class="row"><span class="label">Compte :</span> {{ payment_account_display }}</p>
+        {% endif %}
+        {% if payment_note_url %}
+        <p class="row"><span class="label">Note :</span> <a href="{{ payment_note_url }}">Telecharger la note de paiement</a></p>
+        {% endif %}
+      </div>
+      {% endif %}
+
       <p style="margin-top: 0;">
-        Si vous n'êtes pas à l'origine de cette demande, contactez immédiatement notre support.
+        Si vous n'etes pas a l'origine de cette demande, contactez immediatement notre support.
       </p>
     </div>
 
     <div class="footer">
-      PesaPaid • {{ year }} • Plateforme de paiement sécurisée
+      PesaPaid • {{ year }} • Plateforme de paiement securisee
     </div>
   </div>
 </body>

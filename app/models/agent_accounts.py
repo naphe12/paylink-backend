@@ -3,6 +3,7 @@ import datetime
 import uuid
 
 from sqlalchemy import (
+    CHAR,
     Column,
     Integer,
     String,
@@ -39,7 +40,7 @@ class AgentAccounts(Base):
     agent_id = Column(UUID(as_uuid=True), nullable=False)
     service = Column(String(50), nullable=False)
     account_service = Column(String, nullable=False)
+    country_code = Column(CHAR(2), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=text("now()"))
 
     agent = relationship("Agents", back_populates="agent_accounts")
-
