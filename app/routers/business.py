@@ -35,6 +35,14 @@ from app.services.payment_request_service import (
 router = APIRouter(tags=["Business Accounts"])
 
 
+def _find_business_payment_request(items: list[dict], request_id: UUID) -> dict:
+    request_id_str = str(request_id)
+    for item in items:
+        if str(item["request_id"]) == request_id_str:
+            return item
+    raise RuntimeError(f"Business payment request {request_id} not found in current view.")
+
+
 @router.get("/business-accounts", response_model=list[BusinessAccountRead])
 async def list_my_business_accounts_route(
     db: AsyncSession = Depends(get_db),
@@ -155,10 +163,7 @@ async def create_business_payment_request_route(
         current_user=current_user,
         limit=200,
     )
-    for item in items:
-        if item["request_id"] == request_obj.request_id:
-            return item
-    raise RuntimeError(f"Business payment request {request_obj.request_id} not found in current view.")
+    return _find_business_payment_request(items, request_obj.request_id)
 
 
 @router.get("/business-accounts/{business_id}/payment-requests/{request_id}", response_model=PaymentRequestAdminDetailRead)

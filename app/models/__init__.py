@@ -81,6 +81,16 @@ from app.models.business_sub_wallet_movements import BusinessSubWalletMovements
 from app.models.merchant_api_keys import MerchantApiKeys
 from app.models.merchant_webhooks import MerchantWebhooks
 from app.models.merchant_webhook_events import MerchantWebhookEvents
+from app.models.merchant_profiles import MerchantProfiles
+from app.models.merchant_stores import MerchantStores
+from app.models.merchant_terminals import MerchantTerminals
+from app.models.merchant_orders import MerchantOrders
+from app.models.merchant_qr_codes import MerchantQrCodes
+from app.models.merchant_payment_links import MerchantPaymentLinks
+from app.models.merchant_payment_attempts import MerchantPaymentAttempts
+from app.models.merchant_refunds import MerchantRefunds
+from app.models.merchant_receipts import MerchantReceipts
+from app.models.merchant_payment_events import MerchantPaymentEvents
 from app.models.agent_offline_operations import AgentOfflineOperations
 from app.models.pots import Pots
 from app.models.pot_members import PotMembers
@@ -172,6 +182,16 @@ __all__ = [
     "MerchantApiKeys",
     "MerchantWebhooks",
     "MerchantWebhookEvents",
+    "MerchantProfiles",
+    "MerchantStores",
+    "MerchantTerminals",
+    "MerchantOrders",
+    "MerchantQrCodes",
+    "MerchantPaymentLinks",
+    "MerchantPaymentAttempts",
+    "MerchantRefunds",
+    "MerchantReceipts",
+    "MerchantPaymentEvents",
     "AgentOfflineOperations",
     "Pots",
     "PotMembers",

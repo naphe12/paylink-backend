@@ -138,6 +138,7 @@ from app.services.financial_insights_runtime_schema import ensure_financial_insi
 from app.services.referrals_runtime_schema import ensure_referrals_schema
 from app.services.business_runtime_schema import ensure_business_schema
 from app.services.merchant_api_runtime_schema import ensure_merchant_api_schema
+from app.services.merchant_payments_runtime_schema import ensure_merchant_payments_schema
 from app.services.agent_offline_runtime_schema import ensure_agent_offline_schema
 from app.services.pots_runtime_schema import ensure_pots_schema
 from app.services.virtual_cards_runtime_schema import ensure_virtual_cards_schema
@@ -954,6 +955,7 @@ async def startup_event():
         await ensure_referrals_schema(db)
         await ensure_business_schema(db)
         await ensure_merchant_api_schema(db)
+        await ensure_merchant_payments_schema(db)
         await ensure_agent_offline_schema(db)
         await ensure_pots_schema(db)
         await ensure_virtual_cards_schema(db)

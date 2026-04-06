@@ -31,8 +31,9 @@ router = APIRouter(prefix="/wallet/payment-requests", tags=["Wallet Payment Requ
 
 
 def _find_request_or_fallback(items: list[dict], request_id: UUID) -> dict:
+    request_id_str = str(request_id)
     for item in items:
-        if item["request_id"] == request_id:
+        if str(item["request_id"]) == request_id_str:
             return item
     raise RuntimeError(f"Payment request {request_id} not found in current view.")
 

@@ -671,7 +671,7 @@ async def sync_agent_offline_operation(db: AsyncSession, *, current_agent: Users
         item.updated_at = _now()
         await db.commit()
         await db.refresh(item)
-        return _serialize_operation(item)
+        return await _serialize_operation_runtime(db, item)
     except Exception as exc:
         await db.rollback()
         failed_item = await db.scalar(

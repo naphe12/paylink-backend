@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
+from pydantic import ValidationError
 from sqlalchemy import case, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +13,7 @@ from app.models.scheduled_transfers import ScheduledTransfers
 from app.models.transactions import Transactions
 from app.models.users import Users
 from app.models.wallets import Wallets
+from app.schemas.external_transfers import ExternalTransferCreate
 from app.services.ledger import LedgerLine, LedgerService
 from app.services.wallet_history import log_wallet_movement
 
@@ -52,12 +54,39 @@ def _schedule_is_due(item: ScheduledTransfers) -> bool:
     return bool(next_run_at and next_run_at <= _utcnow() and item.status in {"active", "failed"})
 
 
+def _schedule_metadata(item: ScheduledTransfers) -> dict:
+    metadata = getattr(item, "metadata_", {}) or {}
+    return dict(metadata)
+
+
+def _schedule_transfer_type(item: ScheduledTransfers) -> str:
+    transfer_type = str(_schedule_metadata(item).get("transfer_type") or "internal").strip().lower()
+    return "external" if transfer_type == "external" else "internal"
+
+
+def _schedule_external_payload(item: ScheduledTransfers) -> dict | None:
+    payload = _schedule_metadata(item).get("external_transfer")
+    return dict(payload) if isinstance(payload, dict) else None
+
+
 def _serialize_schedule(item: ScheduledTransfers) -> dict:
+    metadata = _schedule_metadata(item)
+    transfer_type = _schedule_transfer_type(item)
+    external_transfer = _schedule_external_payload(item)
+    receiver_identifier = str(getattr(item, "receiver_identifier", "") or "").strip()
+    if transfer_type == "external" and not receiver_identifier:
+        receiver_identifier = (
+            str((external_transfer or {}).get("recipient_phone") or "").strip()
+            or str((external_transfer or {}).get("recipient_name") or "").strip()
+            or "-"
+        )
     return {
         "schedule_id": item.schedule_id,
         "user_id": item.user_id,
         "receiver_user_id": item.receiver_user_id,
-        "receiver_identifier": item.receiver_identifier,
+        "receiver_identifier": receiver_identifier,
+        "transfer_type": transfer_type,
+        "external_transfer": external_transfer,
         "amount": Decimal(str(item.amount)),
         "currency_code": item.currency_code,
         "frequency": item.frequency,
@@ -67,7 +96,7 @@ def _serialize_schedule(item: ScheduledTransfers) -> dict:
         "last_run_at": item.last_run_at,
         "last_result": item.last_result,
         "remaining_runs": item.remaining_runs,
-        "metadata": dict(item.metadata_ or {}),
+        "metadata": metadata,
         "created_at": item.created_at,
         "updated_at": item.updated_at,
         "is_due": _schedule_is_due(item),
@@ -189,6 +218,40 @@ async def _execute_internal_transfer(
     }
 
 
+async def _execute_external_transfer(
+    db: AsyncSession,
+    *,
+    sender: Users,
+    item: ScheduledTransfers,
+) -> dict:
+    from app.routers.wallet.transfer import _external_transfer_core
+
+    payload_data = _schedule_external_payload(item)
+    if not payload_data:
+        raise HTTPException(status_code=400, detail="Configuration du transfert externe manquante")
+
+    try:
+        payload = ExternalTransferCreate(
+            partner_name=payload_data.get("partner_name"),
+            country_destination=payload_data.get("country_destination"),
+            recipient_name=payload_data.get("recipient_name"),
+            recipient_phone=payload_data.get("recipient_phone"),
+            recipient_email=payload_data.get("recipient_email"),
+            amount=Decimal(str(item.amount)),
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail="Configuration du transfert externe invalide") from exc
+
+    background_tasks = BackgroundTasks()
+    return await _external_transfer_core(
+        data=payload,
+        background_tasks=background_tasks,
+        idempotency_key=None,
+        db=db,
+        current_user=sender,
+    )
+
+
 async def _run_scheduled_transfer_item(
     db: AsyncSession,
     *,
@@ -197,21 +260,38 @@ async def _run_scheduled_transfer_item(
     raise_on_failure: bool,
 ) -> dict:
     try:
-        result = await _execute_internal_transfer(
-            db,
-            sender=current_user,
-            receiver_identifier=item.receiver_identifier,
-            amount=Decimal(str(item.amount)),
-            note=item.note,
-            schedule_id=item.schedule_id,
-        )
+        transfer_type = _schedule_transfer_type(item)
+        if transfer_type == "external":
+            result = await _execute_external_transfer(
+                db,
+                sender=current_user,
+                item=item,
+            )
+        else:
+            result = await _execute_internal_transfer(
+                db,
+                sender=current_user,
+                receiver_identifier=item.receiver_identifier,
+                amount=Decimal(str(item.amount)),
+                note=item.note,
+                schedule_id=item.schedule_id,
+            )
         now = _utcnow()
         item.status = "active"
         item.last_run_at = now
         item.updated_at = now
-        item.last_result = "Execution reussie"
-        item.receiver_user_id = result["receiver_user_id"]
-        item.currency_code = result["currency_code"]
+        if transfer_type == "external":
+            reference_code = str(result.get("reference_code") or result.get("transfer_id") or "").strip()
+            item.last_result = (
+                f"Transfert externe planifie: {result.get('status', 'created')}"
+                f"{f' ({reference_code})' if reference_code else ''}"
+            )
+            item.receiver_user_id = None
+            item.currency_code = str(result.get("currency") or item.currency_code or "").upper() or item.currency_code
+        else:
+            item.last_result = "Execution reussie"
+            item.receiver_user_id = result["receiver_user_id"]
+            item.currency_code = result["currency_code"]
         if item.remaining_runs is not None:
             item.remaining_runs = max(int(item.remaining_runs) - 1, 0)
             if item.remaining_runs == 0:
@@ -247,18 +327,34 @@ async def create_scheduled_transfer(
     if next_run_at < _utcnow():
         raise HTTPException(status_code=400, detail="La prochaine execution doit etre dans le futur")
 
-    receiver = await _resolve_receiver(db, payload.receiver_identifier)
     sender_wallet = await db.scalar(_primary_wallet_stmt(current_user.user_id))
-    receiver_wallet = await db.scalar(_primary_wallet_stmt(receiver.user_id))
-    if not sender_wallet or not receiver_wallet:
+    if not sender_wallet:
         raise HTTPException(status_code=404, detail="Portefeuille introuvable")
-    if str(sender_wallet.currency_code or "").upper() != str(receiver_wallet.currency_code or "").upper():
-        raise HTTPException(status_code=400, detail="Transfert programme impossible entre devises differentes.")
+
+    receiver_user_id = None
+    receiver_identifier = ""
+    metadata: dict = {"transfer_type": payload.transfer_type}
+    if payload.transfer_type == "external":
+        external_transfer = payload.external_transfer.model_dump(mode="json", exclude_none=True)
+        receiver_identifier = (
+            str(payload.external_transfer.recipient_phone or "").strip()
+            or str(payload.external_transfer.recipient_name or "").strip()
+        )
+        metadata["external_transfer"] = external_transfer
+    else:
+        receiver = await _resolve_receiver(db, payload.receiver_identifier)
+        receiver_wallet = await db.scalar(_primary_wallet_stmt(receiver.user_id))
+        if not receiver_wallet:
+            raise HTTPException(status_code=404, detail="Portefeuille introuvable")
+        if str(sender_wallet.currency_code or "").upper() != str(receiver_wallet.currency_code or "").upper():
+            raise HTTPException(status_code=400, detail="Transfert programme impossible entre devises differentes.")
+        receiver_user_id = receiver.user_id
+        receiver_identifier = payload.receiver_identifier
 
     item = ScheduledTransfers(
         user_id=current_user.user_id,
-        receiver_user_id=receiver.user_id,
-        receiver_identifier=payload.receiver_identifier,
+        receiver_user_id=receiver_user_id,
+        receiver_identifier=receiver_identifier,
         amount=payload.amount,
         currency_code=str(sender_wallet.currency_code or "").upper(),
         frequency=payload.frequency,
@@ -266,6 +362,7 @@ async def create_scheduled_transfer(
         note=payload.note,
         next_run_at=next_run_at,
         remaining_runs=payload.remaining_runs,
+        metadata_=metadata,
     )
     db.add(item)
     await db.commit()
