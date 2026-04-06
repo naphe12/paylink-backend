@@ -53,6 +53,10 @@ from app.routers.admin import loan_stats as admin_loan_stats_router
 from app.routers.admin import mobilemoney as admin_mobilemoney_router
 from app.routers.admin import notifications as admin_notifications_router
 from app.routers.admin import payment_requests as admin_payment_requests_router
+from app.routers.admin import product_automation as admin_product_automation_router
+from app.routers.admin import support_cases as admin_support_cases_router
+from app.routers.admin import virtual_cards as admin_virtual_cards_router
+from app.routers.admin import agent_offline_operations as admin_agent_offline_router
 from app.routers.admin import risk_admin as risk_admin_router
 from app.routers.admin import settings as admin_settings_router
 from app.routers.admin import tontine_arrears as admin_tontine_arrears_router
@@ -66,7 +70,9 @@ from app.routers.admin_dashboard import router as admin_dashboard_router
 from app.routers.admin_flags import router as admin_flags_router
 from app.routers.admin_reports import router as admin_reports_router
 from app.routers.agent.agent import router as agent_router
+from app.routers.agent.offline_operations import router as agent_offline_router
 from app.routers.agent.chat import router as agent_chat_router
+from app.routers.agent.bonus import router as agent_bonus_router
 from app.routers.agent.cash_chat import router as agent_cash_chat_router
 from app.routers.agent.credit_chat import router as agent_credit_chat_router
 from app.routers.agent.kyc_chat import router as agent_kyc_chat_router
@@ -100,6 +106,18 @@ from app.routers.ref import country, exchange
 from app.routers.tontines.tontines import router as tontine_router
 from app.routers.wallet import payments as wallet_payments
 from app.routers.wallet.payment_collections import router as wallet_payment_collections_router
+from app.routers.wallet.payment_requests_v2 import router as wallet_payment_requests_v2_router
+from app.routers.wallet.scheduled_transfers import router as wallet_scheduled_transfers_router
+from app.routers.support import router as support_cases_router
+from app.routers.savings import router as savings_router
+from app.routers.financial_insights import router as financial_insights_router
+from app.routers.referrals import router as referrals_router
+from app.routers.business import router as business_router
+from app.routers.merchant_api import router as merchant_api_router
+from app.routers.pots import router as pots_router
+from app.routers.virtual_cards import router as virtual_cards_router
+from app.routers.trust import router as trust_router
+from app.routers.fx import router as fx_router
 from app.routers.wallet import transactions, wallet
 from app.routers.wallet.crypto_wallet import router as crypto_wallet_router
 from app.routers.telegram_external_transfer import router as telegram_external_transfer_router
@@ -110,7 +128,21 @@ from app.services.backoffice_risk import router as backoffice_risk_router
 from app.services.idempotency_service import ensure_idempotency_schema
 from app.services.ai_runtime_schema import ensure_ai_runtime_schema
 from app.services.payments_runtime_schema import ensure_payments_runtime_schema
+from app.services.payment_requests_runtime_schema import ensure_payment_requests_v2_schema
+from app.services.support_cases_runtime_schema import ensure_support_cases_schema
+from app.services.trust_runtime_schema import ensure_trust_schema
+from app.services.fx_runtime_schema import ensure_fx_schema
+from app.services.scheduled_transfers_runtime_schema import ensure_scheduled_transfers_schema
+from app.services.savings_runtime_schema import ensure_savings_schema
+from app.services.financial_insights_runtime_schema import ensure_financial_insights_schema
+from app.services.referrals_runtime_schema import ensure_referrals_schema
+from app.services.business_runtime_schema import ensure_business_schema
+from app.services.merchant_api_runtime_schema import ensure_merchant_api_schema
+from app.services.agent_offline_runtime_schema import ensure_agent_offline_schema
+from app.services.pots_runtime_schema import ensure_pots_schema
+from app.services.virtual_cards_runtime_schema import ensure_virtual_cards_schema
 from app.services.operator_workflow_runtime_schema import ensure_operator_workflow_schema
+from app.services.product_automation_worker import run_product_automation_cycle
 from app.services.telegram_external_transfer_service import ensure_telegram_external_transfer_schema
 from app.services.auth_sessions import ensure_auth_refresh_schema
 from app.services.sandbox_transition_worker import run_sandbox_auto_transitions
@@ -177,6 +209,25 @@ async def p2p_expiration_worker():
             except Exception as exc:
                 logger.error(f"P2P expiration worker error: {exc}")
             await asyncio.sleep(30)
+
+
+async def product_automation_worker():
+    async for db in get_db():
+        while True:
+            try:
+                summary = await run_product_automation_cycle(
+                    db,
+                    batch_limit=settings.PRODUCT_AUTOMATION_BATCH_LIMIT,
+                )
+                if (
+                    summary["payment_requests"]["processed"]
+                    or summary["scheduled_transfers"]["processed"]
+                    or summary["savings"]["processed"]
+                ):
+                    logger.info("Product automation cycle processed: %s", summary)
+            except Exception as exc:
+                logger.error(f"Product automation worker error: {exc}")
+            await asyncio.sleep(settings.PRODUCT_AUTOMATION_INTERVAL_SECONDS)
 
 
 async def _count_unbalanced_journals(db) -> int:
@@ -450,6 +501,18 @@ app.include_router(auth.router, prefix="/auth", tags=["Auth"])
 app.include_router(change_password_router)
 app.include_router(wallet.router, prefix="/wallet", tags=["Wallet"])
 app.include_router(wallet_payment_collections_router)
+app.include_router(wallet_payment_requests_v2_router)
+app.include_router(wallet_scheduled_transfers_router)
+app.include_router(support_cases_router)
+app.include_router(savings_router)
+app.include_router(financial_insights_router)
+app.include_router(referrals_router)
+app.include_router(business_router)
+app.include_router(merchant_api_router)
+app.include_router(pots_router)
+app.include_router(virtual_cards_router)
+app.include_router(trust_router)
+app.include_router(fx_router)
 app.include_router(usdc_wallet_router)
 app.include_router(crypto_wallet_router)
 app.include_router(country.router, prefix="/api/countries", tags=["Countries"])
@@ -461,6 +524,10 @@ app.include_router(admin_loan_penalties_router.router)
 app.include_router(admin_loan_collaterals_router.router)
 app.include_router(admin_loan_documents_router.router)
 app.include_router(admin_payment_requests_router.router)
+app.include_router(admin_product_automation_router.router)
+app.include_router(admin_support_cases_router.router)
+app.include_router(admin_virtual_cards_router.router)
+app.include_router(admin_agent_offline_router.router)
 app.include_router(invoices_router)
 app.include_router(merchant_router)
 app.include_router(loans_router)
@@ -498,6 +565,8 @@ app.include_router(admin_transactions_audit_router.router)
 app.include_router(admin_error_logs_router.router)
 app.include_router(admin_wallet_analysis_router.router)
 app.include_router(agent_router, prefix="/agent", tags=["Agent Operations"])
+app.include_router(agent_bonus_router)
+app.include_router(agent_offline_router)
 app.include_router(agent_chat_router)
 app.include_router(agent_cash_chat_router)
 app.include_router(agent_credit_chat_router)
@@ -875,6 +944,19 @@ async def startup_event():
         await ensure_telegram_external_transfer_schema(db)
         await ensure_ai_runtime_schema(db)
         await ensure_payments_runtime_schema(db)
+        await ensure_payment_requests_v2_schema(db)
+        await ensure_support_cases_schema(db)
+        await ensure_trust_schema(db)
+        await ensure_fx_schema(db)
+        await ensure_scheduled_transfers_schema(db)
+        await ensure_savings_schema(db)
+        await ensure_financial_insights_schema(db)
+        await ensure_referrals_schema(db)
+        await ensure_business_schema(db)
+        await ensure_merchant_api_schema(db)
+        await ensure_agent_offline_schema(db)
+        await ensure_pots_schema(db)
+        await ensure_virtual_cards_schema(db)
         await ensure_operator_workflow_schema(db)
         await db.commit()
         break
@@ -883,6 +965,8 @@ async def startup_event():
     background_tasks.append(asyncio.create_task(webhook_retry_worker()))
     background_tasks.append(asyncio.create_task(alerts_worker()))
     background_tasks.append(asyncio.create_task(p2p_expiration_worker()))
+    if settings.PRODUCT_AUTOMATION_ENABLED:
+        background_tasks.append(asyncio.create_task(product_automation_worker()))
     if settings.LEDGER_HEALTH_CHECK_ENABLED:
         background_tasks.append(asyncio.create_task(ledger_health_worker()))
     if settings.LEDGER_DAILY_CHECK_ENABLED:

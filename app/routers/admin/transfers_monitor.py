@@ -215,6 +215,7 @@ async def simulate_external_transfer(
         credit_available=credit_available,
         total_required=total_required,
         prefer_credit_only=is_bif_wallet,
+        mirror_wallet_with_credit=not is_bif_wallet,
     )
     capacity_after = (
         funding["credit_available_after"]

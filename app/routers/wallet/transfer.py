@@ -1116,6 +1116,7 @@ async def _external_transfer_core(
             credit_available=credit_available_before,
             total_required=total_required,
             prefer_credit_only=is_bif_wallet,
+            mirror_wallet_with_credit=not is_bif_wallet,
         )
         wallet_after = funding["wallet_after"]
         credit_used = funding["credit_used"]
@@ -1437,8 +1438,12 @@ async def _fund_pending_external_transfer_for_approval(
         if credit_line
         else decimal.Decimal("0")
     )
-    total_available_before = wallet_balance_before + credit_available_before
-    shortage = max(decimal.Decimal("0"), total_required - total_available_before)
+    approval_available_before = (
+        credit_available_before
+        if is_bif_wallet
+        else effective_external_transfer_capacity(wallet_balance_before, credit_available_before)
+    )
+    shortage = max(decimal.Decimal("0"), total_required - approval_available_before)
     now = datetime.utcnow()
 
     if shortage > 0:
@@ -1502,6 +1507,7 @@ async def _fund_pending_external_transfer_for_approval(
         credit_available=credit_available_before,
         total_required=total_required,
         prefer_credit_only=is_bif_wallet,
+        mirror_wallet_with_credit=not is_bif_wallet,
     )
     credit_used = funding["credit_used"]
     credit_available_after = funding["credit_available_after"]
