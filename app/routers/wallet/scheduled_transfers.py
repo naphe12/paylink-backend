@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.dependencies.auth import get_current_user_db
 from app.models.users import Users
-from app.schemas.scheduled_transfers import ScheduledTransferCreate, ScheduledTransferRead
+from app.schemas.scheduled_transfers import ScheduledTransferCreate, ScheduledTransferRead, ScheduledTransferUpdate
 from app.services.scheduled_transfer_service import (
     cancel_scheduled_transfer,
     create_scheduled_transfer,
@@ -15,6 +15,7 @@ from app.services.scheduled_transfer_service import (
     resume_scheduled_transfer,
     run_due_scheduled_transfers,
     run_scheduled_transfer_now,
+    update_scheduled_transfer,
 )
 
 router = APIRouter(tags=["Scheduled Transfers"])
@@ -35,6 +36,21 @@ async def create_scheduled_transfer_route(
     current_user: Users = Depends(get_current_user_db),
 ):
     return await create_scheduled_transfer(db, current_user=current_user, payload=payload)
+
+
+@router.put("/wallet/scheduled-transfers/{schedule_id}", response_model=ScheduledTransferRead)
+async def update_scheduled_transfer_route(
+    schedule_id: UUID,
+    payload: ScheduledTransferUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user_db),
+):
+    return await update_scheduled_transfer(
+        db,
+        current_user=current_user,
+        schedule_id=schedule_id,
+        payload=payload,
+    )
 
 
 @router.post("/wallet/scheduled-transfers/run-due", response_model=list[ScheduledTransferRead])

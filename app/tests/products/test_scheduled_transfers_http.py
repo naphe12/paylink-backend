@@ -97,8 +97,18 @@ def test_scheduled_transfer_routes_cover_lifecycle(monkeypatch):
     async def fake_resume_scheduled_transfer(db, *, current_user, schedule_id):
         return _schedule_payload(schedule_id, current_user.user_id, status="active")
 
+    async def fake_update_scheduled_transfer(db, *, current_user, schedule_id, payload):
+        assert payload.frequency == "monthly"
+        return _schedule_payload(
+            schedule_id,
+            current_user.user_id,
+            frequency="monthly",
+            next_run_at="2026-05-08T08:00:00Z",
+        )
+
     monkeypatch.setattr(scheduled_module, "list_scheduled_transfers", fake_list_scheduled_transfers)
     monkeypatch.setattr(scheduled_module, "create_scheduled_transfer", fake_create_scheduled_transfer)
+    monkeypatch.setattr(scheduled_module, "update_scheduled_transfer", fake_update_scheduled_transfer)
     monkeypatch.setattr(scheduled_module, "run_due_scheduled_transfers", fake_run_due_scheduled_transfers)
     monkeypatch.setattr(scheduled_module, "run_scheduled_transfer_now", fake_run_scheduled_transfer_now)
     monkeypatch.setattr(scheduled_module, "cancel_scheduled_transfer", fake_cancel_scheduled_transfer)
@@ -124,6 +134,13 @@ def test_scheduled_transfer_routes_cover_lifecycle(monkeypatch):
     )
     assert create_response.status_code == 200
     assert create_response.json()["frequency"] == "weekly"
+
+    update_response = client.put(
+        f"/wallet/scheduled-transfers/{schedule_id}",
+        json={"frequency": "monthly", "next_run_at": "2026-05-08T08:00:00Z"},
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["frequency"] == "monthly"
 
     run_due_response = client.post("/wallet/scheduled-transfers/run-due")
     assert run_due_response.status_code == 200

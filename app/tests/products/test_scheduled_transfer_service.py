@@ -40,6 +40,20 @@ class _RunDb:
         return None
 
 
+class _UpdateDb:
+    def __init__(self, item):
+        self.item = item
+
+    async def scalar(self, _stmt):
+        return self.item
+
+    async def commit(self):
+        return None
+
+    async def refresh(self, _item):
+        return None
+
+
 class _FakeScheduledTransfer:
     def __init__(self, **kwargs):
         for key, value in kwargs.items():
@@ -58,7 +72,7 @@ def test_create_scheduled_transfer_supports_external_payload(monkeypatch):
         transfer_type="external",
         amount=Decimal("125.00"),
         frequency="monthly",
-        next_run_at=datetime(2026, 4, 8, 8, 0, tzinfo=timezone.utc),
+        next_run_at=datetime(2027, 4, 8, 8, 0, tzinfo=timezone.utc),
         note="Famille",
         external_transfer={
             "partner_name": "Lumicash",
@@ -252,3 +266,56 @@ def test_run_scheduled_transfer_item_auto_pauses_after_max_failures(monkeypatch)
     assert result["failure_count"] == 3
     assert result["auto_paused_for_failures"] is True
     assert "Mise en pause auto" in (result["last_result"] or "")
+
+
+def test_update_scheduled_transfer_updates_programming(monkeypatch):
+    current_user = SimpleNamespace(user_id=uuid4())
+    schedule_id = uuid4()
+    item = SimpleNamespace(
+        schedule_id=schedule_id,
+        user_id=current_user.user_id,
+        receiver_user_id=uuid4(),
+        receiver_identifier="@alice",
+        amount=Decimal("20.00"),
+        currency_code="EUR",
+        frequency="weekly",
+        status="active",
+        note="Old note",
+        next_run_at=datetime(2026, 4, 9, 8, 0, tzinfo=timezone.utc),
+        last_run_at=None,
+        last_result=None,
+        remaining_runs=4,
+        metadata_={"transfer_type": "internal", "failure_count": 2, "max_consecutive_failures": 3},
+        created_at=datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc),
+    )
+    db = _UpdateDb(item)
+    now = datetime(2026, 4, 8, 10, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(service, "_utcnow", lambda: now)
+
+    payload = SimpleNamespace(
+        model_dump=lambda **kwargs: {
+            "frequency": "monthly",
+            "next_run_at": datetime(2026, 4, 15, 8, 0, tzinfo=timezone.utc),
+            "remaining_runs": 2,
+            "max_consecutive_failures": 5,
+            "note": "Nouveau planning",
+        }
+    )
+
+    result = asyncio.run(
+        service.update_scheduled_transfer(
+            db,
+            current_user=current_user,
+            schedule_id=schedule_id,
+            payload=payload,
+        )
+    )
+
+    assert result["frequency"] == "monthly"
+    assert result["remaining_runs"] == 2
+    assert result["max_consecutive_failures"] == 5
+    assert result["note"] == "Nouveau planning"
+    assert result["last_result"] == "Programmation modifiee par l'utilisateur"
+    assert item.metadata_["failure_count"] == 0
+    assert item.metadata_["monthly_anchor_day"] == 15

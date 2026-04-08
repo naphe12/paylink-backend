@@ -441,6 +441,71 @@ async def create_scheduled_transfer(
     return _serialize_schedule(item)
 
 
+async def update_scheduled_transfer(
+    db: AsyncSession,
+    *,
+    current_user: Users,
+    schedule_id: UUID,
+    payload,
+):
+    item = await db.scalar(
+        select(ScheduledTransfers)
+        .where(
+            ScheduledTransfers.schedule_id == schedule_id,
+            ScheduledTransfers.user_id == current_user.user_id,
+        )
+        .with_for_update()
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="Transfert programme introuvable")
+    if item.status in {"cancelled", "completed"}:
+        raise HTTPException(status_code=400, detail="Ce transfert programme ne peut pas etre modifie")
+
+    updates = payload.model_dump(exclude_unset=True)
+    if not updates:
+        return _serialize_schedule(item)
+
+    now = _utcnow()
+    metadata = _schedule_metadata(item)
+
+    next_run_at = updates.get("next_run_at")
+    if next_run_at is not None:
+        if next_run_at.tzinfo is None:
+            next_run_at = next_run_at.replace(tzinfo=timezone.utc)
+        if next_run_at < now:
+            raise HTTPException(status_code=400, detail="La prochaine execution doit etre dans le futur")
+        item.next_run_at = next_run_at
+
+    if "amount" in updates and updates.get("amount") is not None:
+        item.amount = updates["amount"]
+    if "frequency" in updates and updates.get("frequency") is not None:
+        item.frequency = updates["frequency"]
+    if "note" in updates:
+        item.note = updates.get("note")
+    if "remaining_runs" in updates:
+        item.remaining_runs = updates.get("remaining_runs")
+
+    if "max_consecutive_failures" in updates and updates.get("max_consecutive_failures") is not None:
+        metadata["max_consecutive_failures"] = int(updates["max_consecutive_failures"])
+
+    monthly_anchor = None
+    if item.frequency == "monthly":
+        anchor_source = item.next_run_at or next_run_at
+        if anchor_source is not None:
+            monthly_anchor = anchor_source.day
+            metadata["monthly_anchor_day"] = monthly_anchor
+    else:
+        metadata.pop("monthly_anchor_day", None)
+
+    metadata["failure_count"] = 0
+    item.metadata_ = metadata
+    item.updated_at = now
+    item.last_result = "Programmation modifiee par l'utilisateur"
+    await db.commit()
+    await db.refresh(item)
+    return _serialize_schedule(item)
+
+
 async def list_scheduled_transfers(db: AsyncSession, *, current_user: Users):
     rows = (
         await db.execute(

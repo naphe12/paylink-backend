@@ -846,7 +846,7 @@ async def request_metrics_middleware(request: Request, call_next):
         return await call_next(request)
 
     # Skip noisy health/metrics routes to keep business signal clean.
-    skip_prefixes = ("/health", "/metrics", "/api/metrics", "/ws")
+    skip_prefixes = ("/health", "/metrics", "/api/metrics", "/ws", "/auth/login")
     if request.url.path.startswith(skip_prefixes):
         return await call_next(request)
 
@@ -863,7 +863,10 @@ async def request_metrics_middleware(request: Request, call_next):
             duration_ms=(time.perf_counter() - started) * 1000,
             request_id=request_id,
         )
-        await _persist_request_metric(payload)
+        try:
+            await _persist_request_metric(payload)
+        except Exception as persist_exc:
+            logger.warning("Request metrics insert failed path=%s err=%s", request.url.path, persist_exc)
     except Exception as exc:
         payload = build_request_metric_payload(
             method=request.method,

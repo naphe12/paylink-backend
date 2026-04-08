@@ -37,6 +37,15 @@ class ScheduledTransferCreate(BaseModel):
         return self
 
 
+class ScheduledTransferUpdate(BaseModel):
+    amount: Decimal | None = Field(default=None, gt=0)
+    frequency: Literal["daily", "weekly", "monthly"] | None = None
+    next_run_at: datetime | None = None
+    note: str | None = None
+    remaining_runs: int | None = Field(default=None, ge=1)
+    max_consecutive_failures: int | None = Field(default=None, ge=1, le=10)
+
+
 class ScheduledTransferRead(BaseModel):
     schedule_id: UUID
     user_id: UUID
