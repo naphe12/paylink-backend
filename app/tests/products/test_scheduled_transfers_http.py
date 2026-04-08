@@ -69,6 +69,20 @@ def test_scheduled_transfer_routes_cover_lifecycle(monkeypatch):
         assert payload.frequency == "weekly"
         return _schedule_payload(schedule_id, current_user.user_id)
 
+    async def fake_get_scheduled_transfer_diagnostic(db, *, current_user, schedule_id):
+        return {
+            "schedule_id": str(schedule_id),
+            "transfer_type": "external",
+            "status": "failed",
+            "is_due": True,
+            "failure_count": 2,
+            "max_consecutive_failures": 3,
+            "last_result": "Erreur technique planification (RuntimeError)",
+            "recommended_action": "verifier_statut_externe_et_funding",
+            "blocking_reasons": ["external_transfer_pending_approval"],
+            "context": {"external_transfer_status": "pending"},
+        }
+
     async def fake_run_due_scheduled_transfers(db, *, current_user):
         return [
             _schedule_payload(
@@ -108,6 +122,7 @@ def test_scheduled_transfer_routes_cover_lifecycle(monkeypatch):
 
     monkeypatch.setattr(scheduled_module, "list_scheduled_transfers", fake_list_scheduled_transfers)
     monkeypatch.setattr(scheduled_module, "create_scheduled_transfer", fake_create_scheduled_transfer)
+    monkeypatch.setattr(scheduled_module, "get_scheduled_transfer_diagnostic", fake_get_scheduled_transfer_diagnostic)
     monkeypatch.setattr(scheduled_module, "update_scheduled_transfer", fake_update_scheduled_transfer)
     monkeypatch.setattr(scheduled_module, "run_due_scheduled_transfers", fake_run_due_scheduled_transfers)
     monkeypatch.setattr(scheduled_module, "run_scheduled_transfer_now", fake_run_scheduled_transfer_now)
@@ -134,6 +149,11 @@ def test_scheduled_transfer_routes_cover_lifecycle(monkeypatch):
     )
     assert create_response.status_code == 200
     assert create_response.json()["frequency"] == "weekly"
+
+    diagnostic_response = client.get(f"/wallet/scheduled-transfers/{schedule_id}/diagnostic")
+    assert diagnostic_response.status_code == 200
+    assert diagnostic_response.json()["transfer_type"] == "external"
+    assert "external_transfer_pending_approval" in diagnostic_response.json()["blocking_reasons"]
 
     update_response = client.put(
         f"/wallet/scheduled-transfers/{schedule_id}",

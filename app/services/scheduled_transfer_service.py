@@ -11,6 +11,7 @@ from sqlalchemy import case, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.scheduled_transfers import ScheduledTransfers
+from app.models.external_transfers import ExternalTransfers
 from app.models.transactions import Transactions
 from app.models.users import Users
 from app.models.wallets import Wallets
@@ -136,6 +137,17 @@ def _serialize_schedule(item: ScheduledTransfers) -> dict:
         "updated_at": item.updated_at,
         "is_due": _schedule_is_due(item),
     }
+
+
+def _scheduled_transfer_recommended_action(item: ScheduledTransfers, *, transfer_type: str) -> str:
+    status = str(getattr(item, "status", "") or "").strip().lower()
+    if status == "paused":
+        return "reprendre_ou_annuler"
+    if status in {"cancelled", "completed"}:
+        return "aucune_action"
+    if transfer_type == "external":
+        return "verifier_statut_externe_et_funding"
+    return "executer_ou_surveiller"
 
 
 async def _resolve_receiver(db: AsyncSession, identifier: str) -> Users:
@@ -538,6 +550,96 @@ async def list_scheduled_transfers(db: AsyncSession, *, current_user: Users):
         )
     ).scalars().all()
     return [_serialize_schedule(item) for item in rows]
+
+
+async def get_scheduled_transfer_diagnostic(
+    db: AsyncSession,
+    *,
+    current_user: Users,
+    schedule_id: UUID,
+) -> dict:
+    item = await db.scalar(
+        select(ScheduledTransfers).where(
+            ScheduledTransfers.schedule_id == schedule_id,
+            ScheduledTransfers.user_id == current_user.user_id,
+        )
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="Transfert programme introuvable")
+
+    payload = _serialize_schedule(item)
+    transfer_type = _schedule_transfer_type(item)
+    metadata = _schedule_metadata(item)
+    diagnostic = {
+        "schedule_id": str(item.schedule_id),
+        "transfer_type": transfer_type,
+        "status": payload["status"],
+        "is_due": payload["is_due"],
+        "failure_count": payload["failure_count"],
+        "max_consecutive_failures": payload["max_consecutive_failures"],
+        "last_result": payload["last_result"],
+        "next_run_at": payload["next_run_at"],
+        "recommended_action": _scheduled_transfer_recommended_action(item, transfer_type=transfer_type),
+        "blocking_reasons": [],
+        "context": {},
+    }
+
+    if transfer_type != "external":
+        return diagnostic
+
+    external_payload = _schedule_external_payload(item) or {}
+    partner_name = str(external_payload.get("partner_name") or "").strip()
+    recipient_phone = str(external_payload.get("recipient_phone") or "").strip()
+    recipient_name = str(external_payload.get("recipient_name") or "").strip()
+    country_destination = str(external_payload.get("country_destination") or "").strip()
+
+    latest_transfer = await db.scalar(
+        select(ExternalTransfers)
+        .where(
+            ExternalTransfers.user_id == current_user.user_id,
+            ExternalTransfers.partner_name == partner_name,
+            ExternalTransfers.country_destination == country_destination,
+            ExternalTransfers.recipient_phone == recipient_phone,
+            ExternalTransfers.recipient_name == recipient_name,
+        )
+        .order_by(ExternalTransfers.created_at.desc())
+        .limit(1)
+    )
+
+    if latest_transfer:
+        transfer_metadata = dict(getattr(latest_transfer, "metadata_", {}) or {})
+        funding_pending = bool(transfer_metadata.get("funding_pending"))
+        aml_manual = bool(transfer_metadata.get("aml_manual_review_required"))
+        required_credit_topup = transfer_metadata.get("required_credit_topup")
+        review_reasons = list(transfer_metadata.get("review_reasons") or [])
+        aml_reason_codes = list(transfer_metadata.get("aml_reason_codes") or [])
+
+        if funding_pending:
+            diagnostic["blocking_reasons"].append("funding_pending")
+        if aml_manual:
+            diagnostic["blocking_reasons"].append("aml_manual_review_required")
+        if str(getattr(latest_transfer, "status", "") or "").strip().lower() == "pending":
+            diagnostic["blocking_reasons"].append("external_transfer_pending_approval")
+
+        diagnostic["context"] = {
+            "external_transfer_id": str(latest_transfer.transfer_id),
+            "external_transfer_reference": latest_transfer.reference_code,
+            "external_transfer_status": latest_transfer.status,
+            "required_credit_topup": required_credit_topup,
+            "review_reasons": review_reasons,
+            "aml_reason_codes": aml_reason_codes,
+            "funding_pending": funding_pending,
+            "aml_manual_review_required": aml_manual,
+        }
+    else:
+        diagnostic["blocking_reasons"].append("no_external_attempt_found")
+        diagnostic["context"] = {
+            "partner_name": partner_name,
+            "recipient_phone": recipient_phone,
+            "country_destination": country_destination,
+        }
+
+    return diagnostic
 
 
 async def pause_scheduled_transfer(db: AsyncSession, *, current_user: Users, schedule_id: UUID):

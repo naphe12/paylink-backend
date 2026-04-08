@@ -10,6 +10,7 @@ from app.schemas.scheduled_transfers import ScheduledTransferCreate, ScheduledTr
 from app.services.scheduled_transfer_service import (
     cancel_scheduled_transfer,
     create_scheduled_transfer,
+    get_scheduled_transfer_diagnostic,
     list_scheduled_transfers,
     pause_scheduled_transfer,
     resume_scheduled_transfer,
@@ -27,6 +28,19 @@ async def list_scheduled_transfers_route(
     current_user: Users = Depends(get_current_user_db),
 ):
     return await list_scheduled_transfers(db, current_user=current_user)
+
+
+@router.get("/wallet/scheduled-transfers/{schedule_id}/diagnostic")
+async def get_scheduled_transfer_diagnostic_route(
+    schedule_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user_db),
+):
+    return await get_scheduled_transfer_diagnostic(
+        db,
+        current_user=current_user,
+        schedule_id=schedule_id,
+    )
 
 
 @router.post("/wallet/scheduled-transfers", response_model=ScheduledTransferRead)
