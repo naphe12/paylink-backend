@@ -10,6 +10,7 @@ from app.core.security import get_current_user
 from app.models.users import Users
 from app.schemas.payment_requests import (
     PaymentRequestAction,
+    PaymentRequestAutoPayUpdate,
     PaymentRequestBatchRunRead,
     PaymentRequestCreate,
     PaymentRequestDetailRead,
@@ -25,6 +26,7 @@ from app.services.payment_request_service import (
     pay_payment_request,
     remind_payment_request,
     run_due_payment_request_maintenance,
+    update_payment_request_auto_pay,
 )
 
 router = APIRouter(prefix="/wallet/payment-requests", tags=["Wallet Payment Requests"])
@@ -119,6 +121,25 @@ async def remind_payment_request_route(
     current_user: Users = Depends(get_current_user),
 ):
     request_obj = await remind_payment_request(db, request_id=request_id, current_user=current_user, reason=payload.reason)
+    items = await list_payment_requests(db, current_user=current_user)
+    return _find_request_or_fallback(items, request_obj.request_id)
+
+
+@router.post("/{request_id}/autopay", response_model=PaymentRequestRead)
+async def update_payment_request_autopay_route(
+    request_id: UUID,
+    payload: PaymentRequestAutoPayUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user),
+):
+    request_obj = await update_payment_request_auto_pay(
+        db,
+        request_id=request_id,
+        current_user=current_user,
+        enabled=payload.enabled,
+        max_amount=payload.max_amount,
+        reason=payload.reason,
+    )
     items = await list_payment_requests(db, current_user=current_user)
     return _find_request_or_fallback(items, request_obj.request_id)
 

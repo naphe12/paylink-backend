@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
+from app.dependencies.step_up import require_admin_step_up
 from app.models.client_balance_events import ClientBalanceEvents
 from app.models.wallet_transactions import WalletTransactions
 from app.models.transactions import Transactions
@@ -145,7 +146,10 @@ def _is_recent_payment_note_candidate(created_at: datetime | None) -> bool:
     return value >= (reference - timedelta(days=RECENT_PAYMENT_NOTE_WINDOW_DAYS))
 
 
-@router.post("/simulate-external")
+@router.post(
+    "/simulate-external",
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def simulate_external_transfer(
     payload: AdminExternalTransferSimulationRequest,
     db: AsyncSession = Depends(get_db),

@@ -5,8 +5,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
+from app.dependencies.step_up import require_admin_step_up
 from app.models.users import Users
-from app.schemas.agent_offline_operations import AgentOfflineOperationAdminRead
+from app.schemas.agent_offline_operations import AgentOfflineOperationAdminRead, AgentOfflineSyncRequest
 from app.services.agent_offline_service import (
     cancel_admin_agent_offline_operation,
     get_admin_agent_offline_operation_detail,
@@ -37,16 +38,29 @@ async def get_admin_agent_offline_operation_detail_route(
     return await get_admin_agent_offline_operation_detail(db, operation_id=operation_id)
 
 
-@router.post("/{operation_id}/retry", response_model=AgentOfflineOperationAdminRead)
+@router.post(
+    "/{operation_id}/retry",
+    response_model=AgentOfflineOperationAdminRead,
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def retry_admin_agent_offline_operation_route(
     operation_id: UUID,
+    payload: AgentOfflineSyncRequest | None = None,
     db: AsyncSession = Depends(get_db),
     _: Users = Depends(get_current_admin),
 ):
-    return await retry_admin_agent_offline_operation(db, operation_id=operation_id)
+    return await retry_admin_agent_offline_operation(
+        db,
+        operation_id=operation_id,
+        force=bool(payload.force) if payload else False,
+    )
 
 
-@router.post("/{operation_id}/cancel", response_model=AgentOfflineOperationAdminRead)
+@router.post(
+    "/{operation_id}/cancel",
+    response_model=AgentOfflineOperationAdminRead,
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def cancel_admin_agent_offline_operation_route(
     operation_id: UUID,
     db: AsyncSession = Depends(get_db),

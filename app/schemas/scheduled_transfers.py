@@ -20,10 +20,11 @@ class ScheduledTransferCreate(BaseModel):
     transfer_type: Literal["internal", "external"] = "internal"
     receiver_identifier: str | None = None
     amount: Decimal = Field(gt=0)
-    frequency: str
+    frequency: Literal["daily", "weekly", "monthly"]
     next_run_at: datetime
     note: str | None = None
     remaining_runs: int | None = Field(default=None, ge=1)
+    max_consecutive_failures: int = Field(default=3, ge=1, le=10)
     external_transfer: ScheduledExternalTransferPayload | None = None
 
     @model_validator(mode="after")
@@ -52,6 +53,9 @@ class ScheduledTransferRead(BaseModel):
     last_run_at: datetime | None = None
     last_result: str | None = None
     remaining_runs: int | None = None
+    failure_count: int = 0
+    max_consecutive_failures: int = 3
+    auto_paused_for_failures: bool = False
     is_due: bool = False
     metadata_: dict[str, Any] = Field(default_factory=dict, alias="metadata")
     created_at: datetime

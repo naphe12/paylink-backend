@@ -199,3 +199,18 @@ def test_scheduled_transfer_routes_support_external_payload(monkeypatch):
     assert response.status_code == 200
     assert response.json()["transfer_type"] == "external"
     assert response.json()["external_transfer"]["partner_name"] == "Lumicash"
+
+
+def test_scheduled_transfer_routes_reject_invalid_frequency():
+    client = _build_test_client()
+    response = client.post(
+        "/wallet/scheduled-transfers",
+        json={
+            "receiver_identifier": "@bob",
+            "amount": 2500,
+            "frequency": "yearly",
+            "next_run_at": "2026-04-08T08:00:00Z",
+        },
+    )
+
+    assert response.status_code == 422

@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from app.schemas.scheduled_transfers import ScheduledTransferCreate
 from app.services import scheduled_transfer_service as service
+from fastapi import HTTPException
 
 
 class _CreateDb:
@@ -77,6 +78,9 @@ def test_create_scheduled_transfer_supports_external_payload(monkeypatch):
     assert result["external_transfer"]["partner_name"] == "Lumicash"
     assert db.added[0].metadata_["transfer_type"] == "external"
     assert db.added[0].metadata_["external_transfer"]["country_destination"] == "Burundi"
+    assert db.added[0].metadata_["monthly_anchor_day"] == 8
+    assert db.added[0].metadata_["max_consecutive_failures"] == 3
+    assert db.added[0].metadata_["failure_count"] == 0
 
 
 def test_run_scheduled_transfer_item_executes_external_schedule(monkeypatch):
@@ -140,3 +144,111 @@ def test_run_scheduled_transfer_item_executes_external_schedule(monkeypatch):
     assert item.last_run_at == execution_time
     assert item.next_run_at == next_run_at + timedelta(days=7)
     assert item.remaining_runs == 1
+
+
+def test_advance_next_run_monthly_preserves_calendar_month():
+    january_end = datetime(2026, 1, 31, 8, 0, tzinfo=timezone.utc)
+    february = service._advance_next_run(january_end, "monthly")
+    march = service._advance_next_run(february, "monthly")
+
+    assert february == datetime(2026, 2, 28, 8, 0, tzinfo=timezone.utc)
+    assert march == datetime(2026, 3, 28, 8, 0, tzinfo=timezone.utc)
+
+
+def test_advance_next_run_monthly_with_anchor_restores_end_of_month():
+    january_end = datetime(2026, 1, 31, 8, 0, tzinfo=timezone.utc)
+    february = service._advance_next_run(january_end, "monthly", monthly_anchor_day=31)
+    march = service._advance_next_run(february, "monthly", monthly_anchor_day=31)
+
+    assert february == datetime(2026, 2, 28, 8, 0, tzinfo=timezone.utc)
+    assert march == datetime(2026, 3, 31, 8, 0, tzinfo=timezone.utc)
+
+
+def test_run_scheduled_transfer_item_backfills_monthly_anchor_from_last_run(monkeypatch):
+    current_user = SimpleNamespace(user_id=uuid4(), email="client@example.com", paytag="@client")
+    execution_time = datetime(2026, 2, 28, 8, 0, tzinfo=timezone.utc)
+    item = SimpleNamespace(
+        schedule_id=uuid4(),
+        user_id=current_user.user_id,
+        receiver_user_id=uuid4(),
+        receiver_identifier="@alice",
+        amount=Decimal("42.00"),
+        currency_code="EUR",
+        frequency="monthly",
+        status="active",
+        note="Loyer",
+        next_run_at=datetime(2026, 2, 28, 8, 0, tzinfo=timezone.utc),
+        last_run_at=datetime(2026, 1, 31, 8, 0, tzinfo=timezone.utc),
+        last_result=None,
+        remaining_runs=None,
+        metadata_={"transfer_type": "internal"},
+        created_at=datetime(2026, 1, 10, 8, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 1, 10, 8, 0, tzinfo=timezone.utc),
+    )
+
+    async def fake_execute_internal_transfer(db, *, sender, receiver_identifier, amount, note, schedule_id):
+        assert sender.user_id == current_user.user_id
+        assert receiver_identifier == "@alice"
+        assert amount == Decimal("42.00")
+        return {
+            "receiver_user_id": item.receiver_user_id,
+            "currency_code": "EUR",
+            "tx_id": uuid4(),
+        }
+
+    monkeypatch.setattr(service, "_execute_internal_transfer", fake_execute_internal_transfer)
+    monkeypatch.setattr(service, "_utcnow", lambda: execution_time)
+
+    result = asyncio.run(
+        service._run_scheduled_transfer_item(
+            _RunDb(),
+            current_user=current_user,
+            item=item,
+            raise_on_failure=True,
+        )
+    )
+
+    assert result["status"] == "active"
+    assert item.metadata_["monthly_anchor_day"] == 31
+    assert item.next_run_at == datetime(2026, 3, 31, 8, 0, tzinfo=timezone.utc)
+
+
+def test_run_scheduled_transfer_item_auto_pauses_after_max_failures(monkeypatch):
+    current_user = SimpleNamespace(user_id=uuid4(), email="client@example.com", paytag="@client")
+    item = SimpleNamespace(
+        schedule_id=uuid4(),
+        user_id=current_user.user_id,
+        receiver_user_id=uuid4(),
+        receiver_identifier="@alice",
+        amount=Decimal("15.00"),
+        currency_code="EUR",
+        frequency="weekly",
+        status="active",
+        note="Test",
+        next_run_at=datetime(2026, 4, 8, 8, 0, tzinfo=timezone.utc),
+        last_run_at=None,
+        last_result=None,
+        remaining_runs=None,
+        metadata_={"transfer_type": "internal", "failure_count": 2, "max_consecutive_failures": 3},
+        created_at=datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc),
+    )
+
+    async def fake_execute_internal_transfer(*args, **kwargs):
+        raise HTTPException(status_code=400, detail="Solde insuffisant")
+
+    monkeypatch.setattr(service, "_execute_internal_transfer", fake_execute_internal_transfer)
+
+    result = asyncio.run(
+        service._run_scheduled_transfer_item(
+            _RunDb(),
+            current_user=current_user,
+            item=item,
+            raise_on_failure=False,
+        )
+    )
+
+    assert result["status"] == "paused"
+    assert result["failure_count"] == 3
+    assert result["auto_paused_for_failures"] is True
+    assert "Mise en pause auto" in (result["last_result"] or "")

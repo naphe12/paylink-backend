@@ -128,6 +128,7 @@ def test_merchant_api_routes_cover_key_webhook_and_retry(monkeypatch):
 
     async def fake_create_business_webhook(db, *, business_id, current_user, payload):
         assert str(payload.target_url) == "https://merchant.example.com/webhook"
+        assert payload.max_consecutive_failures == 4
         return {
             "webhook_id": str(webhook_id),
             "business_id": str(business_id),
@@ -247,7 +248,11 @@ def test_merchant_api_routes_cover_key_webhook_and_retry(monkeypatch):
 
     create_webhook_response = client.post(
         f"/merchant-api/businesses/{business_id}/webhooks",
-        json={"target_url": "https://merchant.example.com/webhook", "event_types": ["payment.request.paid"]},
+        json={
+            "target_url": "https://merchant.example.com/webhook",
+            "event_types": ["payment.request.paid"],
+            "max_consecutive_failures": 4,
+        },
     )
     assert create_webhook_response.status_code == 200
     assert create_webhook_response.json()["plain_signing_secret"] == "whsec_secret"

@@ -126,6 +126,16 @@ def test_savings_routes_create_detail_and_automation(monkeypatch):
         }
         return detail
 
+    async def fake_update_savings_goal_lock(db, *, current_user, goal_id, payload):
+        detail = _goal_payload(goal_id, current_user.user_id)
+        detail["locked"] = bool(payload.locked)
+        detail["metadata"] = {
+            "lock_control": {
+                "reason": payload.reason,
+            }
+        }
+        return detail
+
     async def fake_apply_savings_round_up(db, *, current_user, goal_id, payload):
         assert str(payload.spent_amount) == "18750"
         detail = _goal_payload(goal_id, current_user.user_id)
@@ -164,6 +174,7 @@ def test_savings_routes_create_detail_and_automation(monkeypatch):
     monkeypatch.setattr(savings_module, "get_savings_goal_detail", fake_get_savings_goal_detail)
     monkeypatch.setattr(savings_module, "contribute_savings_goal", fake_contribute_savings_goal)
     monkeypatch.setattr(savings_module, "withdraw_savings_goal", fake_withdraw_savings_goal)
+    monkeypatch.setattr(savings_module, "update_savings_goal_lock", fake_update_savings_goal_lock)
     monkeypatch.setattr(savings_module, "configure_savings_round_up", fake_configure_savings_round_up)
     monkeypatch.setattr(savings_module, "apply_savings_round_up", fake_apply_savings_round_up)
     monkeypatch.setattr(savings_module, "configure_savings_auto_contribution", fake_configure_savings_auto_contribution)
@@ -194,6 +205,13 @@ def test_savings_routes_create_detail_and_automation(monkeypatch):
     withdraw_response = client.post(f"/savings/goals/{goal_id}/withdraw", json={"amount": 2000})
     assert withdraw_response.status_code == 200
     assert withdraw_response.json()["current_amount"] == "13000.00"
+
+    lock_response = client.put(
+        f"/savings/goals/{goal_id}/lock",
+        json={"locked": True, "reason": "Bloquer l'objectif"},
+    )
+    assert lock_response.status_code == 200
+    assert lock_response.json()["locked"] is True
 
     round_up_response = client.put(
         f"/savings/goals/{goal_id}/round-up",

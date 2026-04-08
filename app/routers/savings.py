@@ -10,6 +10,7 @@ from app.schemas.savings import (
     SavingsAutoContributionRuleUpdate,
     SavingsAutoContributionRunCreate,
     SavingsGoalCreate,
+    SavingsGoalLockUpdate,
     SavingsGoalMovementCreate,
     SavingsGoalRead,
     SavingsRoundUpApplyCreate,
@@ -25,6 +26,7 @@ from app.services.savings_service import (
     list_savings_goals,
     run_due_savings_auto_contributions,
     run_savings_auto_contribution,
+    update_savings_goal_lock,
     withdraw_savings_goal,
 )
 
@@ -83,6 +85,16 @@ async def withdraw_savings_goal_route(
     current_user: Users = Depends(get_current_user_db),
 ):
     return await withdraw_savings_goal(db, current_user=current_user, goal_id=goal_id, payload=payload)
+
+
+@router.put("/savings/goals/{goal_id}/lock", response_model=SavingsGoalRead)
+async def update_savings_goal_lock_route(
+    goal_id: UUID,
+    payload: SavingsGoalLockUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user_db),
+):
+    return await update_savings_goal_lock(db, current_user=current_user, goal_id=goal_id, payload=payload)
 
 
 @router.put("/savings/goals/{goal_id}/round-up", response_model=SavingsGoalRead)

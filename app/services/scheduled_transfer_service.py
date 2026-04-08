@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from calendar import monthrange
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
@@ -37,13 +38,24 @@ def _primary_wallet_stmt(user_id):
     )
 
 
-def _advance_next_run(next_run_at: datetime, frequency: str) -> datetime:
+def _advance_next_run(next_run_at: datetime, frequency: str, *, monthly_anchor_day: int | None = None) -> datetime:
     if frequency == "daily":
         return next_run_at + timedelta(days=1)
     if frequency == "weekly":
         return next_run_at + timedelta(days=7)
     if frequency == "monthly":
-        return next_run_at + timedelta(days=30)
+        try:
+            anchor_day = int(monthly_anchor_day or next_run_at.day)
+        except (TypeError, ValueError):
+            anchor_day = next_run_at.day
+        anchor_day = min(max(anchor_day, 1), 31)
+        month = next_run_at.month + 1
+        year = next_run_at.year
+        if month > 12:
+            month = 1
+            year += 1
+        day = min(anchor_day, monthrange(year, month)[1])
+        return next_run_at.replace(year=year, month=month, day=day)
     raise ValueError("Unsupported frequency")
 
 
@@ -69,10 +81,30 @@ def _schedule_external_payload(item: ScheduledTransfers) -> dict | None:
     return dict(payload) if isinstance(payload, dict) else None
 
 
+def _schedule_failure_count(item: ScheduledTransfers) -> int:
+    metadata = _schedule_metadata(item)
+    try:
+        return max(int(metadata.get("failure_count") or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _schedule_max_consecutive_failures(item: ScheduledTransfers) -> int:
+    metadata = _schedule_metadata(item)
+    raw = metadata.get("max_consecutive_failures")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 3
+    return min(max(value, 1), 10)
+
+
 def _serialize_schedule(item: ScheduledTransfers) -> dict:
     metadata = _schedule_metadata(item)
     transfer_type = _schedule_transfer_type(item)
     external_transfer = _schedule_external_payload(item)
+    failure_count = _schedule_failure_count(item)
+    max_consecutive_failures = _schedule_max_consecutive_failures(item)
     receiver_identifier = str(getattr(item, "receiver_identifier", "") or "").strip()
     if transfer_type == "external" and not receiver_identifier:
         receiver_identifier = (
@@ -96,6 +128,9 @@ def _serialize_schedule(item: ScheduledTransfers) -> dict:
         "last_run_at": item.last_run_at,
         "last_result": item.last_result,
         "remaining_runs": item.remaining_runs,
+        "failure_count": failure_count,
+        "max_consecutive_failures": max_consecutive_failures,
+        "auto_paused_for_failures": item.status == "paused" and failure_count >= max_consecutive_failures,
         "metadata": metadata,
         "created_at": item.created_at,
         "updated_at": item.updated_at,
@@ -260,6 +295,17 @@ async def _run_scheduled_transfer_item(
     raise_on_failure: bool,
 ) -> dict:
     try:
+        metadata = _schedule_metadata(item)
+        metadata["failure_count"] = 0
+        previous_last_run_at = item.last_run_at
+        monthly_anchor_day = metadata.get("monthly_anchor_day")
+        if item.frequency == "monthly" and monthly_anchor_day is None:
+            if previous_last_run_at is not None:
+                monthly_anchor_day = previous_last_run_at.day
+            elif item.next_run_at is not None:
+                monthly_anchor_day = item.next_run_at.day
+            metadata["monthly_anchor_day"] = monthly_anchor_day
+            item.metadata_ = metadata
         transfer_type = _schedule_transfer_type(item)
         if transfer_type == "external":
             result = await _execute_external_transfer(
@@ -298,16 +344,35 @@ async def _run_scheduled_transfer_item(
                 item.status = "completed"
                 item.next_run_at = now
             else:
-                item.next_run_at = _advance_next_run(item.next_run_at, item.frequency)
+                item.next_run_at = _advance_next_run(
+                    item.next_run_at,
+                    item.frequency,
+                    monthly_anchor_day=monthly_anchor_day,
+                )
         else:
-            item.next_run_at = _advance_next_run(item.next_run_at, item.frequency)
+            item.next_run_at = _advance_next_run(
+                item.next_run_at,
+                item.frequency,
+                monthly_anchor_day=monthly_anchor_day,
+            )
+        item.metadata_ = metadata
         await db.commit()
         await db.refresh(item)
         return _serialize_schedule(item)
     except HTTPException as exc:
-        item.status = "failed"
+        metadata = _schedule_metadata(item)
+        failure_count = _schedule_failure_count(item) + 1
+        max_consecutive_failures = _schedule_max_consecutive_failures(item)
+        metadata["failure_count"] = failure_count
+
+        if failure_count >= max_consecutive_failures:
+            item.status = "paused"
+            item.last_result = f"{str(exc.detail)} | Mise en pause auto apres {failure_count} echecs consecutifs."
+        else:
+            item.status = "failed"
+            item.last_result = str(exc.detail)
+        item.metadata_ = metadata
         item.updated_at = _utcnow()
-        item.last_result = str(exc.detail)
         await db.commit()
         await db.refresh(item)
         if raise_on_failure:
@@ -333,7 +398,13 @@ async def create_scheduled_transfer(
 
     receiver_user_id = None
     receiver_identifier = ""
-    metadata: dict = {"transfer_type": payload.transfer_type}
+    metadata: dict = {
+        "transfer_type": payload.transfer_type,
+        "failure_count": 0,
+        "max_consecutive_failures": int(payload.max_consecutive_failures),
+    }
+    if payload.frequency == "monthly":
+        metadata["monthly_anchor_day"] = next_run_at.day
     if payload.transfer_type == "external":
         external_transfer = payload.external_transfer.model_dump(mode="json", exclude_none=True)
         receiver_identifier = (
@@ -416,9 +487,12 @@ async def resume_scheduled_transfer(db: AsyncSession, *, current_user: Users, sc
     if item.status != "paused":
         raise HTTPException(status_code=400, detail="Ce transfert programme n'est pas en pause")
     now = _utcnow()
+    metadata = _schedule_metadata(item)
+    metadata["failure_count"] = 0
     item.status = "active"
     item.updated_at = now
     item.last_result = "Repris par l'utilisateur"
+    item.metadata_ = metadata
     if item.next_run_at and item.next_run_at < now:
         item.next_run_at = now
     await db.commit()

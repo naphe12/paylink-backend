@@ -5,10 +5,12 @@ from decimal import Decimal, ROUND_HALF_UP
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.disputes import Disputes
+from app.models.p2p_dispute import P2PDispute
+from app.models.p2p_trade import P2PTrade
 from app.models.payment_requests import PaymentRequests
 from app.models.trust_badges import TrustBadges
 from app.models.trust_events import TrustEvents
@@ -44,6 +46,23 @@ def _compute_level(score: int) -> str:
     if score < 75:
         return "trusted"
     return "premium_trusted"
+
+
+def _compute_ratio(numerator: int, denominator: int) -> Decimal | None:
+    if int(denominator or 0) <= 0:
+        return None
+    return (Decimal(int(numerator or 0)) / Decimal(int(denominator))).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+
+
+def _derive_reputation(*, trust_score: int, p2p_dispute_rate: Decimal | None, successful_p2p_trades: int) -> tuple[str, str]:
+    dispute_rate = Decimal(str(p2p_dispute_rate)) if p2p_dispute_rate is not None else Decimal("1")
+    if trust_score >= 80 and successful_p2p_trades >= 5 and dispute_rate <= Decimal("0.05"):
+        return "excellent", "Profil tres fiable avec historique P2P stable."
+    if trust_score >= 60 and dispute_rate <= Decimal("0.15"):
+        return "good", "Bon profil global avec risque de litige maitrise."
+    if trust_score >= 40:
+        return "fair", "Profil correct, mais encore en phase de consolidation."
+    return "watch", "Profil a surveiller avant d'augmenter les plafonds."
 
 
 def _score_profile(
@@ -153,13 +172,34 @@ async def _serialize_profile(db: AsyncSession, profile: TrustProfiles, *, user: 
     recommended_daily_limit = metadata.get("recommended_daily_limit")
     recommended_monthly_limit = metadata.get("recommended_monthly_limit")
     limit_multiplier = metadata.get("limit_multiplier")
+    total_payment_requests = int(metadata.get("total_payment_requests") or 0)
+    total_p2p_trades = int(metadata.get("total_p2p_trades") or 0)
+    p2p_dispute_count = int(metadata.get("p2p_dispute_count") or 0)
+    open_p2p_dispute_count = int(metadata.get("open_p2p_dispute_count") or 0)
+    payment_request_success_rate_raw = metadata.get("payment_request_success_rate")
+    p2p_completion_rate_raw = metadata.get("p2p_completion_rate")
+    p2p_dispute_rate_raw = metadata.get("p2p_dispute_rate")
+    payment_request_success_rate = (
+        Decimal(str(payment_request_success_rate_raw)) if payment_request_success_rate_raw is not None else None
+    )
+    p2p_completion_rate = Decimal(str(p2p_completion_rate_raw)) if p2p_completion_rate_raw is not None else None
+    p2p_dispute_rate = Decimal(str(p2p_dispute_rate_raw)) if p2p_dispute_rate_raw is not None else None
+    reputation_tier = str(metadata.get("reputation_tier") or "watch")
+    reputation_note = metadata.get("reputation_note")
     return {
         "user_id": profile.user_id,
         "trust_score": int(profile.trust_score or 0),
         "trust_level": profile.trust_level,
         "kyc_tier": int(getattr(user, "kyc_tier", 0) or 0) if user else None,
         "successful_payment_requests": int(profile.successful_payment_requests or 0),
+        "total_payment_requests": total_payment_requests,
+        "payment_request_success_rate": payment_request_success_rate,
         "successful_p2p_trades": int(profile.successful_p2p_trades or 0),
+        "total_p2p_trades": total_p2p_trades,
+        "p2p_completion_rate": p2p_completion_rate,
+        "p2p_dispute_count": p2p_dispute_count,
+        "open_p2p_dispute_count": open_p2p_dispute_count,
+        "p2p_dispute_rate": p2p_dispute_rate,
         "dispute_count": int(profile.dispute_count or 0),
         "failed_obligation_count": int(profile.failed_obligation_count or 0),
         "chargeback_like_count": int(profile.chargeback_like_count or 0),
@@ -171,6 +211,8 @@ async def _serialize_profile(db: AsyncSession, profile: TrustProfiles, *, user: 
         "recommended_monthly_limit": Decimal(str(recommended_monthly_limit)) if recommended_monthly_limit is not None else None,
         "limit_multiplier": Decimal(str(limit_multiplier)) if limit_multiplier is not None else None,
         "limit_uplift_active": bool(metadata.get("limit_uplift_active", False)),
+        "reputation_tier": reputation_tier,
+        "reputation_note": str(reputation_note) if reputation_note else None,
         "auto_limit_applied_at": metadata.get("auto_limit_applied_at"),
         "last_computed_at": profile.last_computed_at,
         "metadata": metadata,
@@ -187,6 +229,16 @@ async def recompute_trust_profile(db: AsyncSession, *, user_id: UUID) -> dict:
 
     await _ensure_badge_catalog(db)
 
+    total_payment_requests = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(PaymentRequests)
+                .where(PaymentRequests.requester_user_id == user_id)
+            )
+        ).scalar_one()
+        or 0
+    )
     successful_payment_requests = int(
         (
             await db.execute(
@@ -197,7 +249,7 @@ async def recompute_trust_profile(db: AsyncSession, *, user_id: UUID) -> dict:
         ).scalar_one()
         or 0
     )
-    dispute_count = int(
+    wallet_dispute_count = int(
         (
             await db.execute(
                 select(func.count())
@@ -207,6 +259,78 @@ async def recompute_trust_profile(db: AsyncSession, *, user_id: UUID) -> dict:
         ).scalar_one()
         or 0
     )
+    total_p2p_trades = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(P2PTrade)
+                .where(or_(P2PTrade.buyer_id == user_id, P2PTrade.seller_id == user_id))
+            )
+        ).scalar_one()
+        or 0
+    )
+    successful_p2p_trades = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(P2PTrade)
+                .where(
+                    or_(P2PTrade.buyer_id == user_id, P2PTrade.seller_id == user_id),
+                    P2PTrade.status.in_(("RELEASED", "RESOLVED")),
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    failed_obligation_count = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(P2PTrade)
+                .where(
+                    or_(P2PTrade.buyer_id == user_id, P2PTrade.seller_id == user_id),
+                    P2PTrade.status.in_(("CANCELLED", "EXPIRED")),
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    p2p_dispute_count = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(P2PDispute)
+                .join(P2PTrade, P2PTrade.trade_id == P2PDispute.trade_id)
+                .where(or_(P2PTrade.buyer_id == user_id, P2PTrade.seller_id == user_id))
+            )
+        ).scalar_one()
+        or 0
+    )
+    open_p2p_dispute_count = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(P2PDispute)
+                .join(P2PTrade, P2PTrade.trade_id == P2PDispute.trade_id)
+                .where(
+                    or_(P2PTrade.buyer_id == user_id, P2PTrade.seller_id == user_id),
+                    P2PDispute.status.in_(("OPEN", "UNDER_REVIEW")),
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    chargeback_like_count = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(Disputes)
+                .where(Disputes.opened_by == user_id, Disputes.status == "lost")
+            )
+        ).scalar_one()
+        or 0
+    )
+    dispute_count = wallet_dispute_count + p2p_dispute_count
     account_age_days = 0
     if getattr(user, "created_at", None):
         created_at = user.created_at
@@ -215,10 +339,6 @@ async def recompute_trust_profile(db: AsyncSession, *, user_id: UUID) -> dict:
         account_age_days = max(0, (_utcnow() - created_at).days)
 
     kyc_verified = str(getattr(user, "kyc_status", "")).lower().endswith("verified")
-    successful_p2p_trades = 0
-    failed_obligation_count = 0
-    chargeback_like_count = 0
-
     score = _score_profile(
         kyc_verified=kyc_verified,
         account_age_days=account_age_days,
@@ -229,6 +349,14 @@ async def recompute_trust_profile(db: AsyncSession, *, user_id: UUID) -> dict:
         chargeback_like_count=chargeback_like_count,
     )
     level = _compute_level(score)
+    payment_request_success_rate = _compute_ratio(successful_payment_requests, total_payment_requests)
+    p2p_completion_rate = _compute_ratio(successful_p2p_trades, total_p2p_trades)
+    p2p_dispute_rate = _compute_ratio(p2p_dispute_count, total_p2p_trades)
+    reputation_tier, reputation_note = _derive_reputation(
+        trust_score=score,
+        p2p_dispute_rate=p2p_dispute_rate,
+        successful_p2p_trades=successful_p2p_trades,
+    )
     kyc_tier = int(getattr(user, "kyc_tier", 0) or 0)
     limit_multiplier, recommended_daily_limit, recommended_monthly_limit = _compute_recommended_limits(
         kyc_tier=kyc_tier,
@@ -273,6 +401,15 @@ async def recompute_trust_profile(db: AsyncSession, *, user_id: UUID) -> dict:
     profile.last_computed_at = now
     profile.metadata_ = {
         **dict(profile.metadata_ or {}),
+        "total_payment_requests": total_payment_requests,
+        "payment_request_success_rate": str(payment_request_success_rate) if payment_request_success_rate is not None else None,
+        "total_p2p_trades": total_p2p_trades,
+        "p2p_completion_rate": str(p2p_completion_rate) if p2p_completion_rate is not None else None,
+        "p2p_dispute_count": p2p_dispute_count,
+        "open_p2p_dispute_count": open_p2p_dispute_count,
+        "p2p_dispute_rate": str(p2p_dispute_rate) if p2p_dispute_rate is not None else None,
+        "reputation_tier": reputation_tier,
+        "reputation_note": reputation_note,
         "limit_multiplier": str(limit_multiplier),
         "recommended_daily_limit": str(recommended_daily_limit),
         "recommended_monthly_limit": str(recommended_monthly_limit),

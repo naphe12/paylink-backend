@@ -11,6 +11,7 @@ from typing import Literal
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
+from app.dependencies.step_up import require_admin_step_up
 from app.models.users import Users
 from app.models.wallets import Wallets
 from app.models.wallet_transactions import WalletTransactions
@@ -237,7 +238,10 @@ async def wallets_summary(
     }
 
 
-@router.post("/corrections/preview")
+@router.post(
+    "/corrections/preview",
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def preview_wallet_correction(
     payload: WalletCorrectionPreviewRequest,
     db: AsyncSession = Depends(get_db),
@@ -255,7 +259,10 @@ async def preview_wallet_correction(
     return preview
 
 
-@router.post("/corrections/apply")
+@router.post(
+    "/corrections/apply",
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def apply_wallet_correction(
     payload: WalletCorrectionPreviewRequest,
     db: AsyncSession = Depends(get_db),
@@ -391,7 +398,10 @@ async def admin_crypto_wallet_summary(
     return {"user_id": normalized_user_id, "wallets": wallets}
 
 
-@router.post("/crypto/{user_id}/ensure")
+@router.post(
+    "/crypto/{user_id}/ensure",
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def admin_ensure_crypto_wallet(
     user_id: UUID,
     token_symbol: str = Query(..., min_length=4, max_length=4),

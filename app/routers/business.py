@@ -9,6 +9,7 @@ from app.models.users import Users
 from app.schemas.business_accounts import (
     BusinessAccountCreate,
     BusinessAccountRead,
+    BusinessAccountStatusUpdate,
     BusinessMemberCreate,
     BusinessMemberUpdate,
     BusinessSubWalletCreate,
@@ -23,6 +24,7 @@ from app.services.business_service import (
     fund_business_sub_wallet,
     list_my_business_accounts,
     release_business_sub_wallet,
+    update_business_account_status,
     update_business_member,
     update_business_sub_wallet,
 )
@@ -58,6 +60,21 @@ async def create_business_account_route(
     current_user: Users = Depends(get_current_user_db),
 ):
     return await create_business_account(db, current_user=current_user, payload=payload)
+
+
+@router.put("/business-accounts/{business_id}/status", response_model=BusinessAccountRead)
+async def update_business_account_status_route(
+    business_id: UUID,
+    payload: BusinessAccountStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user_db),
+):
+    return await update_business_account_status(
+        db,
+        current_user=current_user,
+        business_id=business_id,
+        payload=payload,
+    )
 
 
 @router.post("/business-accounts/{business_id}/members", response_model=BusinessAccountRead)

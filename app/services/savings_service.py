@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -185,11 +186,29 @@ async def _credit_goal_from_wallet(
 
 
 def _serialize_goal(goal: SavingsGoals, movements: list[SavingsMovements] | None = None) -> dict:
+    now = datetime.now(timezone.utc)
     current_amount = Decimal(str(goal.current_amount or 0))
     target_amount = Decimal(str(goal.target_amount or 0))
     progress = float(min((current_amount / target_amount) * Decimal("100"), Decimal("100"))) if target_amount > 0 else 0
+    remaining_amount = max(target_amount - current_amount, Decimal("0"))
     round_up_rule = _normalize_round_up_rule(goal.metadata_ or {})
     auto_contribution_rule = _normalize_auto_contribution_rule(goal.metadata_ or {})
+    recommended_weekly_amount = None
+    recommended_monthly_amount = None
+    if goal.target_date and remaining_amount > 0:
+        target_date = goal.target_date
+        if target_date.tzinfo is None:
+            target_date = target_date.replace(tzinfo=timezone.utc)
+        days_left = math.ceil((target_date - now).total_seconds() / 86400)
+        if days_left > 0:
+            weekly_periods = max(math.ceil(days_left / 7), 1)
+            monthly_periods = max(math.ceil(days_left / 30), 1)
+            recommended_weekly_amount = (remaining_amount / Decimal(str(weekly_periods))).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+            recommended_monthly_amount = (remaining_amount / Decimal(str(monthly_periods))).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
     return {
         "goal_id": goal.goal_id,
         "user_id": goal.user_id,
@@ -205,7 +224,9 @@ def _serialize_goal(goal: SavingsGoals, movements: list[SavingsMovements] | None
         "created_at": goal.created_at,
         "updated_at": goal.updated_at,
         "progress_percent": round(progress, 2),
-        "remaining_amount": max(target_amount - current_amount, Decimal("0")),
+        "remaining_amount": remaining_amount,
+        "recommended_weekly_amount": recommended_weekly_amount,
+        "recommended_monthly_amount": recommended_monthly_amount,
         "round_up_rule": round_up_rule,
         "auto_contribution_rule": auto_contribution_rule,
         "movements": movements or [],
@@ -393,6 +414,44 @@ async def withdraw_savings_goal(db: AsyncSession, *, current_user: Users, goal_i
             LedgerLine(account=wallet_account, direction="credit", amount=amount, currency_code=wallet.currency_code),
         ],
     )
+
+    await db.commit()
+    return await get_savings_goal_detail(db, current_user=current_user, goal_id=goal_id)
+
+
+async def update_savings_goal_lock(db: AsyncSession, *, current_user: Users, goal_id: UUID, payload) -> dict:
+    goal = await db.scalar(
+        select(SavingsGoals)
+        .where(SavingsGoals.goal_id == goal_id, SavingsGoals.user_id == current_user.user_id)
+        .with_for_update()
+    )
+    if not goal:
+        raise HTTPException(status_code=404, detail="Objectif introuvable")
+
+    next_locked = bool(payload.locked)
+    if bool(goal.locked) == next_locked:
+        return await get_savings_goal_detail(db, current_user=current_user, goal_id=goal_id)
+
+    metadata = dict(goal.metadata_ or {})
+    lock_control = dict(metadata.get("lock_control") or {})
+    transitions = list(lock_control.get("transitions") or [])
+    transitions.append(
+        {
+            "from": bool(goal.locked),
+            "to": next_locked,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "reason": (str(payload.reason or "").strip() or None),
+        }
+    )
+    lock_control["transitions"] = transitions[-20:]
+    lock_control["last_updated_at"] = datetime.now(timezone.utc).isoformat()
+    lock_control["updated_by_user_id"] = str(current_user.user_id)
+    lock_control["reason"] = str(payload.reason or "").strip() or None
+    metadata["lock_control"] = lock_control
+
+    goal.locked = next_locked
+    goal.metadata_ = metadata
+    goal.updated_at = datetime.now(timezone.utc)
 
     await db.commit()
     return await get_savings_goal_detail(db, current_user=current_user, goal_id=goal_id)

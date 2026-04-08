@@ -22,6 +22,18 @@ VALID_POT_MODES = {"collection", "group_savings"}
 VALID_MEMBER_STATUSES = {"active", "paused", "removed", "left"}
 
 
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _coerce_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _primary_wallet_stmt(user_id):
     wallet_priority = case(
         (Wallets.type == "personal", 0),
@@ -46,6 +58,17 @@ def _display_user(user: Users | None) -> str | None:
 def _pot_mode(metadata: dict | None) -> str:
     mode = str((metadata or {}).get("pot_mode") or "collection").strip().lower()
     return mode if mode in VALID_POT_MODES else "collection"
+
+
+def _pot_deadline_metrics(*, deadline_at: datetime | None, now: datetime) -> tuple[int | None, bool]:
+    deadline = _coerce_utc(deadline_at)
+    if deadline is None:
+        return None, False
+    delta_seconds = int((deadline - now).total_seconds())
+    if delta_seconds < 0:
+        return 0, True
+    days_remaining = (delta_seconds + 86399) // 86400
+    return max(days_remaining, 0), False
 
 
 async def _serialize_members(db: AsyncSession, pot_id: UUID) -> list[dict]:
@@ -153,10 +176,35 @@ async def _serialize_pot(
     access_role: str,
     contributions: list[dict] | None = None,
 ) -> dict:
+    now = _now()
     current_amount = Decimal(str(pot.current_amount or 0))
     target_amount = Decimal(str(pot.target_amount or 0))
+    remaining_amount = max(target_amount - current_amount, Decimal("0"))
     progress = float(min((current_amount / target_amount) * Decimal("100"), Decimal("100"))) if target_amount > 0 else 0
     members = await _serialize_members(db, pot.pot_id)
+    days_remaining, deadline_passed = _pot_deadline_metrics(deadline_at=pot.deadline_at, now=now)
+    active_members_count = sum(1 for item in members if str(item.get("status") or "").lower() == "active")
+    if access_role == "owner":
+        active_members_count += 1
+
+    recommended_daily_contribution = None
+    if remaining_amount > 0 and days_remaining is not None and days_remaining > 0:
+        recommended_daily_contribution = (remaining_amount / Decimal(days_remaining)).quantize(Decimal("0.01"))
+
+    recommended_per_member_contribution = None
+    if remaining_amount > 0 and active_members_count > 0 and _pot_mode(pot.metadata_ or {}) == "group_savings":
+        recommended_per_member_contribution = (
+            remaining_amount / Decimal(active_members_count)
+        ).quantize(Decimal("0.01"))
+
+    can_contribute = str(pot.status or "").lower() == "active" and not deadline_passed
+    contribution_block_reason = None
+    if not can_contribute:
+        if str(pot.status or "").lower() != "active":
+            contribution_block_reason = "Cagnotte non active"
+        elif deadline_passed:
+            contribution_block_reason = "Date limite depassee"
+
     return {
         "pot_id": pot.pot_id,
         "owner_user_id": pot.owner_user_id,
@@ -173,7 +221,13 @@ async def _serialize_pot(
         "created_at": pot.created_at,
         "updated_at": pot.updated_at,
         "progress_percent": round(progress, 2),
-        "remaining_amount": max(target_amount - current_amount, Decimal("0")),
+        "remaining_amount": remaining_amount,
+        "days_remaining": days_remaining,
+        "deadline_passed": deadline_passed,
+        "recommended_daily_contribution": recommended_daily_contribution,
+        "recommended_per_member_contribution": recommended_per_member_contribution,
+        "can_contribute": can_contribute,
+        "contribution_block_reason": contribution_block_reason,
         "pot_mode": _pot_mode(pot.metadata_ or {}),
         "access_role": access_role,
         "members": members,
@@ -188,6 +242,9 @@ async def create_pot(db: AsyncSession, *, current_user: Users, payload) -> dict:
     pot_mode = str(payload.pot_mode or "collection").strip().lower()
     if pot_mode not in VALID_POT_MODES:
         raise HTTPException(status_code=400, detail="Mode de cagnotte invalide")
+    deadline_at = _coerce_utc(payload.deadline_at)
+    if deadline_at and deadline_at <= _now():
+        raise HTTPException(status_code=400, detail="La date limite doit etre dans le futur")
 
     item = Pots(
         owner_user_id=current_user.user_id,
@@ -198,7 +255,7 @@ async def create_pot(db: AsyncSession, *, current_user: Users, payload) -> dict:
         current_amount=Decimal("0"),
         share_token=secrets.token_urlsafe(10),
         is_public=payload.is_public,
-        deadline_at=payload.deadline_at,
+        deadline_at=deadline_at,
         status="active",
         metadata_={"pot_mode": pot_mode},
     )
@@ -266,7 +323,7 @@ async def add_pot_member(db: AsyncSession, *, current_user: Users, pot_id: UUID,
         existing.role = "member"
         existing.metadata_ = {
             **dict(existing.metadata_ or {}),
-            "reactivated_at": datetime.now(timezone.utc).isoformat(),
+                "reactivated_at": _now().isoformat(),
         }
     else:
         db.add(
@@ -279,7 +336,7 @@ async def add_pot_member(db: AsyncSession, *, current_user: Users, pot_id: UUID,
             )
         )
 
-    pot.updated_at = datetime.now(timezone.utc)
+    pot.updated_at = _now()
     await db.commit()
     return await get_pot_detail(db, current_user=current_user, pot_id=pot_id)
 
@@ -320,10 +377,10 @@ async def update_pot_member(
     metadata["last_update"] = {
         "actor_user_id": str(current_user.user_id),
         "actor_role": current_user.role,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": _now().isoformat(),
     }
     member.metadata_ = metadata
-    pot.updated_at = datetime.now(timezone.utc)
+    pot.updated_at = _now()
     await db.commit()
     return await get_pot_detail(db, current_user=current_user, pot_id=pot_id)
 
@@ -348,9 +405,9 @@ async def leave_pot(db: AsyncSession, *, current_user: Users, pot_id: UUID) -> d
     member.status = "left"
     member.metadata_ = {
         **dict(member.metadata_ or {}),
-        "left_at": datetime.now(timezone.utc).isoformat(),
+        "left_at": _now().isoformat(),
     }
-    pot.updated_at = datetime.now(timezone.utc)
+    pot.updated_at = _now()
     await db.commit()
     return {"ok": True, "pot_id": str(pot_id)}
 
@@ -361,6 +418,12 @@ async def contribute_pot(db: AsyncSession, *, current_user: Users, pot_id: UUID,
         raise HTTPException(status_code=404, detail="Cagnotte introuvable")
     if pot.status != "active":
         raise HTTPException(status_code=400, detail="Cagnotte non active")
+    _, deadline_passed = _pot_deadline_metrics(deadline_at=pot.deadline_at, now=_now())
+    if deadline_passed:
+        pot.status = "expired"
+        pot.updated_at = _now()
+        await db.commit()
+        raise HTTPException(status_code=400, detail="Date limite depassee")
 
     if pot.owner_user_id != current_user.user_id:
         membership = await _get_member_record(db, pot_id=pot_id, user_id=current_user.user_id)
@@ -379,7 +442,7 @@ async def contribute_pot(db: AsyncSession, *, current_user: Users, pot_id: UUID,
 
     wallet.available = Decimal(str(wallet.available or 0)) - amount
     pot.current_amount = Decimal(str(pot.current_amount or 0)) + amount
-    pot.updated_at = datetime.now(timezone.utc)
+    pot.updated_at = _now()
     if Decimal(str(pot.current_amount)) >= Decimal(str(pot.target_amount)):
         pot.status = "funded"
 

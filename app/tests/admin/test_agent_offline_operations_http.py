@@ -97,13 +97,16 @@ def test_agent_offline_routes_create_list_sync_batch_and_cancel(monkeypatch):
         assert payload.operation_type == "cash_out"
         return _operation_payload(operation_id=operation_id, agent_user_id=agent_user_id, agent_id=agent_id, client_user_id=client_user_id, status="queued")
 
-    async def fake_sync_agent_offline_operation(db, *, current_agent, operation_id):
+    async def fake_sync_agent_offline_operation(db, *, current_agent, operation_id, force=False):
+        assert force is False
         return _operation_payload(operation_id=str(operation_id), agent_user_id=agent_user_id, agent_id=agent_id, client_user_id=client_user_id, status="synced")
 
-    async def fake_sync_pending_agent_offline_operations(db, *, current_agent):
+    async def fake_sync_pending_agent_offline_operations(db, *, current_agent, force=False):
+        assert force is False
         return {
             "synced": 1,
             "failed": 0,
+            "skipped": 0,
             "operations": [
                 _operation_payload(operation_id=operation_id, agent_user_id=agent_user_id, agent_id=agent_id, client_user_id=client_user_id, status="synced")
             ],
@@ -178,7 +181,8 @@ def test_admin_agent_offline_routes_list_detail_retry_and_cancel(monkeypatch):
             admin=True,
         )
 
-    async def fake_retry_admin_agent_offline_operation(db, *, operation_id):
+    async def fake_retry_admin_agent_offline_operation(db, *, operation_id, force=False):
+        assert force is False
         return _operation_payload(
             operation_id=str(operation_id),
             agent_user_id=agent_user_id,
@@ -220,3 +224,70 @@ def test_admin_agent_offline_routes_list_detail_retry_and_cancel(monkeypatch):
     cancel_response = client.post(f"/admin/agent/offline-operations/{operation_id}/cancel")
     assert cancel_response.status_code == 200
     assert cancel_response.json()["status"] == "cancelled"
+
+
+def test_offline_routes_accept_force_payload(monkeypatch):
+    from app.routers.agent import offline_operations as agent_module
+    from app.routers.admin import agent_offline_operations as admin_module
+
+    operation_id = str(uuid4())
+    agent_user_id = str(uuid4())
+    agent_id = str(uuid4())
+    client_user_id = str(uuid4())
+    calls = {"sync_one": None, "sync_batch": None, "retry": None}
+
+    async def fake_sync_agent_offline_operation(db, *, current_agent, operation_id, force=False):
+        calls["sync_one"] = force
+        return _operation_payload(
+            operation_id=str(operation_id),
+            agent_user_id=agent_user_id,
+            agent_id=agent_id,
+            client_user_id=client_user_id,
+            status="synced",
+        )
+
+    async def fake_sync_pending_agent_offline_operations(db, *, current_agent, force=False):
+        calls["sync_batch"] = force
+        return {
+            "synced": 1,
+            "failed": 0,
+            "skipped": 0,
+            "operations": [
+                _operation_payload(
+                    operation_id=operation_id,
+                    agent_user_id=agent_user_id,
+                    agent_id=agent_id,
+                    client_user_id=client_user_id,
+                    status="synced",
+                )
+            ],
+        }
+
+    async def fake_retry_admin_agent_offline_operation(db, *, operation_id, force=False):
+        calls["retry"] = force
+        return _operation_payload(
+            operation_id=str(operation_id),
+            agent_user_id=agent_user_id,
+            agent_id=agent_id,
+            client_user_id=client_user_id,
+            status="synced",
+            admin=True,
+        )
+
+    monkeypatch.setattr(agent_module, "sync_agent_offline_operation", fake_sync_agent_offline_operation)
+    monkeypatch.setattr(agent_module, "sync_pending_agent_offline_operations", fake_sync_pending_agent_offline_operations)
+    monkeypatch.setattr(admin_module, "retry_admin_agent_offline_operation", fake_retry_admin_agent_offline_operation)
+
+    client = _build_test_client()
+
+    sync_one_response = client.post(f"/agent/offline-operations/{operation_id}/sync", json={"force": True})
+    assert sync_one_response.status_code == 200
+    assert calls["sync_one"] is True
+
+    sync_batch_response = client.post("/agent/offline-operations/sync-pending", json={"force": True})
+    assert sync_batch_response.status_code == 200
+    assert calls["sync_batch"] is True
+
+    retry_response = client.post(f"/admin/agent/offline-operations/{operation_id}/retry", json={"force": True})
+    assert retry_response.status_code == 200
+    assert calls["retry"] is True

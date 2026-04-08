@@ -17,6 +17,7 @@ class ReferralRewardRead(BaseModel):
     amount: Decimal
     currency_code: str
     credited: bool
+    activation_progress_percent: float = 0
     activated_at: datetime | None = None
     credited_at: datetime | None = None
     metadata_: dict[str, Any] = Field(default_factory=dict, alias="metadata")
@@ -34,6 +35,11 @@ class ReferralProfileRead(BaseModel):
     currency_code: str
     referral_link: str
     pending_rewards: int
+    activation_rate_percent: float = 0
+    my_activation_progress_percent: float = 0
+    my_activation_ready: bool = False
+    my_activation_next_step: str | None = None
+    targeted_bonus_policy: str = "real-activity-only"
     rewards: list[ReferralRewardRead] = Field(default_factory=list)
 
 

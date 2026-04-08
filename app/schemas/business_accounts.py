@@ -23,6 +23,10 @@ class BusinessMemberUpdate(BaseModel):
     status: str | None = None
 
 
+class BusinessAccountStatusUpdate(BaseModel):
+    is_active: bool
+
+
 class BusinessSubWalletCreate(BaseModel):
     label: str
     spending_limit: float = Field(ge=0)

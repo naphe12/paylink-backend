@@ -9,6 +9,7 @@ from app.models.users import Users
 from app.schemas.agent_offline_operations import (
     AgentOfflineOperationCreate,
     AgentOfflineOperationRead,
+    AgentOfflineSyncRequest,
     AgentOfflineSyncSummary,
 )
 from app.services.agent_offline_service import (
@@ -42,19 +43,30 @@ async def create_agent_offline_operation_route(
 
 @router.post("/sync-pending", response_model=AgentOfflineSyncSummary)
 async def sync_pending_agent_offline_operations_route(
+    payload: AgentOfflineSyncRequest | None = None,
     db: AsyncSession = Depends(get_db),
     current_agent: Users = Depends(get_current_agent),
 ):
-    return await sync_pending_agent_offline_operations(db, current_agent=current_agent)
+    return await sync_pending_agent_offline_operations(
+        db,
+        current_agent=current_agent,
+        force=bool(payload.force) if payload else False,
+    )
 
 
 @router.post("/{operation_id}/sync", response_model=AgentOfflineOperationRead)
 async def sync_agent_offline_operation_route(
     operation_id: UUID,
+    payload: AgentOfflineSyncRequest | None = None,
     db: AsyncSession = Depends(get_db),
     current_agent: Users = Depends(get_current_agent),
 ):
-    return await sync_agent_offline_operation(db, current_agent=current_agent, operation_id=operation_id)
+    return await sync_agent_offline_operation(
+        db,
+        current_agent=current_agent,
+        operation_id=operation_id,
+        force=bool(payload.force) if payload else False,
+    )
 
 
 @router.post("/{operation_id}/cancel", response_model=AgentOfflineOperationRead)

@@ -12,9 +12,11 @@ class VirtualCardCreate(BaseModel):
     cardholder_name: str | None = None
     card_type: str = "standard"
     spending_limit: Decimal = Field(ge=0, default=Decimal("0"))
+    per_tx_limit: Decimal = Field(ge=0, default=Decimal("0"))
     daily_limit: Decimal = Field(ge=0, default=Decimal("0"))
     monthly_limit: Decimal = Field(ge=0, default=Decimal("0"))
     blocked_categories: list[str] = Field(default_factory=list)
+    max_consecutive_declines: int = Field(ge=1, le=10, default=3)
 
 
 class VirtualCardChargeCreate(BaseModel):
@@ -28,9 +30,11 @@ class VirtualCardStatusUpdate(BaseModel):
 
 
 class VirtualCardControlsUpdate(BaseModel):
+    per_tx_limit: Decimal = Field(ge=0, default=Decimal("0"))
     daily_limit: Decimal = Field(ge=0, default=Decimal("0"))
     monthly_limit: Decimal = Field(ge=0, default=Decimal("0"))
     blocked_categories: list[str] = Field(default_factory=list)
+    max_consecutive_declines: int = Field(ge=1, le=10, default=3)
 
 
 class VirtualCardTransactionRead(BaseModel):
@@ -64,6 +68,7 @@ class VirtualCardRead(BaseModel):
     exp_year: int
     spending_limit: Decimal
     spent_amount: Decimal
+    per_tx_limit: Decimal = Decimal("0")
     daily_limit: Decimal = Decimal("0")
     monthly_limit: Decimal = Decimal("0")
     blocked_categories: list[str] = Field(default_factory=list)
@@ -71,6 +76,9 @@ class VirtualCardRead(BaseModel):
     monthly_spent: Decimal = Decimal("0")
     daily_remaining: Decimal | None = None
     monthly_remaining: Decimal | None = None
+    consecutive_declines: int = 0
+    max_consecutive_declines: int = 3
+    auto_frozen_for_declines: bool = False
     last_decline_reason: str | None = None
     status: str
     frozen_at: datetime | None = None

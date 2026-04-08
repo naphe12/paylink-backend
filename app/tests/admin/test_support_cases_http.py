@@ -156,10 +156,18 @@ def test_client_support_cases_create_list_detail_and_reply(monkeypatch):
         assert body == "Pouvez-vous verifier?"
         return await fake_get_support_case_detail_for_user(db, case_id=case_id, current_user=current_user)
 
+    async def fake_update_support_case_status_for_user(db, *, case_id, current_user, action, message=None):
+        assert action == "close"
+        assert message is None
+        payload = await fake_get_support_case_detail_for_user(db, case_id=case_id, current_user=current_user)
+        payload["case"]["status"] = "closed"
+        return payload
+
     monkeypatch.setattr(support_module, "create_support_case", fake_create_support_case)
     monkeypatch.setattr(support_module, "list_support_cases_for_user", fake_list_support_cases_for_user)
     monkeypatch.setattr(support_module, "get_support_case_detail_for_user", fake_get_support_case_detail_for_user)
     monkeypatch.setattr(support_module, "add_support_case_message_for_user", fake_add_support_case_message_for_user)
+    monkeypatch.setattr(support_module, "update_support_case_status_for_user", fake_update_support_case_status_for_user)
 
     client = _build_test_client()
 
@@ -181,6 +189,10 @@ def test_client_support_cases_create_list_detail_and_reply(monkeypatch):
     reply_response = client.post(f"/support/cases/{case_id}/messages", json={"body": "Pouvez-vous verifier?"})
     assert reply_response.status_code == 200
     assert reply_response.json()["messages"][0]["body"] == "Le retrait reste pending"
+
+    status_response = client.post(f"/support/cases/{case_id}/status", json={"action": "close"})
+    assert status_response.status_code == 200
+    assert status_response.json()["case"]["status"] == "closed"
 
 
 def test_admin_support_cases_list_detail_assign_status_and_reply(monkeypatch):

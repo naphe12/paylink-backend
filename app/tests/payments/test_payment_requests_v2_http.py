@@ -165,8 +165,23 @@ def test_wallet_payment_request_actions(monkeypatch):
     async def fake_pay_payment_request(db, *, request_id, current_user, reason=None):
         return SimpleNamespace(request_id=request_id)
 
+    async def fake_update_payment_request_auto_pay(
+        db,
+        *,
+        request_id,
+        current_user,
+        enabled,
+        max_amount=None,
+        reason=None,
+    ):
+        assert enabled is True
+        assert max_amount == 75
+        assert reason == "consent"
+        return SimpleNamespace(request_id=request_id)
+
     monkeypatch.setattr(wallet_module, "list_payment_requests", fake_list_payment_requests)
     monkeypatch.setattr(wallet_module, "pay_payment_request", fake_pay_payment_request)
+    monkeypatch.setattr(wallet_module, "update_payment_request_auto_pay", fake_update_payment_request_auto_pay)
 
     client = _build_test_client()
     response = client.post(f"/wallet/payment-requests/{request_id}/pay", json={})
@@ -174,6 +189,36 @@ def test_wallet_payment_request_actions(monkeypatch):
     payload = response.json()
     assert payload["request_id"] == str(request_id)
     assert payload["status"] == "paid"
+
+    autopay_response = client.post(
+        f"/wallet/payment-requests/{request_id}/autopay",
+        json={"enabled": True, "max_amount": 75, "reason": "consent"},
+    )
+    assert autopay_response.status_code == 200
+    autopay_payload = autopay_response.json()
+    assert autopay_payload["request_id"] == str(request_id)
+
+
+def test_wallet_payment_requests_run_due_includes_autopay_metrics(monkeypatch):
+    from app.routers.wallet import payment_requests_v2 as wallet_module
+
+    async def fake_run_due_payment_request_maintenance(db, *, current_user):
+        return {
+            "auto_paid_count": 2,
+            "reminded_count": 1,
+            "expired_count": 0,
+            "processed_requests": [],
+        }
+
+    monkeypatch.setattr(wallet_module, "run_due_payment_request_maintenance", fake_run_due_payment_request_maintenance)
+
+    client = _build_test_client()
+    response = client.post("/wallet/payment-requests/run-due")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["auto_paid_count"] == 2
+    assert payload["reminded_count"] == 1
+    assert payload["expired_count"] == 0
 
 
 def test_admin_payment_requests_v2_list_and_detail(monkeypatch):

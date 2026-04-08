@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
+from app.dependencies.step_up import require_admin_step_up
 from app.models.users import Users
 from app.schemas.virtual_cards import VirtualCardAdminRead, VirtualCardControlsUpdate, VirtualCardStatusUpdate
 from app.services.virtual_cards_service import (
@@ -38,7 +39,11 @@ async def get_admin_virtual_card_detail_route(
     return await get_admin_virtual_card_detail(db, card_id=card_id)
 
 
-@router.post("/{card_id}/status", response_model=VirtualCardAdminRead)
+@router.post(
+    "/{card_id}/status",
+    response_model=VirtualCardAdminRead,
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def update_admin_virtual_card_status_route(
     card_id: UUID,
     payload: VirtualCardStatusUpdate,
@@ -48,7 +53,11 @@ async def update_admin_virtual_card_status_route(
     return await update_admin_virtual_card_status(db, card_id=card_id, payload=payload, current_admin=current_admin)
 
 
-@router.put("/{card_id}/controls", response_model=VirtualCardAdminRead)
+@router.put(
+    "/{card_id}/controls",
+    response_model=VirtualCardAdminRead,
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def update_admin_virtual_card_controls_route(
     card_id: UUID,
     payload: VirtualCardControlsUpdate,

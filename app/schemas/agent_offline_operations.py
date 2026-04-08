@@ -15,6 +15,10 @@ class AgentOfflineOperationCreate(BaseModel):
     note: str | None = None
 
 
+class AgentOfflineSyncRequest(BaseModel):
+    force: bool = False
+
+
 class AgentOfflineOperationRead(BaseModel):
     operation_id: UUID
     agent_user_id: UUID
@@ -58,4 +62,5 @@ class AgentOfflineOperationAdminRead(AgentOfflineOperationRead):
 class AgentOfflineSyncSummary(BaseModel):
     synced: int
     failed: int
+    skipped: int = 0
     operations: list[AgentOfflineOperationRead] = Field(default_factory=list)

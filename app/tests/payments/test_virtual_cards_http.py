@@ -74,6 +74,7 @@ def test_virtual_cards_list_create_and_charge(monkeypatch):
 
     async def fake_create_virtual_card(db, *, current_user, payload):
         assert payload.card_type == "single_use"
+        assert payload.max_consecutive_declines == 4
         return {
             "card_id": str(card_id),
             "user_id": str(current_user.user_id),
@@ -95,6 +96,9 @@ def test_virtual_cards_list_create_and_charge(monkeypatch):
             "monthly_spent": "0.00",
             "daily_remaining": "20.00",
             "monthly_remaining": "40.00",
+            "consecutive_declines": 0,
+            "max_consecutive_declines": 4,
+            "auto_frozen_for_declines": False,
             "last_decline_reason": None,
             "status": "active",
             "frozen_at": None,
@@ -130,6 +134,9 @@ def test_virtual_cards_list_create_and_charge(monkeypatch):
             "monthly_spent": "0.00",
             "daily_remaining": "15.00",
             "monthly_remaining": "40.00",
+            "consecutive_declines": 0,
+            "max_consecutive_declines": 4,
+            "auto_frozen_for_declines": False,
             "last_decline_reason": None,
             "status": "active",
             "frozen_at": None,
@@ -152,6 +159,7 @@ def test_virtual_cards_list_create_and_charge(monkeypatch):
 
     async def fake_update_virtual_card_controls(db, *, current_user, card_id, payload):
         assert str(payload.daily_limit) == "20"
+        assert payload.max_consecutive_declines == 4
         return {
             **(await fake_get_virtual_card_detail(db, current_user=current_user, card_id=card_id)),
             "daily_limit": "20.00",
@@ -159,6 +167,7 @@ def test_virtual_cards_list_create_and_charge(monkeypatch):
             "blocked_categories": ["betting", "streaming"],
             "daily_remaining": "20.00",
             "monthly_remaining": "45.00",
+            "max_consecutive_declines": 4,
         }
 
     async def fake_charge_virtual_card(db, *, current_user, card_id, payload):
@@ -170,6 +179,9 @@ def test_virtual_cards_list_create_and_charge(monkeypatch):
             "monthly_spent": "12.99",
             "daily_remaining": "7.01",
             "monthly_remaining": "27.01",
+            "consecutive_declines": 0,
+            "max_consecutive_declines": 4,
+            "auto_frozen_for_declines": False,
             "status": "consumed",
             "transactions": [
                 {
@@ -204,7 +216,12 @@ def test_virtual_cards_list_create_and_charge(monkeypatch):
 
     create_response = client.post(
         "/virtual-cards",
-        json={"cardholder_name": "Client Demo", "card_type": "single_use", "spending_limit": 50},
+        json={
+            "cardholder_name": "Client Demo",
+            "card_type": "single_use",
+            "spending_limit": 50,
+            "max_consecutive_declines": 4,
+        },
     )
     assert create_response.status_code == 200
     assert create_response.json()["plain_pan"] == "4263901234561234"
@@ -219,7 +236,12 @@ def test_virtual_cards_list_create_and_charge(monkeypatch):
 
     controls_response = client.put(
         f"/virtual-cards/{card_id}/controls",
-        json={"daily_limit": 20, "monthly_limit": 45, "blocked_categories": ["betting", "streaming"]},
+        json={
+            "daily_limit": 20,
+            "monthly_limit": 45,
+            "blocked_categories": ["betting", "streaming"],
+            "max_consecutive_declines": 4,
+        },
     )
     assert controls_response.status_code == 200
     assert controls_response.json()["blocked_categories"] == ["betting", "streaming"]

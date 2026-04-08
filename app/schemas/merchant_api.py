@@ -30,6 +30,7 @@ class MerchantApiKeyRead(BaseModel):
 class MerchantWebhookCreate(BaseModel):
     target_url: HttpUrl
     event_types: list[str] = Field(default_factory=list)
+    max_consecutive_failures: int = Field(default=3, ge=1, le=10)
 
 
 class MerchantWebhookStatusUpdate(BaseModel):
@@ -43,6 +44,9 @@ class MerchantWebhookRead(BaseModel):
     status: str
     event_types: list[str] = Field(default_factory=list)
     is_active: bool
+    consecutive_failures: int = 0
+    max_consecutive_failures: int = 3
+    auto_paused_for_failures: bool = False
     last_tested_at: datetime | None = None
     revoked_at: datetime | None = None
     metadata_: dict[str, Any] = Field(default_factory=dict, alias="metadata")

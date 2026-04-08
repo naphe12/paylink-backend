@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
+from app.dependencies.step_up import require_admin_step_up
 from app.models.loans import Loans
 from app.models.loanrepayments import LoanRepayments
 from app.services.loan_workflow import outstanding_balance, summarize_installments
@@ -37,7 +38,10 @@ def _compute_penalty_amount(
     return (outstanding * daily_rate * Decimal(overdue_days)).quantize(Decimal("0.01"))
 
 
-@router.post("/{loan_id}/penalties/recompute")
+@router.post(
+    "/{loan_id}/penalties/recompute",
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def recompute_penalties(
     loan_id: str,
     db: AsyncSession = Depends(get_db),

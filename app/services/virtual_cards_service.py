@@ -48,21 +48,48 @@ def _normalized_blocked_categories(values) -> list[str]:
     return items
 
 
-def _card_controls_metadata_payload(*, daily_limit, monthly_limit, blocked_categories) -> dict:
+def _card_controls_metadata_payload(
+    *,
+    per_tx_limit,
+    daily_limit,
+    monthly_limit,
+    blocked_categories,
+    max_consecutive_declines: int = 3,
+    consecutive_declines: int = 0,
+    auto_frozen_for_declines: bool = False,
+) -> dict:
     return {
+        "per_tx_limit": str(_to_decimal(per_tx_limit)),
         "daily_limit": str(_to_decimal(daily_limit)),
         "monthly_limit": str(_to_decimal(monthly_limit)),
         "blocked_categories": _normalized_blocked_categories(blocked_categories),
+        "max_consecutive_declines": max(int(max_consecutive_declines or 3), 1),
+        "consecutive_declines": max(int(consecutive_declines or 0), 0),
+        "auto_frozen_for_declines": bool(auto_frozen_for_declines),
     }
 
 
 def _extract_card_controls(card: VirtualCards) -> dict:
     metadata = dict(card.metadata_ or {})
     controls = metadata.get("controls") or {}
+    raw_max_consecutive_declines = controls.get("max_consecutive_declines")
+    try:
+        max_consecutive_declines = max(int(raw_max_consecutive_declines or 3), 1)
+    except Exception:
+        max_consecutive_declines = 3
+    raw_consecutive_declines = controls.get("consecutive_declines")
+    try:
+        consecutive_declines = max(int(raw_consecutive_declines or 0), 0)
+    except Exception:
+        consecutive_declines = 0
     return {
+        "per_tx_limit": _to_decimal(controls.get("per_tx_limit")),
         "daily_limit": _to_decimal(controls.get("daily_limit")),
         "monthly_limit": _to_decimal(controls.get("monthly_limit")),
         "blocked_categories": _normalized_blocked_categories(controls.get("blocked_categories") or []),
+        "max_consecutive_declines": max_consecutive_declines,
+        "consecutive_declines": consecutive_declines,
+        "auto_frozen_for_declines": bool(controls.get("auto_frozen_for_declines") is True),
     }
 
 
@@ -73,35 +100,78 @@ def _empty_card_usage() -> dict:
     }
 
 
-def _validate_card_controls(*, daily_limit: Decimal, monthly_limit: Decimal) -> None:
-    if daily_limit < 0 or monthly_limit < 0:
+def _validate_card_controls(
+    *,
+    per_tx_limit: Decimal,
+    daily_limit: Decimal,
+    monthly_limit: Decimal,
+    spending_limit: Decimal | None = None,
+) -> None:
+    if per_tx_limit < 0 or daily_limit < 0 or monthly_limit < 0:
         raise HTTPException(status_code=400, detail="Les plafonds carte doivent etre positifs")
     if daily_limit > 0 and monthly_limit > 0 and daily_limit > monthly_limit:
         raise HTTPException(status_code=400, detail="Le plafond journalier ne peut pas depasser le plafond mensuel")
+    if per_tx_limit > 0 and daily_limit > 0 and per_tx_limit > daily_limit:
+        raise HTTPException(status_code=400, detail="Le plafond par transaction ne peut pas depasser le plafond journalier")
+    if per_tx_limit > 0 and monthly_limit > 0 and per_tx_limit > monthly_limit:
+        raise HTTPException(status_code=400, detail="Le plafond par transaction ne peut pas depasser le plafond mensuel")
+    if spending_limit is not None and per_tx_limit > 0 and spending_limit > 0 and per_tx_limit > spending_limit:
+        raise HTTPException(status_code=400, detail="Le plafond par transaction ne peut pas depasser le plafond global de la carte")
 
 
 def _apply_card_controls_update(
     card: VirtualCards,
     *,
+    per_tx_limit,
     daily_limit,
     monthly_limit,
     blocked_categories,
+    max_consecutive_declines: int,
     actor_metadata: dict | None = None,
 ) -> None:
+    normalized_per_tx_limit = _to_decimal(per_tx_limit)
     normalized_daily_limit = _to_decimal(daily_limit)
     normalized_monthly_limit = _to_decimal(monthly_limit)
     _validate_card_controls(
+        per_tx_limit=normalized_per_tx_limit,
         daily_limit=normalized_daily_limit,
         monthly_limit=normalized_monthly_limit,
+        spending_limit=_to_decimal(card.spending_limit),
     )
     metadata = dict(card.metadata_ or {})
+    previous_controls = _extract_card_controls(card)
     metadata["controls"] = _card_controls_metadata_payload(
+        per_tx_limit=normalized_per_tx_limit,
         daily_limit=normalized_daily_limit,
         monthly_limit=normalized_monthly_limit,
         blocked_categories=blocked_categories,
+        max_consecutive_declines=max_consecutive_declines,
+        consecutive_declines=previous_controls.get("consecutive_declines", 0),
+        auto_frozen_for_declines=previous_controls.get("auto_frozen_for_declines", False),
     )
     if actor_metadata:
         metadata["last_controls_update"] = actor_metadata
+    card.metadata_ = metadata
+    card.updated_at = _now()
+
+
+def _set_decline_guard_state(
+    card: VirtualCards,
+    *,
+    consecutive_declines: int,
+    auto_frozen_for_declines: bool,
+) -> None:
+    controls = _extract_card_controls(card)
+    metadata = dict(card.metadata_ or {})
+    metadata["controls"] = _card_controls_metadata_payload(
+        per_tx_limit=controls.get("per_tx_limit"),
+        daily_limit=controls.get("daily_limit"),
+        monthly_limit=controls.get("monthly_limit"),
+        blocked_categories=controls.get("blocked_categories") or [],
+        max_consecutive_declines=int(controls.get("max_consecutive_declines") or 3),
+        consecutive_declines=max(int(consecutive_declines or 0), 0),
+        auto_frozen_for_declines=bool(auto_frozen_for_declines),
+    )
     card.metadata_ = metadata
     card.updated_at = _now()
 
@@ -182,6 +252,7 @@ def _serialize_card(
 ) -> dict:
     controls = _extract_card_controls(card)
     usage = usage_metrics or _empty_card_usage()
+    per_tx_limit = _to_decimal(controls.get("per_tx_limit"))
     daily_limit = _to_decimal(controls.get("daily_limit"))
     monthly_limit = _to_decimal(controls.get("monthly_limit"))
     daily_spent = _to_decimal(usage.get("daily_spent"))
@@ -208,6 +279,7 @@ def _serialize_card(
         "exp_year": card.exp_year,
         "spending_limit": _to_decimal(card.spending_limit),
         "spent_amount": _to_decimal(card.spent_amount),
+        "per_tx_limit": per_tx_limit,
         "daily_limit": daily_limit,
         "monthly_limit": monthly_limit,
         "blocked_categories": controls.get("blocked_categories") or [],
@@ -215,6 +287,9 @@ def _serialize_card(
         "monthly_spent": monthly_spent,
         "daily_remaining": max(daily_limit - daily_spent, Decimal("0")) if daily_limit > 0 else None,
         "monthly_remaining": max(monthly_limit - monthly_spent, Decimal("0")) if monthly_limit > 0 else None,
+        "consecutive_declines": int(controls.get("consecutive_declines") or 0),
+        "max_consecutive_declines": max(int(controls.get("max_consecutive_declines") or 3), 1),
+        "auto_frozen_for_declines": bool(controls.get("auto_frozen_for_declines") is True),
         "last_decline_reason": last_decline_reason,
         "status": card.status,
         "frozen_at": card.frozen_at,
@@ -417,6 +492,7 @@ def _human_decline_message(reason: str) -> str:
         "card_frozen": "La carte est gelee",
         "card_cancelled": "La carte est annulee",
         "card_consumed": "La carte a deja ete consommee",
+        "per_tx_limit_exceeded": "Le montant depasse le plafond par transaction de la carte",
         "spending_limit_exceeded": "Le plafond de la carte serait depasse",
         "daily_limit_exceeded": "Le plafond journalier de la carte serait depasse",
         "monthly_limit_exceeded": "Le plafond mensuel de la carte serait depasse",
@@ -487,15 +563,19 @@ async def create_virtual_card(db: AsyncSession, *, current_user: Users, payload)
         metadata_={
             "test_mode": True,
             "controls": _card_controls_metadata_payload(
+                per_tx_limit=payload.per_tx_limit,
                 daily_limit=payload.daily_limit,
                 monthly_limit=payload.monthly_limit,
                 blocked_categories=payload.blocked_categories,
+                max_consecutive_declines=payload.max_consecutive_declines,
             ),
         },
     )
     _validate_card_controls(
+        per_tx_limit=_to_decimal(payload.per_tx_limit),
         daily_limit=_to_decimal(payload.daily_limit),
         monthly_limit=_to_decimal(payload.monthly_limit),
+        spending_limit=_to_decimal(payload.spending_limit),
     )
     db.add(item)
     await db.commit()
@@ -513,6 +593,23 @@ async def update_virtual_card_status(db: AsyncSession, *, current_user: Users, c
     card = await _get_card_for_user(db, current_user=current_user, card_id=card_id, lock=True)
     next_status = str(payload.status or "").strip().lower()
     _apply_card_status_update(card, next_status)
+    if next_status == "active":
+        controls = _extract_card_controls(card)
+        _apply_card_controls_update(
+            card,
+            per_tx_limit=controls.get("per_tx_limit"),
+            daily_limit=controls.get("daily_limit"),
+            monthly_limit=controls.get("monthly_limit"),
+            blocked_categories=controls.get("blocked_categories") or [],
+            max_consecutive_declines=int(controls.get("max_consecutive_declines") or 3),
+            actor_metadata={
+                "actor_user_id": str(current_user.user_id),
+                "actor_role": current_user.role,
+                "updated_at": _now().isoformat(),
+                "reason": "manual_reactivation",
+            },
+        )
+        _set_decline_guard_state(card, consecutive_declines=0, auto_frozen_for_declines=False)
     await db.commit()
     return await get_virtual_card_detail(db, current_user=current_user, card_id=card_id)
 
@@ -521,9 +618,11 @@ async def update_virtual_card_controls(db: AsyncSession, *, current_user: Users,
     card = await _get_card_for_user(db, current_user=current_user, card_id=card_id, lock=True)
     _apply_card_controls_update(
         card,
+        per_tx_limit=payload.per_tx_limit,
         daily_limit=payload.daily_limit,
         monthly_limit=payload.monthly_limit,
         blocked_categories=payload.blocked_categories,
+        max_consecutive_declines=payload.max_consecutive_declines,
         actor_metadata={
             "actor_user_id": str(current_user.user_id),
             "actor_role": current_user.role,
@@ -549,8 +648,11 @@ async def charge_virtual_card(db: AsyncSession, *, current_user: Users, card_id:
     wallet_available = _to_decimal(wallet.available)
     controls = _extract_card_controls(card)
     usage = (await _load_card_usage_metrics(db, [card.card_id])).get(card.card_id, _empty_card_usage())
+    per_tx_limit = _to_decimal(controls.get("per_tx_limit"))
     daily_limit = _to_decimal(controls.get("daily_limit"))
     monthly_limit = _to_decimal(controls.get("monthly_limit"))
+    max_consecutive_declines = max(int(controls.get("max_consecutive_declines") or 3), 1)
+    consecutive_declines = max(int(controls.get("consecutive_declines") or 0), 0)
     blocked_categories = controls.get("blocked_categories") or []
 
     decline_reason = None
@@ -560,6 +662,8 @@ async def charge_virtual_card(db: AsyncSession, *, current_user: Users, card_id:
         decline_reason = "card_cancelled"
     elif card.status == "consumed" or (card.card_type == "single_use" and spent_amount > 0):
         decline_reason = "card_consumed"
+    elif per_tx_limit > 0 and amount > per_tx_limit:
+        decline_reason = "per_tx_limit_exceeded"
     elif spending_limit > 0 and spent_amount + amount > spending_limit:
         decline_reason = "spending_limit_exceeded"
     elif merchant_category_key and merchant_category_key in blocked_categories:
@@ -572,9 +676,22 @@ async def charge_virtual_card(db: AsyncSession, *, current_user: Users, card_id:
         decline_reason = "insufficient_funds"
 
     if decline_reason:
+        now = _now()
         if card.card_type == "single_use" and spent_amount > 0 and card.status != "consumed":
             card.status = "consumed"
-            card.updated_at = _now()
+            card.updated_at = now
+        next_declines = consecutive_declines + 1
+        auto_frozen = False
+        if card.status == "active" and next_declines >= max_consecutive_declines:
+            card.status = "frozen"
+            card.frozen_at = now
+            card.updated_at = now
+            auto_frozen = True
+        _set_decline_guard_state(
+            card,
+            consecutive_declines=next_declines,
+            auto_frozen_for_declines=auto_frozen,
+        )
         await _record_card_transaction(
             db,
             card=card,
@@ -588,6 +705,7 @@ async def charge_virtual_card(db: AsyncSession, *, current_user: Users, card_id:
             metadata={
                 "attempted": True,
                 "controls_snapshot": {
+                    "per_tx_limit": str(per_tx_limit),
                     "daily_limit": str(daily_limit),
                     "monthly_limit": str(monthly_limit),
                     "blocked_categories": blocked_categories,
@@ -597,7 +715,10 @@ async def charge_virtual_card(db: AsyncSession, *, current_user: Users, card_id:
             },
         )
         await db.commit()
-        raise HTTPException(status_code=400, detail=_human_decline_message(decline_reason))
+        detail = _human_decline_message(decline_reason)
+        if auto_frozen:
+            detail = f"{detail}. Carte gelee automatiquement apres refus repetes"
+        raise HTTPException(status_code=400, detail=detail)
 
     now = _now()
     wallet.available = wallet_available - amount
@@ -606,6 +727,7 @@ async def charge_virtual_card(db: AsyncSession, *, current_user: Users, card_id:
     card.updated_at = now
     if card.card_type == "single_use":
         card.status = "consumed"
+    _set_decline_guard_state(card, consecutive_declines=0, auto_frozen_for_declines=False)
 
     tx = Transactions(
         initiated_by=current_user.user_id,
@@ -778,6 +900,8 @@ async def update_admin_virtual_card_status(
         raise HTTPException(status_code=404, detail="Carte virtuelle introuvable")
     next_status = str(payload.status or "").strip().lower()
     _apply_card_status_update(card, next_status)
+    if next_status == "active":
+        _set_decline_guard_state(card, consecutive_declines=0, auto_frozen_for_declines=False)
     metadata = dict(card.metadata_ or {})
     metadata["last_admin_action"] = {
         "admin_user_id": str(current_admin.user_id),
@@ -801,9 +925,11 @@ async def update_admin_virtual_card_controls(
         raise HTTPException(status_code=404, detail="Carte virtuelle introuvable")
     _apply_card_controls_update(
         card,
+        per_tx_limit=payload.per_tx_limit,
         daily_limit=payload.daily_limit,
         monthly_limit=payload.monthly_limit,
         blocked_categories=payload.blocked_categories,
+        max_consecutive_declines=payload.max_consecutive_declines,
         actor_metadata={
             "actor_user_id": str(current_admin.user_id),
             "actor_role": current_admin.role,

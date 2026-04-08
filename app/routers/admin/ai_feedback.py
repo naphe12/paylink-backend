@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
+from app.dependencies.step_up import require_admin_step_up
 from app.models.ai_audit_logs import AiAuditLogs
 from app.models.ai_feedback_annotations import AiFeedbackAnnotations
 from app.models.ai_feedback_suggestions import AiFeedbackSuggestions
@@ -189,7 +190,10 @@ async def get_ai_audit_log_detail(
     }
 
 
-@router.post("/audit-logs/{audit_log_id}/annotate")
+@router.post(
+    "/audit-logs/{audit_log_id}/annotate",
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def annotate_ai_audit_log(
     audit_log_id: UUID,
     payload: AiFeedbackAnnotationCreate,
@@ -272,7 +276,11 @@ async def list_ai_feedback_suggestions(
     return rows
 
 
-@router.post("/feedback/suggestions/{suggestion_id}/apply", response_model=AiFeedbackSuggestionRead)
+@router.post(
+    "/feedback/suggestions/{suggestion_id}/apply",
+    response_model=AiFeedbackSuggestionRead,
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def apply_ai_feedback_suggestion(
     suggestion_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -389,7 +397,11 @@ async def list_ai_synonyms(
     return rows
 
 
-@router.post("/synonyms", response_model=AiSynonymRead)
+@router.post(
+    "/synonyms",
+    response_model=AiSynonymRead,
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def create_ai_synonym(
     payload: AiSynonymCreate,
     db: AsyncSession = Depends(get_db),
@@ -433,7 +445,11 @@ async def create_ai_synonym(
     return row
 
 
-@router.put("/synonyms/{synonym_id}", response_model=AiSynonymRead)
+@router.put(
+    "/synonyms/{synonym_id}",
+    response_model=AiSynonymRead,
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def update_ai_synonym(
     synonym_id: UUID,
     payload: AiSynonymUpdate,
@@ -476,7 +492,11 @@ async def update_ai_synonym(
     return row
 
 
-@router.post("/synonyms/{synonym_id}/status", response_model=AiSynonymRead)
+@router.post(
+    "/synonyms/{synonym_id}/status",
+    response_model=AiSynonymRead,
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def set_ai_synonym_status(
     synonym_id: UUID,
     is_active: bool = Query(...),

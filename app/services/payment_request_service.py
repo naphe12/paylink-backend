@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from calendar import monthrange
 from datetime import datetime, timezone
+from datetime import timedelta
 from decimal import Decimal
 from typing import Iterable
 from uuid import UUID
@@ -26,6 +28,16 @@ from app.utils.notify import send_notification
 
 BUSINESS_PAYMENT_READ_ROLES = {"owner", "admin", "cashier", "viewer"}
 BUSINESS_PAYMENT_WRITE_ROLES = {"owner", "admin", "cashier"}
+MANUAL_REMINDER_COOLDOWN = timedelta(hours=6)
+BUSINESS_PAYMENT_CHANNEL_ALIASES = {
+    "": "business_link",
+    "business_link": "business_link",
+    "link": "business_link",
+    "static_qr": "static_qr",
+    "qr_static": "static_qr",
+    "dynamic_qr": "dynamic_qr",
+    "qr_dynamic": "dynamic_qr",
+}
 
 
 def _utcnow() -> datetime:
@@ -44,6 +56,35 @@ def _share_token(requester_user_id: UUID, amount: Decimal, created_at: datetime)
     raw = f"{requester_user_id}:{amount}:{created_at.isoformat()}".encode()
     digest = hmac.new(secret, raw, hashlib.sha256).hexdigest().upper()
     return f"PR-{digest[:18]}"
+
+
+def _build_public_pay_url(share_token: str | None) -> str | None:
+    token = str(share_token or "").strip()
+    if not token:
+        return None
+    base = str(getattr(settings, "FRONTEND_URL", "") or "http://localhost:5173").rstrip("/")
+    return f"{base}/pay/request/{token}"
+
+
+def _build_scan_to_pay_payload(request_obj: PaymentRequests) -> dict:
+    pay_url = _build_public_pay_url(request_obj.share_token)
+    if not pay_url:
+        return {}
+
+    mode = "link"
+    if request_obj.channel == "static_qr":
+        mode = "static"
+    elif request_obj.channel == "dynamic_qr":
+        mode = "dynamic"
+
+    return {
+        "type": "payment_request",
+        "mode": mode,
+        "share_token": request_obj.share_token,
+        "pay_url": pay_url,
+        "amount": str(request_obj.amount),
+        "currency_code": request_obj.currency_code,
+    }
 
 
 async def _find_user_by_identifier(db: AsyncSession, identifier: str) -> Users | None:
@@ -140,6 +181,153 @@ def _requester_label(request_obj: PaymentRequests, requester: Users | None) -> s
     return _display_user(requester)
 
 
+def _extract_recurrence_fields(metadata: dict | None) -> dict:
+    payload = metadata or {}
+    recurrence = payload.get("recurrence") if isinstance(payload.get("recurrence"), dict) else {}
+    auto_pay = payload.get("auto_pay") if isinstance(payload.get("auto_pay"), dict) else {}
+    frequency = str(recurrence.get("frequency") or "none").lower().strip()
+    if frequency not in {"none", "daily", "weekly", "monthly"}:
+        frequency = "none"
+    return {
+        "recurrence_frequency": frequency,
+        "recurrence_count": recurrence.get("count"),
+        "recurrence_end_at": recurrence.get("end_at"),
+        "auto_pay_enabled": bool(auto_pay.get("enabled") is True),
+        "auto_pay_max_amount": auto_pay.get("max_amount"),
+    }
+
+
+def _default_reminder_config() -> dict:
+    return {
+        "manual_count": 0,
+        "next_manual_at": None,
+    }
+
+
+def _extract_reminder_fields(metadata: dict | None, *, now: datetime | None = None) -> dict:
+    payload = metadata or {}
+    reminder = payload.get("reminder") if isinstance(payload.get("reminder"), dict) else {}
+    raw_manual_count = reminder.get("manual_count")
+    try:
+        manual_count = max(int(raw_manual_count or 0), 0)
+    except Exception:
+        manual_count = 0
+    next_manual_at = _parse_iso_datetime(reminder.get("next_manual_at"))
+    current_time = now or _utcnow()
+    can_send = next_manual_at is None or next_manual_at <= current_time
+    return {
+        "manual_reminder_count": manual_count,
+        "next_manual_reminder_at": next_manual_at,
+        "can_send_manual_reminder": can_send,
+    }
+
+
+def _set_manual_reminder_metadata(metadata: dict | None, *, now: datetime) -> dict:
+    payload = dict(metadata or {})
+    reminder = payload.get("reminder") if isinstance(payload.get("reminder"), dict) else {}
+    raw_manual_count = reminder.get("manual_count")
+    try:
+        manual_count = max(int(raw_manual_count or 0), 0)
+    except Exception:
+        manual_count = 0
+    manual_count += 1
+    next_allowed_at = now + MANUAL_REMINDER_COOLDOWN
+    payload["reminder"] = {
+        "manual_count": manual_count,
+        "next_manual_at": next_allowed_at.isoformat(),
+    }
+    return payload
+
+
+def _extract_auto_pay_config(metadata: dict | None) -> tuple[bool, Decimal | None]:
+    fields = _extract_recurrence_fields(metadata)
+    enabled = bool(fields.get("auto_pay_enabled"))
+    raw_limit = fields.get("auto_pay_max_amount")
+    if raw_limit in (None, ""):
+        return enabled, None
+    try:
+        return enabled, Decimal(str(raw_limit))
+    except Exception:
+        return enabled, None
+
+
+def _parse_iso_datetime(value: str | datetime | None) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _compute_next_due_at(current_due_at: datetime, *, frequency: str) -> datetime:
+    normalized = str(frequency or "").lower().strip()
+    if normalized == "daily":
+        return current_due_at + timedelta(days=1)
+    if normalized == "weekly":
+        return current_due_at + timedelta(days=7)
+    if normalized == "monthly":
+        month = current_due_at.month + 1
+        year = current_due_at.year
+        if month > 12:
+            year += 1
+            month = 1
+        day = min(current_due_at.day, monthrange(year, month)[1])
+        return current_due_at.replace(year=year, month=month, day=day)
+    raise ValueError("Unsupported recurrence frequency")
+
+
+def _compute_next_expires_at(
+    *,
+    current_due_at: datetime | None,
+    current_expires_at: datetime | None,
+    next_due_at: datetime,
+) -> datetime | None:
+    if not current_due_at or not current_expires_at:
+        return None
+    delta = current_expires_at - current_due_at
+    if delta.total_seconds() <= 0:
+        return None
+    return next_due_at + delta
+
+
+def _build_recurrence_config(payload: PaymentRequestCreate, *, amount: Decimal) -> dict:
+    frequency = str(payload.recurrence_frequency or "none").lower().strip()
+    if frequency not in {"none", "daily", "weekly", "monthly"}:
+        raise HTTPException(status_code=400, detail="Frequence de recurrence invalide.")
+    if payload.recurrence_end_at and payload.recurrence_end_at.tzinfo is None:
+        raise HTTPException(status_code=400, detail="recurrence_end_at doit contenir un fuseau horaire.")
+    if frequency != "none" and not payload.due_at:
+        raise HTTPException(status_code=400, detail="due_at est obligatoire pour une demande recurrente.")
+    if payload.recurrence_count is not None and frequency == "none":
+        raise HTTPException(status_code=400, detail="recurrence_count exige une frequence recurrente.")
+    if payload.recurrence_end_at is not None and frequency == "none":
+        raise HTTPException(status_code=400, detail="recurrence_end_at exige une frequence recurrente.")
+
+    if payload.auto_pay_enabled is True or payload.auto_pay_max_amount is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Auto-pay doit etre activee par le payeur depuis la demande recue.",
+        )
+    return {
+        "recurrence": {
+            "frequency": frequency,
+            "count": payload.recurrence_count,
+            "end_at": payload.recurrence_end_at.isoformat() if payload.recurrence_end_at else None,
+        },
+        "auto_pay": {
+            "enabled": False,
+            "max_amount": None,
+        },
+        "reminder": _default_reminder_config(),
+    }
+
+
 async def _users_map(db: AsyncSession, user_ids: Iterable[UUID | None]) -> dict[UUID, Users]:
     valid_ids = [user_id for user_id in user_ids if user_id]
     if not valid_ids:
@@ -164,6 +352,10 @@ def _serialize_request(request_obj: PaymentRequests, *, current_user_id: UUID, u
     role = "requester" if request_obj.requester_user_id == current_user_id else "payer"
     requester_label = _requester_label(request_obj, requester)
     counterpart = payer if role == "requester" else requester
+    recurrence_fields = _extract_recurrence_fields(request_obj.metadata_ or {})
+    reminder_fields = _extract_reminder_fields(request_obj.metadata_ or {}, now=now)
+    pay_url = _build_public_pay_url(request_obj.share_token)
+    scan_to_pay_payload = _build_scan_to_pay_payload(request_obj)
     return {
         "request_id": request_obj.request_id,
         "requester_user_id": request_obj.requester_user_id,
@@ -175,6 +367,8 @@ def _serialize_request(request_obj: PaymentRequests, *, current_user_id: UUID, u
         "title": request_obj.title,
         "note": request_obj.note,
         "share_token": request_obj.share_token,
+        "public_pay_url": pay_url,
+        "scan_to_pay_payload": scan_to_pay_payload,
         "due_at": request_obj.due_at,
         "expires_at": request_obj.expires_at,
         "paid_at": request_obj.paid_at,
@@ -187,6 +381,8 @@ def _serialize_request(request_obj: PaymentRequests, *, current_user_id: UUID, u
         "counterpart_label": _display_user(counterpart) if role == "requester" else requester_label,
         "role": role,
         "is_due": _is_due(request_obj, now),
+        **recurrence_fields,
+        **reminder_fields,
     }
 
 
@@ -244,6 +440,8 @@ async def _require_business_membership(
     business = await db.get(BusinessAccounts, business_id)
     if not business:
         raise HTTPException(status_code=404, detail="Compte business introuvable")
+    if not bool(business.is_active):
+        raise HTTPException(status_code=403, detail="Compte business inactif")
     membership = await db.scalar(
         select(BusinessMembers).where(
             BusinessMembers.business_id == business_id,
@@ -297,6 +495,7 @@ async def create_payment_request(
     if payload.due_at and payload.expires_at and payload.due_at > payload.expires_at:
         raise HTTPException(status_code=400, detail="due_at doit preceder expires_at.")
 
+    recurrence_config = _build_recurrence_config(payload, amount=amount)
     request_obj = PaymentRequests(
         requester_user_id=current_user.user_id,
         payer_user_id=payer.user_id if payer else None,
@@ -310,7 +509,7 @@ async def create_payment_request(
         note=(payload.note or "").strip() or None,
         due_at=payload.due_at,
         expires_at=payload.expires_at,
-        metadata_={},
+        metadata_=recurrence_config,
         created_at=now,
         updated_at=now,
     )
@@ -398,15 +597,25 @@ async def create_business_payment_request(
         raise HTTPException(status_code=400, detail="due_at doit preceder expires_at.")
 
     business_label = business.display_name or business.legal_name
+    recurrence_config = _build_recurrence_config(payload, amount=amount)
     metadata = {
         "scope": "business",
         "business_id": str(business.business_id),
         "business_label": business_label,
         "created_by_user_id": str(current_user.user_id),
+        **recurrence_config,
     }
     merchant_reference = str(payload.merchant_reference or "").strip()
     if merchant_reference:
         metadata["merchant_reference"] = merchant_reference
+
+    requested_channel = str(payload.channel or "").strip().lower()
+    channel = BUSINESS_PAYMENT_CHANNEL_ALIASES.get(requested_channel)
+    if not channel:
+        raise HTTPException(
+            status_code=400,
+            detail="Canal invalide. Utilise business_link, static_qr ou dynamic_qr.",
+        )
 
     request_obj = PaymentRequests(
         requester_user_id=business.owner_user_id,
@@ -416,7 +625,7 @@ async def create_business_payment_request(
         amount=amount,
         currency_code=currency_code,
         status="pending",
-        channel="business_link",
+        channel=channel,
         title=(payload.title or "").strip() or business_label,
         note=(payload.note or "").strip() or None,
         due_at=payload.due_at,
@@ -614,6 +823,10 @@ async def pay_payment_request(
         after_status=request_obj.status,
         metadata={"reason": reason},
     )
+    await _create_next_recurring_payment_request_if_needed(
+        db,
+        source_request=request_obj,
+    )
 
     requester = await db.scalar(select(Users).where(Users.user_id == request_obj.requester_user_id))
     if requester:
@@ -625,6 +838,146 @@ async def pay_payment_request(
     await db.commit()
     await db.refresh(request_obj)
     return request_obj
+
+
+async def _try_execute_due_autopay(
+    db: AsyncSession,
+    *,
+    request_obj: PaymentRequests,
+    users: dict[UUID, Users],
+) -> bool:
+    if request_obj.status != "pending" or not _is_due(request_obj):
+        return False
+    auto_pay_enabled, auto_pay_max_amount = _extract_auto_pay_config(request_obj.metadata_ or {})
+    if not auto_pay_enabled:
+        return False
+    if not request_obj.payer_user_id:
+        return False
+    if auto_pay_max_amount is not None and Decimal(request_obj.amount or 0) > auto_pay_max_amount:
+        return False
+
+    payer = users.get(request_obj.payer_user_id)
+    if not payer:
+        payer = await db.get(Users, request_obj.payer_user_id)
+        if payer:
+            users[payer.user_id] = payer
+    if not payer:
+        return False
+
+    try:
+        await pay_payment_request(
+            db,
+            request_id=request_obj.request_id,
+            current_user=payer,
+            reason="auto_pay_due",
+        )
+        return True
+    except HTTPException:
+        return False
+
+
+async def _create_next_recurring_payment_request_if_needed(
+    db: AsyncSession,
+    *,
+    source_request: PaymentRequests,
+) -> PaymentRequests | None:
+    metadata = dict(source_request.metadata_ or {})
+    recurrence = metadata.get("recurrence") if isinstance(metadata.get("recurrence"), dict) else {}
+    frequency = str(recurrence.get("frequency") or "none").lower().strip()
+    if frequency not in {"daily", "weekly", "monthly"}:
+        return None
+    if not source_request.due_at:
+        return None
+
+    recurrence_count = recurrence.get("count")
+    if recurrence_count is not None:
+        try:
+            recurrence_count = int(recurrence_count)
+        except Exception:
+            recurrence_count = None
+    if recurrence_count is not None and recurrence_count <= 1:
+        return None
+
+    next_due_at = _compute_next_due_at(source_request.due_at, frequency=frequency)
+    recurrence_end_at = _parse_iso_datetime(recurrence.get("end_at"))
+    if recurrence_end_at and next_due_at > recurrence_end_at:
+        return None
+
+    next_expires_at = _compute_next_expires_at(
+        current_due_at=source_request.due_at,
+        current_expires_at=source_request.expires_at,
+        next_due_at=next_due_at,
+    )
+
+    next_recurrence = dict(recurrence)
+    if recurrence_count is not None:
+        next_recurrence["count"] = recurrence_count - 1
+    metadata["recurrence"] = next_recurrence
+    metadata["recurrence_root_request_id"] = str(metadata.get("recurrence_root_request_id") or source_request.request_id)
+    metadata["recurrence_previous_request_id"] = str(source_request.request_id)
+    metadata["reminder"] = _default_reminder_config()
+
+    now = _utcnow()
+    requester_wallet_id = source_request.requester_wallet_id
+    payer_wallet_id = source_request.payer_wallet_id
+
+    requester_wallet = await _get_user_wallet(db, source_request.requester_user_id, source_request.currency_code)
+    if requester_wallet:
+        requester_wallet_id = requester_wallet.wallet_id
+
+    if source_request.payer_user_id:
+        payer_wallet = await _get_user_wallet(db, source_request.payer_user_id, source_request.currency_code)
+        if payer_wallet:
+            payer_wallet_id = payer_wallet.wallet_id
+
+    next_request = PaymentRequests(
+        requester_user_id=source_request.requester_user_id,
+        payer_user_id=source_request.payer_user_id,
+        requester_wallet_id=requester_wallet_id,
+        payer_wallet_id=payer_wallet_id,
+        amount=source_request.amount,
+        currency_code=source_request.currency_code,
+        status="pending",
+        channel=source_request.channel,
+        title=source_request.title,
+        note=source_request.note,
+        due_at=next_due_at,
+        expires_at=next_expires_at,
+        metadata_=metadata,
+        created_at=now,
+        updated_at=now,
+    )
+    next_request.share_token = _share_token(source_request.requester_user_id, Decimal(source_request.amount or 0), now)
+    db.add(next_request)
+    await db.flush()
+
+    await _append_event(
+        db,
+        request_id=next_request.request_id,
+        actor_user_id=None,
+        actor_role="system",
+        event_type="created",
+        before_status=None,
+        after_status=next_request.status,
+        metadata={"recurrence": {"generated_from": str(source_request.request_id)}},
+    )
+    await _append_event(
+        db,
+        request_id=next_request.request_id,
+        actor_user_id=None,
+        actor_role="system",
+        event_type="sent",
+        before_status=next_request.status,
+        after_status=next_request.status,
+        metadata={"channel": next_request.channel, "recurrence": {"auto_generated": True}},
+    )
+
+    if next_request.payer_user_id:
+        await send_notification(
+            str(next_request.payer_user_id),
+            f"Nouvelle demande recurrente ({next_request.amount} {next_request.currency_code}).",
+        )
+    return next_request
 
 
 async def decline_payment_request(
@@ -739,8 +1092,18 @@ async def remind_payment_request(
         raise HTTPException(status_code=400, detail="Aucun payeur cible pour cette relance.")
 
     now = _utcnow()
+    reminder_fields = _extract_reminder_fields(request_obj.metadata_ or {}, now=now)
+    next_manual_at = reminder_fields.get("next_manual_reminder_at")
+    if not reminder_fields.get("can_send_manual_reminder", True):
+        next_allowed_label = next_manual_at.isoformat() if isinstance(next_manual_at, datetime) else "plus tard"
+        raise HTTPException(
+            status_code=409,
+            detail=f"Relance deja envoyee recemment. Prochaine relance manuelle autorisee apres {next_allowed_label}.",
+        )
+
     request_obj.last_reminder_at = now
     request_obj.updated_at = now
+    request_obj.metadata_ = _set_manual_reminder_metadata(request_obj.metadata_ or {}, now=now)
     db.add(
         PaymentRequestReminders(
             request_id=request_obj.request_id,
@@ -772,6 +1135,79 @@ async def remind_payment_request(
     return request_obj
 
 
+async def update_payment_request_auto_pay(
+    db: AsyncSession,
+    *,
+    request_id: UUID,
+    current_user: Users,
+    enabled: bool,
+    max_amount: Decimal | None = None,
+    reason: str | None = None,
+) -> PaymentRequests:
+    request_obj = await db.scalar(select(PaymentRequests).where(PaymentRequests.request_id == request_id))
+    if not request_obj:
+        raise HTTPException(status_code=404, detail="Demande introuvable.")
+
+    await _mark_expired_if_needed(db, request_obj)
+    if request_obj.status != "pending":
+        raise HTTPException(status_code=409, detail="Auto-pay ne peut etre modifiee que sur une demande en attente.")
+    if not request_obj.payer_user_id or request_obj.payer_user_id != current_user.user_id:
+        raise HTTPException(status_code=403, detail="Seul le payeur cible peut configurer auto-pay.")
+
+    request_amount = Decimal(str(request_obj.amount or 0))
+    safe_max_amount: Decimal | None = None
+    if enabled:
+        safe_max_amount = Decimal(str(max_amount)) if max_amount is not None else request_amount
+        if safe_max_amount < request_amount:
+            raise HTTPException(
+                status_code=400,
+                detail="Le plafond auto-pay doit etre superieur ou egal au montant de la demande.",
+            )
+
+    metadata = dict(request_obj.metadata_ or {})
+    auto_pay = metadata.get("auto_pay") if isinstance(metadata.get("auto_pay"), dict) else {}
+    previous_enabled = bool(auto_pay.get("enabled") is True)
+    previous_max_amount = auto_pay.get("max_amount")
+    auto_pay["enabled"] = bool(enabled)
+    auto_pay["max_amount"] = str(safe_max_amount) if safe_max_amount is not None else None
+    metadata["auto_pay"] = auto_pay
+
+    request_obj.metadata_ = metadata
+    request_obj.updated_at = _utcnow()
+    await _append_event(
+        db,
+        request_id=request_obj.request_id,
+        actor_user_id=current_user.user_id,
+        actor_role=_role_value(current_user),
+        event_type="autopay_updated",
+        before_status=request_obj.status,
+        after_status=request_obj.status,
+        metadata={
+            "reason": reason,
+            "previous": {
+                "enabled": previous_enabled,
+                "max_amount": previous_max_amount,
+            },
+            "next": {
+                "enabled": bool(enabled),
+                "max_amount": auto_pay.get("max_amount"),
+            },
+        },
+    )
+
+    requester = await db.scalar(select(Users).where(Users.user_id == request_obj.requester_user_id))
+    if requester:
+        verb = "active" if enabled else "desactive"
+        await send_notification(
+            str(requester.user_id),
+            f"Auto-pay a ete {verb} par le payeur pour la demande {request_obj.share_token or request_obj.request_id}.",
+        )
+
+    await db.commit()
+    await db.refresh(request_obj)
+    return request_obj
+
+
 async def get_payment_request_by_share_token(db: AsyncSession, token: str) -> PaymentRequests:
     request_obj = await db.scalar(select(PaymentRequests).where(PaymentRequests.share_token == token))
     if not request_obj:
@@ -788,6 +1224,10 @@ async def get_payment_request_public_view(db: AsyncSession, token: str) -> dict:
     requester = users.get(request_obj.requester_user_id)
     requester_label = _requester_label(request_obj, requester)
     now = _utcnow()
+    recurrence_fields = _extract_recurrence_fields(request_obj.metadata_ or {})
+    reminder_fields = _extract_reminder_fields(request_obj.metadata_ or {}, now=now)
+    pay_url = _build_public_pay_url(request_obj.share_token)
+    scan_to_pay_payload = _build_scan_to_pay_payload(request_obj)
     return {
         "request_id": request_obj.request_id,
         "requester_user_id": request_obj.requester_user_id,
@@ -799,6 +1239,8 @@ async def get_payment_request_public_view(db: AsyncSession, token: str) -> dict:
         "title": request_obj.title,
         "note": request_obj.note,
         "share_token": request_obj.share_token,
+        "public_pay_url": pay_url,
+        "scan_to_pay_payload": scan_to_pay_payload,
         "due_at": request_obj.due_at,
         "expires_at": request_obj.expires_at,
         "paid_at": request_obj.paid_at,
@@ -811,6 +1253,8 @@ async def get_payment_request_public_view(db: AsyncSession, token: str) -> dict:
         "counterpart_label": requester_label,
         "role": "public",
         "is_due": _is_due(request_obj, now),
+        **recurrence_fields,
+        **reminder_fields,
     }
 
 
@@ -819,6 +1263,10 @@ def _serialize_admin_request(request_obj: PaymentRequests, users: dict[UUID, Use
     requester = users.get(request_obj.requester_user_id)
     payer = users.get(request_obj.payer_user_id) if request_obj.payer_user_id else None
     requester_label = _requester_label(request_obj, requester)
+    recurrence_fields = _extract_recurrence_fields(request_obj.metadata_ or {})
+    reminder_fields = _extract_reminder_fields(request_obj.metadata_ or {}, now=now)
+    pay_url = _build_public_pay_url(request_obj.share_token)
+    scan_to_pay_payload = _build_scan_to_pay_payload(request_obj)
     return {
         "request_id": request_obj.request_id,
         "requester_user_id": request_obj.requester_user_id,
@@ -830,6 +1278,8 @@ def _serialize_admin_request(request_obj: PaymentRequests, users: dict[UUID, Use
         "title": request_obj.title,
         "note": request_obj.note,
         "share_token": request_obj.share_token,
+        "public_pay_url": pay_url,
+        "scan_to_pay_payload": scan_to_pay_payload,
         "due_at": request_obj.due_at,
         "expires_at": request_obj.expires_at,
         "paid_at": request_obj.paid_at,
@@ -844,6 +1294,8 @@ def _serialize_admin_request(request_obj: PaymentRequests, users: dict[UUID, Use
         "requester_label": requester_label,
         "payer_label": _display_user(payer),
         "is_due": _is_due(request_obj, now),
+        **recurrence_fields,
+        **reminder_fields,
     }
 
 
@@ -870,30 +1322,53 @@ async def run_due_payment_request_maintenance(
 
     reminded_count = 0
     expired_count = 0
-    processed: list[PaymentRequests] = []
+    auto_paid_count = 0
+    processed_ids: list[UUID] = []
+    needs_commit = False
     requester_label = _display_user(current_user) or "utilisateur"
+    users = await _users_map(
+        db,
+        [item.requester_user_id for item in rows] + [item.payer_user_id for item in rows],
+    )
 
     for row in rows:
         if await _mark_expired_if_needed(db, row):
             expired_count += 1
-            processed.append(row)
+            processed_ids.append(row.request_id)
+            needs_commit = True
+            continue
+        if await _try_execute_due_autopay(db, request_obj=row, users=users):
+            auto_paid_count += 1
+            processed_ids.append(row.request_id)
             continue
         if await _send_due_reminder_if_needed(db, request_obj=row, requester_label=requester_label):
             reminded_count += 1
-            processed.append(row)
+            processed_ids.append(row.request_id)
+            needs_commit = True
 
-    if processed:
+    if needs_commit:
         await db.commit()
 
-    users = await _users_map(
-        db,
-        [item.requester_user_id for item in processed] + [item.payer_user_id for item in processed],
-    )
+    processed_rows = []
+    if processed_ids:
+        processed_rows = (
+            await db.execute(
+                select(PaymentRequests)
+                .where(PaymentRequests.request_id.in_(processed_ids))
+                .order_by(PaymentRequests.created_at.desc())
+            )
+        ).scalars().all()
+        users = await _users_map(
+            db,
+            [item.requester_user_id for item in processed_rows] + [item.payer_user_id for item in processed_rows],
+        )
+
     return {
         "reminded_count": reminded_count,
         "expired_count": expired_count,
+        "auto_paid_count": auto_paid_count,
         "processed_requests": [
-            _serialize_request(item, current_user_id=current_user.user_id, users=users) for item in processed
+            _serialize_request(item, current_user_id=current_user.user_id, users=users) for item in processed_rows
         ],
     }
 
@@ -920,7 +1395,7 @@ async def run_global_due_payment_request_maintenance(
         )
     ).scalars().all()
     if not rows:
-        return {"processed": 0, "reminded_count": 0, "expired_count": 0}
+        return {"processed": 0, "reminded_count": 0, "expired_count": 0, "auto_paid_count": 0}
 
     users = await _users_map(
         db,
@@ -930,24 +1405,33 @@ async def run_global_due_payment_request_maintenance(
     processed_count = 0
     reminded_count = 0
     expired_count = 0
+    auto_paid_count = 0
+    needs_commit = False
     for row in rows:
         requester = users.get(row.requester_user_id)
         requester_label = _requester_label(row, requester) or "utilisateur"
         if await _mark_expired_if_needed(db, row):
             expired_count += 1
             processed_count += 1
+            needs_commit = True
+            continue
+        if await _try_execute_due_autopay(db, request_obj=row, users=users):
+            auto_paid_count += 1
+            processed_count += 1
             continue
         if await _send_due_reminder_if_needed(db, request_obj=row, requester_label=requester_label):
             reminded_count += 1
             processed_count += 1
+            needs_commit = True
 
-    if processed_count:
+    if needs_commit:
         await db.commit()
 
     return {
         "processed": processed_count,
         "reminded_count": reminded_count,
         "expired_count": expired_count,
+        "auto_paid_count": auto_paid_count,
     }
 
 

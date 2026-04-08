@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
+from app.dependencies.step_up import require_admin_step_up
 from app.models.transactions import Transactions
 from app.models.users import Users
 from app.models.wallets import Wallets
@@ -47,7 +48,7 @@ async def _find_user(db: AsyncSession, identifier: str) -> Users | None:
     )
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_admin_step_up("admin_write"))])
 async def create_admin_payment_request(
     payload: AdminPaymentRequestCreate,
     db: AsyncSession = Depends(get_db),

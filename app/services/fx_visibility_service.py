@@ -162,6 +162,8 @@ async def get_wallet_display_summary(
     total_pending = Decimal("0")
     has_available_estimate = False
     has_pending_estimate = False
+    estimated_currencies_count = 0
+    non_estimated_currencies_count = 0
 
     for item in balances:
         rate, source = await _resolve_rate_to_display_currency(
@@ -174,14 +176,20 @@ async def get_wallet_display_summary(
         if rate is None:
             item["estimated_display_available"] = None
             item["estimated_display_pending"] = None
+            item["included_in_total"] = False
+            item["estimation_status"] = "missing_rate"
+            non_estimated_currencies_count += 1
             continue
 
         item["estimated_display_available"] = (item["available"] * rate).quantize(Decimal("0.000001"))
         item["estimated_display_pending"] = (item["pending"] * rate).quantize(Decimal("0.000001"))
+        item["included_in_total"] = True
+        item["estimation_status"] = "estimated"
         total_available += item["estimated_display_available"]
         total_pending += item["estimated_display_pending"]
         has_available_estimate = True
         has_pending_estimate = True
+        estimated_currencies_count += 1
 
     return {
         "display_currency": display_currency,
@@ -189,6 +197,8 @@ async def get_wallet_display_summary(
         "available_currencies": preference["available_currencies"],
         "estimated_total_available": total_available if has_available_estimate else None,
         "estimated_total_pending": total_pending if has_pending_estimate else None,
+        "estimated_currencies_count": estimated_currencies_count,
+        "non_estimated_currencies_count": non_estimated_currencies_count,
         "balances": balances,
         "generated_at": datetime.now(timezone.utc),
     }

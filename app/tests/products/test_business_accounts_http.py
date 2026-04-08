@@ -92,6 +92,11 @@ def test_business_account_routes_cover_core_crud(monkeypatch):
         assert payload.identifier == "@cashier"
         return _business_payload(business_id, current_user.user_id, member_user_id, membership_id, sub_wallet_id)
 
+    async def fake_update_business_account_status(db, *, current_user, business_id, payload):
+        updated = _business_payload(business_id, current_user.user_id, member_user_id, membership_id, sub_wallet_id)
+        updated["is_active"] = bool(payload.is_active)
+        return updated
+
     async def fake_update_business_member(db, *, current_user, business_id, membership_id, payload):
         assert payload.role == "admin"
         updated = _business_payload(business_id, current_user.user_id, member_user_id, membership_id, sub_wallet_id)
@@ -124,6 +129,7 @@ def test_business_account_routes_cover_core_crud(monkeypatch):
 
     monkeypatch.setattr(business_module, "list_my_business_accounts", fake_list_my_business_accounts)
     monkeypatch.setattr(business_module, "create_business_account", fake_create_business_account)
+    monkeypatch.setattr(business_module, "update_business_account_status", fake_update_business_account_status)
     monkeypatch.setattr(business_module, "add_business_member", fake_add_business_member)
     monkeypatch.setattr(business_module, "update_business_member", fake_update_business_member)
     monkeypatch.setattr(business_module, "create_business_sub_wallet", fake_create_business_sub_wallet)
@@ -143,6 +149,13 @@ def test_business_account_routes_cover_core_crud(monkeypatch):
     )
     assert create_response.status_code == 200
     assert create_response.json()["legal_name"] == "Alpha Shop SARL"
+
+    status_response = client.put(
+        f"/business-accounts/{business_id}/status",
+        json={"is_active": False},
+    )
+    assert status_response.status_code == 200
+    assert status_response.json()["is_active"] is False
 
     member_response = client.post(
         f"/business-accounts/{business_id}/members",

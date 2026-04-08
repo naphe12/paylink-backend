@@ -12,6 +12,7 @@ from app.schemas.support_cases import (
     SupportCaseDetailRead,
     SupportCaseMessageCreate,
     SupportCaseRead,
+    SupportCaseUserStatusUpdate,
 )
 from app.services.support_case_service import (
     add_support_case_attachment_for_user,
@@ -19,6 +20,7 @@ from app.services.support_case_service import (
     create_support_case,
     get_support_case_detail_for_user,
     list_support_cases_for_user,
+    update_support_case_status_for_user,
 )
 
 router = APIRouter(prefix="/support/cases", tags=["Support Cases"])
@@ -85,4 +87,20 @@ async def add_support_case_attachment_route(
         file_mime_type=payload.file_mime_type,
         file_size_bytes=payload.file_size_bytes,
         checksum_sha256=payload.checksum_sha256,
+    )
+
+
+@router.post("/{case_id}/status", response_model=SupportCaseDetailRead)
+async def update_support_case_status_route(
+    case_id: UUID,
+    payload: SupportCaseUserStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user_db),
+):
+    return await update_support_case_status_for_user(
+        db,
+        case_id=case_id,
+        current_user=current_user,
+        action=payload.action,
+        message=payload.message,
     )

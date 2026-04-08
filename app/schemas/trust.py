@@ -34,7 +34,14 @@ class TrustProfileRead(BaseModel):
     trust_level: str
     kyc_tier: int | None = None
     successful_payment_requests: int
+    total_payment_requests: int = 0
+    payment_request_success_rate: Decimal | None = None
     successful_p2p_trades: int
+    total_p2p_trades: int = 0
+    p2p_completion_rate: Decimal | None = None
+    p2p_dispute_count: int = 0
+    open_p2p_dispute_count: int = 0
+    p2p_dispute_rate: Decimal | None = None
     dispute_count: int
     failed_obligation_count: int
     chargeback_like_count: int
@@ -46,6 +53,8 @@ class TrustProfileRead(BaseModel):
     recommended_monthly_limit: Decimal | None = None
     limit_multiplier: Decimal | None = None
     limit_uplift_active: bool = False
+    reputation_tier: str = "watch"
+    reputation_note: str | None = None
     auto_limit_applied_at: datetime | None = None
     last_computed_at: datetime | None = None
     metadata_: dict[str, Any] = Field(default_factory=dict, alias="metadata")

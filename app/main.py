@@ -144,6 +144,7 @@ from app.services.pots_runtime_schema import ensure_pots_schema
 from app.services.virtual_cards_runtime_schema import ensure_virtual_cards_schema
 from app.services.operator_workflow_runtime_schema import ensure_operator_workflow_schema
 from app.services.product_automation_worker import run_product_automation_cycle
+from app.services.request_metrics import build_request_metric_payload
 from app.services.telegram_external_transfer_service import ensure_telegram_external_transfer_schema
 from app.services.auth_sessions import ensure_auth_refresh_schema
 from app.services.sandbox_transition_worker import run_sandbox_auto_transitions
@@ -421,8 +422,26 @@ async def ensure_request_metrics_schema(db) -> None:
               path text NOT NULL,
               status_code int NOT NULL,
               duration_ms numeric(12, 3) NOT NULL,
-              request_id text NULL
+              request_id text NULL,
+              error_type text NULL,
+              is_error boolean NOT NULL DEFAULT false
             )
+            """
+        )
+    )
+    await db.execute(
+        text(
+            """
+            ALTER TABLE paylink.request_metrics
+            ADD COLUMN IF NOT EXISTS error_type text NULL
+            """
+        )
+    )
+    await db.execute(
+        text(
+            """
+            ALTER TABLE paylink.request_metrics
+            ADD COLUMN IF NOT EXISTS is_error boolean NOT NULL DEFAULT false
             """
         )
     )
@@ -450,6 +469,38 @@ async def ensure_request_metrics_schema(db) -> None:
             """
         )
     )
+    await db.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS idx_request_metrics_is_error
+            ON paylink.request_metrics (is_error)
+            """
+        )
+    )
+    await db.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS idx_request_metrics_error_type
+            ON paylink.request_metrics (error_type)
+            """
+        )
+    )
+
+
+async def _persist_request_metric(payload: dict[str, object]) -> None:
+    async for db in get_db():
+        await db.execute(
+            text(
+                """
+                INSERT INTO paylink.request_metrics
+                (method, path, status_code, duration_ms, request_id, error_type, is_error)
+                VALUES (:method, :path, :status_code, :duration_ms, :request_id, :error_type, :is_error)
+                """
+            ),
+            payload,
+        )
+        await db.commit()
+        break
 
 
 async def ensure_core_schemas(db) -> None:
@@ -800,32 +851,33 @@ async def request_metrics_middleware(request: Request, call_next):
         return await call_next(request)
 
     started = time.perf_counter()
-    response = await call_next(request)
-    duration_ms = round((time.perf_counter() - started) * 1000, 3)
     request_id = _get_request_id(request)
+    response = None
 
     try:
-        async for db in get_db():
-            await db.execute(
-                text(
-                    """
-                    INSERT INTO paylink.request_metrics
-                    (method, path, status_code, duration_ms, request_id)
-                    VALUES (:method, :path, :status_code, :duration_ms, :request_id)
-                    """
-                ),
-                {
-                    "method": request.method,
-                    "path": request.url.path,
-                    "status_code": int(response.status_code or 0),
-                    "duration_ms": duration_ms,
-                    "request_id": request_id,
-                },
-            )
-            await db.commit()
-            break
+        response = await call_next(request)
+        payload = build_request_metric_payload(
+            method=request.method,
+            path=request.url.path,
+            status_code=int(response.status_code or 0),
+            duration_ms=(time.perf_counter() - started) * 1000,
+            request_id=request_id,
+        )
+        await _persist_request_metric(payload)
     except Exception as exc:
-        logger.warning("Request metrics insert failed path=%s err=%s", request.url.path, exc)
+        payload = build_request_metric_payload(
+            method=request.method,
+            path=request.url.path,
+            status_code=500,
+            duration_ms=(time.perf_counter() - started) * 1000,
+            request_id=request_id,
+            error_type=exc.__class__.__name__,
+        )
+        try:
+            await _persist_request_metric(payload)
+        except Exception as persist_exc:
+            logger.warning("Request metrics insert failed path=%s err=%s", request.url.path, persist_exc)
+        raise
 
     return response
 

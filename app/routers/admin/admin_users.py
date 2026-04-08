@@ -1,21 +1,25 @@
 # app/routers/admin_users.py
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
-from sqlalchemy import update, select, func, case, exists
+from sqlalchemy import case, exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.database import get_db
-from app.dependencies.auth import  get_current_admin
-from app.models.users import Users
-from app.models.external_transfers import ExternalTransfers
-from app.models.wallet_transactions import WalletTransactions
+from app.dependencies.auth import get_current_admin
+from app.dependencies.step_up import get_admin_step_up_method, require_admin_step_up
 from app.models.agent_transactions import AgentTransactions
+from app.models.external_transfers import ExternalTransfers
+from app.models.users import Users
+from app.models.wallet_transactions import WalletTransactions
 from app.models.wallets import Wallets
 from app.schemas.users import UsersCreate, UsersRead
+from app.services.admin_notifications import push_admin_notification
+from app.services.audit_service import audit_log
+from app.services.auth_sessions import get_request_ip, get_request_user_agent
+from app.services.push_notifications import send_push_notification
 from app.services.user_provisioning import create_client_user
 from app.services.wallet_service import ensure_user_financial_accounts
 from app.websocket_manager import notify_user
-from app.services.admin_notifications import push_admin_notification
-from app.services.push_notifications import send_push_notification
 
 router = APIRouter(prefix="/admin/users", tags=["Admin Users"])
 
@@ -26,7 +30,48 @@ class ResolveAmlLockBody(BaseModel):
     reset_risk_score: bool = True
 
 
-@router.post("/clients", response_model=UsersRead, status_code=status.HTTP_201_CREATED)
+def _user_admin_state(user: Users) -> dict:
+    return {
+        "status": str(getattr(user, "status", "") or ""),
+        "external_transfers_blocked": bool(getattr(user, "external_transfers_blocked", False)),
+        "risk_score": int(getattr(user, "risk_score", 0) or 0),
+        "kyc_tier": int(getattr(user, "kyc_tier", 0) or 0),
+    }
+
+
+async def _audit_admin_user_action(
+    *,
+    db: AsyncSession,
+    request: Request,
+    admin: Users,
+    user: Users,
+    action: str,
+    before_state: dict | None = None,
+    after_state: dict | None = None,
+) -> None:
+    await audit_log(
+        db,
+        actor_user_id=str(getattr(admin, "user_id", "") or "") or None,
+        actor_role=str(getattr(admin, "role", "") or "") or None,
+        action=action,
+        entity_type="user",
+        entity_id=str(user.user_id),
+        before_state=before_state,
+        after_state={
+            **(after_state or {}),
+            "step_up_method": get_admin_step_up_method(request),
+        },
+        ip=get_request_ip(request),
+        user_agent=get_request_user_agent(request),
+    )
+
+
+@router.post(
+    "/clients",
+    response_model=UsersRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def create_client_from_admin(
     payload: UsersCreate,
     db: AsyncSession = Depends(get_db),
@@ -40,6 +85,7 @@ async def create_client_from_admin(
     await db.refresh(user)
     return UsersRead.model_validate(user, from_attributes=True)
 
+
 @router.get("")
 @router.get("/")
 async def list_users(
@@ -48,7 +94,7 @@ async def list_users(
     role: str = "",
     exclude_wallet_currency: str = "",
     db: AsyncSession = Depends(get_db),
-    admin=Depends(get_current_admin)
+    admin=Depends(get_current_admin),
 ):
     search = f"%{q.lower()}%"
     last_external_transfer_at_sq = (
@@ -148,11 +194,12 @@ async def list_users(
         for r in rows
     ]
 
+
 @router.get("/{user_id}")
 async def get_user_detail(
     user_id: str,
     db: AsyncSession = Depends(get_db),
-    admin=Depends(get_current_admin)
+    admin=Depends(get_current_admin),
 ):
     stmt = select(Users).where(Users.user_id == user_id)
     user = await db.scalar(stmt)
@@ -186,57 +233,127 @@ async def get_user_detail(
         "external_transfers_blocked": getattr(user, "external_transfers_blocked", False),
     }
 
+
 @router.post("/{user_id}/freeze")
 async def freeze_user(
     user_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    admin=Depends(get_current_admin)
+    admin: Users = Depends(require_admin_step_up("user_freeze")),
 ):
-    await db.execute(
-        update(Users)
-        .where(Users.user_id == user_id)
-        .values(status="frozen")
+    user = await db.scalar(select(Users).where(Users.user_id == user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    before_state = _user_admin_state(user)
+    await db.execute(update(Users).where(Users.user_id == user_id).values(status="frozen"))
+    await db.commit()
+    await db.refresh(user)
+    await _audit_admin_user_action(
+        db=db,
+        request=request,
+        admin=admin,
+        user=user,
+        action="ADMIN_USER_FREEZE",
+        before_state=before_state,
+        after_state=_user_admin_state(user),
     )
     await db.commit()
-    return {"message": "✅ Compte gelé"}
+    return {"message": "Compte gelé"}
+
 
 @router.post("/{user_id}/unfreeze")
 async def unfreeze_user(
     user_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    admin=Depends(get_current_admin)
+    admin: Users = Depends(require_admin_step_up("user_unfreeze")),
 ):
-    await db.execute(
-        update(Users)
-        .where(Users.user_id == user_id)
-        .values(status="active")
+    user = await db.scalar(select(Users).where(Users.user_id == user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    before_state = _user_admin_state(user)
+    await db.execute(update(Users).where(Users.user_id == user_id).values(status="active"))
+    await db.commit()
+    await db.refresh(user)
+    await _audit_admin_user_action(
+        db=db,
+        request=request,
+        admin=admin,
+        user=user,
+        action="ADMIN_USER_UNFREEZE",
+        before_state=before_state,
+        after_state=_user_admin_state(user),
     )
     await db.commit()
-    return {"message": "🔓 Compte réactivé"}
+    return {"message": "Compte réactivé"}
+
 
 @router.post("/{user_id}/block-external")
-async def block_external(user_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
-    await db.execute(update(Users).where(Users.user_id==user_id).values(external_transfers_blocked=True))
+async def block_external(
+    user_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin: Users = Depends(require_admin_step_up("user_external_transfer_block")),
+):
+    user = await db.scalar(select(Users).where(Users.user_id == user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    before_state = _user_admin_state(user)
+    await db.execute(update(Users).where(Users.user_id == user_id).values(external_transfers_blocked=True))
     await db.commit()
-    return {"message": "🚫 Transferts externes bloqués"}
+    await db.refresh(user)
+    await _audit_admin_user_action(
+        db=db,
+        request=request,
+        admin=admin,
+        user=user,
+        action="ADMIN_USER_EXTERNAL_TRANSFER_BLOCK",
+        before_state=before_state,
+        after_state=_user_admin_state(user),
+    )
+    await db.commit()
+    return {"message": "Transferts externes bloqués"}
+
 
 @router.post("/{user_id}/unblock-external")
-async def unblock_external(user_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
-    await db.execute(update(Users).where(Users.user_id==user_id).values(external_transfers_blocked=False))
+async def unblock_external(
+    user_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin: Users = Depends(require_admin_step_up("user_external_transfer_unblock")),
+):
+    user = await db.scalar(select(Users).where(Users.user_id == user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    before_state = _user_admin_state(user)
+    await db.execute(update(Users).where(Users.user_id == user_id).values(external_transfers_blocked=False))
     await db.commit()
-    return {"message": "✅ Transferts externes rétablis"}
+    await db.refresh(user)
+    await _audit_admin_user_action(
+        db=db,
+        request=request,
+        admin=admin,
+        user=user,
+        action="ADMIN_USER_EXTERNAL_TRANSFER_UNBLOCK",
+        before_state=before_state,
+        after_state=_user_admin_state(user),
+    )
+    await db.commit()
+    return {"message": "Transferts externes rétablis"}
 
 
 @router.post("/{user_id}/resolve-aml-lock")
 async def resolve_aml_lock(
     user_id: str,
     body: ResolveAmlLockBody,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    admin=Depends(get_current_admin)
+    admin: Users = Depends(require_admin_step_up("user_aml_lock_resolve")),
 ):
     user = await db.scalar(select(Users).where(Users.user_id == user_id))
     if not user:
         raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    before_state = _user_admin_state(user)
 
     updates = {
         "status": "active",
@@ -247,13 +364,23 @@ async def resolve_aml_lock(
     if body.raise_kyc_tier_to_one and int(getattr(user, "kyc_tier", 0) or 0) < 1:
         updates["kyc_tier"] = 1
 
-    await db.execute(
-        update(Users)
-        .where(Users.user_id == user_id)
-        .values(**updates)
-    )
+    await db.execute(update(Users).where(Users.user_id == user_id).values(**updates))
     await db.commit()
     await db.refresh(user)
+    await _audit_admin_user_action(
+        db=db,
+        request=request,
+        admin=admin,
+        user=user,
+        action="ADMIN_USER_AML_LOCK_RESOLVE",
+        before_state=before_state,
+        after_state={
+            **_user_admin_state(user),
+            "note": body.note or "",
+            "raise_kyc_tier_to_one": bool(body.raise_kyc_tier_to_one),
+            "reset_risk_score": bool(body.reset_risk_score),
+        },
+    )
 
     await push_admin_notification(
         "aml_high",
@@ -268,8 +395,10 @@ async def resolve_aml_lock(
             "note": body.note or "",
             "raise_kyc_tier_to_one": body.raise_kyc_tier_to_one,
             "reset_risk_score": body.reset_risk_score,
+            "step_up_method": get_admin_step_up_method(request),
         },
     )
+    await db.commit()
 
     return {
         "message": "Blocage AML leve",
@@ -284,8 +413,9 @@ async def resolve_aml_lock(
 @router.delete("/{user_id}")
 async def delete_user(
     user_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    admin=Depends(get_current_admin)
+    admin: Users = Depends(require_admin_step_up("user_close")),
 ):
     user = await db.scalar(select(Users).where(Users.user_id == user_id))
     if not user:
@@ -295,54 +425,96 @@ async def delete_user(
             status_code=400,
             detail="Suppression réservée aux comptes actifs ou suspendus.",
         )
-    await db.execute(
-        update(Users)
-        .where(Users.user_id == user_id)
-        .values(status="closed")
+    before_state = _user_admin_state(user)
+    await db.execute(update(Users).where(Users.user_id == user_id).values(status="closed"))
+    await db.commit()
+    await db.refresh(user)
+    await _audit_admin_user_action(
+        db=db,
+        request=request,
+        admin=admin,
+        user=user,
+        action="ADMIN_USER_CLOSE",
+        before_state=before_state,
+        after_state=_user_admin_state(user),
     )
     await db.commit()
     return {"message": "Utilisateur clôturé"}
 
 
 @router.post("/{user_id}/request-kyc-upgrade")
-async def request_kyc_upgrade(user_id: str, db: AsyncSession = Depends(get_db), admin=Depends(get_current_admin)):
-    await notify_user(user_id, {
-        "type": "KYC_UPGRADE_REQUIRED",
-        "message": "Merci de completer votre KYC pour continuer a utiliser paylink."
-    })
+async def request_kyc_upgrade(
+    user_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin: Users = Depends(require_admin_step_up("user_request_kyc_upgrade")),
+):
+    user = await db.scalar(select(Users).where(Users.user_id == user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    before_state = _user_admin_state(user)
+    await notify_user(
+        str(user.user_id),
+        {
+            "type": "KYC_UPGRADE_REQUIRED",
+            "message": "Merci de completer votre KYC pour continuer a utiliser paylink.",
+        },
+    )
     await push_admin_notification(
         "kyc_reset",
         db=db,
-        user_id=user_id,
+        user_id=str(user.user_id),
         severity="info",
         title="Relance KYC envoyee",
-        message=f"Nouvelle verification KYC demandee pour l'utilisateur {user_id}.",
+        message=f"Nouvelle verification KYC demandee pour l'utilisateur {user.user_id}.",
         metadata={
             "admin_id": str(admin.user_id),
             "admin_email": admin.email,
+            "step_up_method": get_admin_step_up_method(request),
         },
     )
     await send_push_notification(
         db,
-        user_id=user_id,
+        user_id=str(user.user_id),
         title="Action requise",
         body="Merci de mettre a jour vos informations KYC sur paylink.",
         data={"type": "kyc_action"},
     )
+    await _audit_admin_user_action(
+        db=db,
+        request=request,
+        admin=admin,
+        user=user,
+        action="ADMIN_USER_REQUEST_KYC_UPGRADE",
+        before_state=before_state,
+        after_state=_user_admin_state(user),
+    )
+    await db.commit()
     return {"message": "Demande envoyee a l'utilisateur"}
 
 
 @router.post("/{user_id}/repair-financial-accounts")
 async def repair_user_financial_accounts(
     user_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    admin=Depends(get_current_admin),
+    admin: Users = Depends(require_admin_step_up("user_repair_financial_accounts")),
 ):
     user = await db.scalar(select(Users).where(Users.user_id == user_id))
     if not user:
         raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    before_state = _user_admin_state(user)
 
     result = await ensure_user_financial_accounts(db, user=user)
+    await _audit_admin_user_action(
+        db=db,
+        request=request,
+        admin=admin,
+        user=user,
+        action="ADMIN_USER_REPAIR_FINANCIAL_ACCOUNTS",
+        before_state=before_state,
+        after_state={**_user_admin_state(user), "repair_result": result},
+    )
     await db.commit()
     return {
         "message": "Provisioning financier repare",

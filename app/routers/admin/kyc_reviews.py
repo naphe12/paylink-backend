@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
+from app.dependencies.step_up import require_admin_step_up
 from app.models.users import Users
 from app.utils.apply_kyc_limits import apply_kyc_limits
 
@@ -68,7 +69,10 @@ async def pending_kyc(
     ]
 
 
-@router.post("/{user_id}/validate")
+@router.post(
+    "/{user_id}/validate",
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def approve_kyc(
     user_id: str,
     db: AsyncSession = Depends(get_db),
@@ -89,7 +93,10 @@ async def approve_kyc(
     return {"message": "KYC validé"}
 
 
-@router.post("/{user_id}/reject")
+@router.post(
+    "/{user_id}/reject",
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def reject_kyc(
     user_id: str,
     decision: KycDecision,

@@ -90,6 +90,10 @@ def _conflict_reason_label(reason: str | None) -> str | None:
     return CONFLICT_REASON_MESSAGES.get(str(reason or "").strip().lower()) if reason else None
 
 
+def _should_block_sync(precheck: dict) -> bool:
+    return bool(precheck.get("review_recommended")) or bool(precheck.get("conflict_reason"))
+
+
 async def _load_client_wallet_snapshot(db: AsyncSession, *, client_user_id: UUID) -> Wallets | None:
     wallet = await db.scalar(
         select(Wallets)
@@ -431,7 +435,7 @@ async def cancel_agent_offline_operation(db: AsyncSession, *, current_agent: Use
     return await _serialize_operation_runtime(db, item)
 
 
-async def retry_admin_agent_offline_operation(db: AsyncSession, *, operation_id: UUID) -> dict:
+async def retry_admin_agent_offline_operation(db: AsyncSession, *, operation_id: UUID, force: bool = False) -> dict:
     item = await db.scalar(select(AgentOfflineOperations).where(AgentOfflineOperations.operation_id == operation_id))
     if not item:
         raise HTTPException(status_code=404, detail="Operation offline introuvable")
@@ -439,7 +443,7 @@ async def retry_admin_agent_offline_operation(db: AsyncSession, *, operation_id:
     if not agent_user:
         raise HTTPException(status_code=404, detail="Agent introuvable")
     try:
-        await sync_agent_offline_operation(db, current_agent=agent_user, operation_id=operation_id)
+        await sync_agent_offline_operation(db, current_agent=agent_user, operation_id=operation_id, force=force)
     except HTTPException:
         return await get_admin_agent_offline_operation_detail(db, operation_id=operation_id)
     return await get_admin_agent_offline_operation_detail(db, operation_id=operation_id)
@@ -619,7 +623,13 @@ async def _execute_cash_out(
     }
 
 
-async def sync_agent_offline_operation(db: AsyncSession, *, current_agent: Users, operation_id: UUID) -> dict:
+async def sync_agent_offline_operation(
+    db: AsyncSession,
+    *,
+    current_agent: Users,
+    operation_id: UUID,
+    force: bool = False,
+) -> dict:
     agent_row = await _require_agent_profile(db, current_agent)
     item = await db.scalar(
         select(AgentOfflineOperations)
@@ -634,20 +644,7 @@ async def sync_agent_offline_operation(db: AsyncSession, *, current_agent: Users
     if item.status not in SYNCABLE_STATUSES:
         raise HTTPException(status_code=400, detail="Cette operation ne peut pas etre synchronisee")
 
-    item.status = "syncing"
-    item.failure_reason = None
-    item.updated_at = _now()
-    await db.commit()
-
     try:
-        item = await db.scalar(
-            select(AgentOfflineOperations)
-            .where(
-                AgentOfflineOperations.operation_id == operation_id,
-                AgentOfflineOperations.agent_user_id == current_agent.user_id,
-            )
-            .with_for_update()
-        )
         client = await db.scalar(select(Users).where(Users.user_id == item.client_user_id))
         if not client:
             raise HTTPException(status_code=404, detail="Client introuvable")
@@ -655,6 +652,19 @@ async def sync_agent_offline_operation(db: AsyncSession, *, current_agent: Users
         metadata = dict(item.metadata_ or {})
         metadata["last_precheck"] = _json_safe(precheck)
         item.metadata_ = metadata
+        if _should_block_sync(precheck) and not force:
+            item.updated_at = _now()
+            await db.commit()
+            detail = (
+                precheck.get("conflict_reason_label")
+                or "Operation offline a risque: validation manuelle requise (force=true pour synchroniser)."
+            )
+            raise HTTPException(status_code=409, detail=detail)
+
+        item.status = "syncing"
+        item.failure_reason = None
+        item.updated_at = _now()
+        await db.commit()
 
         if item.operation_type == "cash_in":
             response = await _execute_cash_in(db, current_agent=current_agent, agent_row=agent_row, client=client, item=item)
@@ -674,6 +684,8 @@ async def sync_agent_offline_operation(db: AsyncSession, *, current_agent: Users
         return await _serialize_operation_runtime(db, item)
     except Exception as exc:
         await db.rollback()
+        if isinstance(exc, HTTPException) and exc.status_code == 409:
+            raise exc
         failed_item = await db.scalar(
             select(AgentOfflineOperations)
             .where(
@@ -706,7 +718,12 @@ async def sync_agent_offline_operation(db: AsyncSession, *, current_agent: Users
         raise
 
 
-async def sync_pending_agent_offline_operations(db: AsyncSession, *, current_agent: Users) -> dict:
+async def sync_pending_agent_offline_operations(
+    db: AsyncSession,
+    *,
+    current_agent: Users,
+    force: bool = False,
+) -> dict:
     await _require_agent_profile(db, current_agent)
     items = (
         await db.execute(
@@ -720,12 +737,32 @@ async def sync_pending_agent_offline_operations(db: AsyncSession, *, current_age
     ).scalars().all()
     synced = 0
     failed = 0
+    skipped = 0
     operations = []
     for operation_id in items:
-        result = await sync_agent_offline_operation(db, current_agent=current_agent, operation_id=operation_id)
+        try:
+            result = await sync_agent_offline_operation(
+                db,
+                current_agent=current_agent,
+                operation_id=operation_id,
+                force=force,
+            )
+        except HTTPException as exc:
+            if exc.status_code != 409:
+                raise
+            skipped += 1
+            current_item = await db.scalar(
+                select(AgentOfflineOperations).where(
+                    AgentOfflineOperations.operation_id == operation_id,
+                    AgentOfflineOperations.agent_user_id == current_agent.user_id,
+                )
+            )
+            if current_item:
+                operations.append(await _serialize_operation_runtime(db, current_item))
+            continue
         operations.append(result)
         if result["status"] == "synced":
             synced += 1
         else:
             failed += 1
-    return {"synced": synced, "failed": failed, "operations": operations}
+    return {"synced": synced, "failed": failed, "skipped": skipped, "operations": operations}

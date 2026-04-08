@@ -39,6 +39,11 @@ class FinancialInsightsRead(BaseModel):
     remaining_to_spend: Decimal
     current_savings: Decimal
     budget_usage_percent: float = 0
+    daily_budget_allowance: Decimal = Decimal("0")
+    projected_month_outflows: Decimal = Decimal("0")
+    projected_overrun_amount: Decimal = Decimal("0")
+    days_remaining_in_month: int = 0
+    pace_status: str = "on_track"
     over_limit_count: int = 0
     alert_level: str = "healthy"
     alert_message: str = ""

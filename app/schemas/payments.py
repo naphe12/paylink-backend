@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.schemas.operator_workflow import OperatorWorkflowRead
 
@@ -32,7 +32,11 @@ class PaymentIntentRead(BaseModel):
     provider_reference: str | None = None
     payer_identifier: str | None = None
     target_instructions: dict[str, Any] = Field(default_factory=dict)
-    metadata_: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+    metadata_: dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
     settled_at: datetime | None = None
     credited_at: datetime | None = None
     expires_at: datetime | None = None

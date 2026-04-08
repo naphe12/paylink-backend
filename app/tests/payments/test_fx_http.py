@@ -56,6 +56,8 @@ def test_get_wallet_balances_and_update_display_currency(monkeypatch):
             "available_currencies": ["BIF", "EUR", "USD", "USDC", "USDT"],
             "estimated_total_available": "278000.000000",
             "estimated_total_pending": "1000.000000",
+            "estimated_currencies_count": 1,
+            "non_estimated_currencies_count": 0,
             "balances": [
                 {
                     "currency_code": "BIF",
@@ -65,6 +67,8 @@ def test_get_wallet_balances_and_update_display_currency(monkeypatch):
                     "estimated_display_pending": "1000.000000",
                     "rate_to_display_currency": "1",
                     "rate_source": "identity",
+                    "included_in_total": True,
+                    "estimation_status": "estimated",
                 }
             ],
             "generated_at": "2026-04-05T10:00:00Z",

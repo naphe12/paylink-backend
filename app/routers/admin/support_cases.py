@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
+from app.dependencies.step_up import require_admin_step_up
 from app.models.users import Users
 from app.schemas.support_cases import (
     SupportCaseAdminAssign,
@@ -46,7 +47,11 @@ async def get_support_case_detail_admin_route(
     return await get_support_case_detail_admin(db, case_id=case_id)
 
 
-@router.post("/{case_id}/assign", response_model=SupportCaseDetailRead)
+@router.post(
+    "/{case_id}/assign",
+    response_model=SupportCaseDetailRead,
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def assign_support_case_admin_route(
     case_id: UUID,
     payload: SupportCaseAdminAssign,
@@ -61,7 +66,11 @@ async def assign_support_case_admin_route(
     )
 
 
-@router.post("/{case_id}/status", response_model=SupportCaseDetailRead)
+@router.post(
+    "/{case_id}/status",
+    response_model=SupportCaseDetailRead,
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def update_support_case_status_admin_route(
     case_id: UUID,
     payload: SupportCaseAdminStatusUpdate,
@@ -79,7 +88,11 @@ async def update_support_case_status_admin_route(
     )
 
 
-@router.post("/{case_id}/reply", response_model=SupportCaseDetailRead)
+@router.post(
+    "/{case_id}/reply",
+    response_model=SupportCaseDetailRead,
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def reply_support_case_admin_route(
     case_id: UUID,
     payload: SupportCaseMessageCreate,
@@ -89,7 +102,11 @@ async def reply_support_case_admin_route(
     return await reply_support_case_admin(db, case_id=case_id, admin_user=admin, body=payload.body)
 
 
-@router.post("/{case_id}/attachments", response_model=SupportCaseDetailRead)
+@router.post(
+    "/{case_id}/attachments",
+    response_model=SupportCaseDetailRead,
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def add_support_case_attachment_admin_route(
     case_id: UUID,
     payload: SupportCaseAttachmentCreate,

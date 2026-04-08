@@ -9,6 +9,7 @@ from sqlalchemy import Text, cast, select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
+from app.dependencies.step_up import require_admin_step_up
 from app.models.notifications import Notifications
 from app.models.tontinecontributions import TontineContributions, ContributionStatus
 from app.models.tontinemembers import TontineMembers
@@ -80,7 +81,10 @@ async def list_overdue_contributions(
     return overdue_entries
 
 
-@router.post("/arrears/notify/{tontine_id}")
+@router.post(
+    "/arrears/notify/{tontine_id}",
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def notify_overdue_members(
     tontine_id: str,
     db: AsyncSession = Depends(get_db),
@@ -112,7 +116,10 @@ async def notify_overdue_members(
     return {"notified": len(notifications)}
 
 
-@router.post("/arrears/block/{tontine_id}")
+@router.post(
+    "/arrears/block/{tontine_id}",
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def block_tontine(
     tontine_id: str,
     db: AsyncSession = Depends(get_db),
@@ -138,7 +145,11 @@ class AdminTontineCreate(BaseModel):
     member_ids: List[UUID] = Field(default_factory=list, description="Liste des membres à ajouter")
 
 
-@router.post("", status_code=201)
+@router.post(
+    "",
+    status_code=201,
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def create_tontine_admin(
     payload: AdminTontineCreate,
     db: AsyncSession = Depends(get_db),
@@ -285,7 +296,11 @@ async def get_tontine_members_admin(
     return _serialize_members(rows)
 
 
-@router.post("/{tontine_id}/members", status_code=201)
+@router.post(
+    "/{tontine_id}/members",
+    status_code=201,
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def add_tontine_members_admin(
     tontine_id: str,
     payload: AdminTontineMembersAdd,
@@ -345,7 +360,10 @@ async def add_tontine_members_admin(
     return await get_tontine_members_admin(str(tontine_uuid), db, admin)
 
 
-@router.delete("/{tontine_id}/members/{user_id}")
+@router.delete(
+    "/{tontine_id}/members/{user_id}",
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def remove_tontine_member_admin(
     tontine_id: str,
     user_id: str,

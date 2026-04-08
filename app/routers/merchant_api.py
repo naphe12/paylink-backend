@@ -19,6 +19,7 @@ from app.services.merchant_api_service import (
     create_business_api_key,
     create_business_webhook,
     list_business_integrations,
+    rotate_webhook_secret,
     retry_due_webhook_events,
     retry_webhook_event,
     revoke_business_api_key,
@@ -75,6 +76,15 @@ async def update_business_webhook_status_route(
     current_user: Users = Depends(get_current_user_db),
 ):
     return await update_business_webhook_status(db, webhook_id=webhook_id, current_user=current_user, payload=payload)
+
+
+@router.post("/merchant-api/webhooks/{webhook_id}/rotate-secret", response_model=MerchantWebhookRead)
+async def rotate_webhook_secret_route(
+    webhook_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user_db),
+):
+    return await rotate_webhook_secret(db, webhook_id=webhook_id, current_user=current_user)
 
 
 @router.post("/merchant-api/webhooks/{webhook_id}/test", response_model=MerchantWebhookEventRead)

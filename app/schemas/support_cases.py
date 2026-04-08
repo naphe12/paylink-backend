@@ -27,6 +27,11 @@ class SupportCaseAttachmentCreate(BaseModel):
     checksum_sha256: str | None = None
 
 
+class SupportCaseUserStatusUpdate(BaseModel):
+    action: str
+    message: str | None = None
+
+
 class SupportCaseAdminAssign(BaseModel):
     assigned_to_user_id: UUID | None = None
 
@@ -103,6 +108,8 @@ class SupportCaseRead(BaseModel):
     updated_at: datetime
     customer_label: str | None = None
     assigned_to_label: str | None = None
+    sla_status: str = "none"
+    sla_remaining_seconds: int | None = None
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 

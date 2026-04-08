@@ -71,6 +71,19 @@ def _serialize_key(item: MerchantApiKeys, *, plain_api_key: str | None = None) -
 
 
 def _serialize_webhook(item: MerchantWebhooks, *, plain_signing_secret: str | None = None) -> dict:
+    metadata = dict(item.metadata_ or {})
+    webhook_control = metadata.get("webhook_control") if isinstance(metadata.get("webhook_control"), dict) else {}
+    raw_consecutive_failures = webhook_control.get("consecutive_failures")
+    try:
+        consecutive_failures = max(int(raw_consecutive_failures or 0), 0)
+    except Exception:
+        consecutive_failures = 0
+    raw_max_failures = webhook_control.get("max_consecutive_failures")
+    try:
+        max_consecutive_failures = max(int(raw_max_failures or 3), 1)
+    except Exception:
+        max_consecutive_failures = 3
+    auto_paused_for_failures = bool(webhook_control.get("auto_paused_for_failures") is True)
     return {
         "webhook_id": item.webhook_id,
         "business_id": item.business_id,
@@ -78,9 +91,12 @@ def _serialize_webhook(item: MerchantWebhooks, *, plain_signing_secret: str | No
         "status": item.status,
         "event_types": list(item.event_types or []),
         "is_active": bool(item.is_active and item.revoked_at is None and item.status != "revoked"),
+        "consecutive_failures": consecutive_failures,
+        "max_consecutive_failures": max_consecutive_failures,
+        "auto_paused_for_failures": auto_paused_for_failures,
         "last_tested_at": item.last_tested_at,
         "revoked_at": item.revoked_at,
-        "metadata": dict(item.metadata_ or {}),
+        "metadata": metadata,
         "created_at": item.created_at,
         "updated_at": item.updated_at,
         "plain_signing_secret": plain_signing_secret,
@@ -128,6 +144,30 @@ def _next_retry_after(attempt_count: int, *, now: datetime) -> datetime | None:
     return now + timedelta(minutes=WEBHOOK_RETRY_DELAYS_MINUTES[index])
 
 
+def _get_webhook_control(metadata: dict | None) -> dict:
+    payload = dict(metadata or {})
+    webhook_control = payload.get("webhook_control") if isinstance(payload.get("webhook_control"), dict) else {}
+    raw_consecutive_failures = webhook_control.get("consecutive_failures")
+    try:
+        consecutive_failures = max(int(raw_consecutive_failures or 0), 0)
+    except Exception:
+        consecutive_failures = 0
+    raw_max_failures = webhook_control.get("max_consecutive_failures")
+    try:
+        max_consecutive_failures = max(int(raw_max_failures or 3), 1)
+    except Exception:
+        max_consecutive_failures = 3
+    auto_paused_for_failures = bool(webhook_control.get("auto_paused_for_failures") is True)
+    return {
+        **payload,
+        "webhook_control": {
+            "consecutive_failures": consecutive_failures,
+            "max_consecutive_failures": max_consecutive_failures,
+            "auto_paused_for_failures": auto_paused_for_failures,
+        },
+    }
+
+
 async def _deliver_event(
     db: AsyncSession,
     *,
@@ -138,6 +178,8 @@ async def _deliver_event(
     mode: str,
 ) -> MerchantWebhookEvents:
     now = datetime.now(timezone.utc)
+    webhook_metadata = _get_webhook_control(webhook.metadata_ or {})
+    webhook_control = dict(webhook_metadata.get("webhook_control") or {})
     signature = _build_signature(webhook, payload)
     headers = {
         "Content-Type": "application/json",
@@ -177,17 +219,37 @@ async def _deliver_event(
             event.delivery_status = "delivered"
             event.delivered_at = now
             event.next_retry_at = None
+            webhook_control["consecutive_failures"] = 0
+            webhook_control["auto_paused_for_failures"] = False
         else:
             event.delivery_status = "failed"
             event.delivered_at = None
             event.next_retry_at = _next_retry_after(event.attempt_count, now=now)
+            next_consecutive_failures = int(webhook_control.get("consecutive_failures") or 0) + 1
+            webhook_control["consecutive_failures"] = next_consecutive_failures
+            max_consecutive_failures = max(int(webhook_control.get("max_consecutive_failures") or 3), 1)
+            if next_consecutive_failures >= max_consecutive_failures and webhook.status == "active":
+                webhook.status = "paused"
+                webhook.is_active = False
+                webhook_control["auto_paused_for_failures"] = True
     except httpx.HTTPError as exc:
         event.delivery_status = "failed"
         event.response_status_code = None
         event.response_body = str(exc)[:2000]
         event.delivered_at = None
         event.next_retry_at = _next_retry_after(event.attempt_count, now=now)
+        next_consecutive_failures = int(webhook_control.get("consecutive_failures") or 0) + 1
+        webhook_control["consecutive_failures"] = next_consecutive_failures
+        max_consecutive_failures = max(int(webhook_control.get("max_consecutive_failures") or 3), 1)
+        if next_consecutive_failures >= max_consecutive_failures and webhook.status == "active":
+            webhook.status = "paused"
+            webhook.is_active = False
+            webhook_control["auto_paused_for_failures"] = True
 
+    webhook.metadata_ = {
+        **webhook_metadata,
+        "webhook_control": webhook_control,
+    }
     webhook.last_tested_at = now
     webhook.updated_at = now
     await db.commit()
@@ -275,7 +337,14 @@ async def create_business_webhook(db: AsyncSession, *, business_id: UUID, curren
         status="active",
         event_types=event_types or DEFAULT_EVENT_TYPES,
         signing_secret_hash=_hash_secret(plain_signing_secret),
-        metadata_={"last4": plain_signing_secret[-4:]},
+        metadata_={
+            "last4": plain_signing_secret[-4:],
+            "webhook_control": {
+                "consecutive_failures": 0,
+                "max_consecutive_failures": int(payload.max_consecutive_failures or 3),
+                "auto_paused_for_failures": False,
+            },
+        },
     )
     db.add(item)
     await db.commit()
@@ -291,13 +360,41 @@ async def update_business_webhook_status(db: AsyncSession, *, webhook_id: UUID, 
     status = str(payload.status or "").strip().lower()
     if status not in ALLOWED_WEBHOOK_STATUSES:
         raise HTTPException(status_code=400, detail="Statut webhook invalide")
+    metadata = _get_webhook_control(item.metadata_ or {})
+    webhook_control = dict(metadata.get("webhook_control") or {})
     item.status = status
     item.is_active = status == "active"
     item.revoked_at = datetime.now(timezone.utc) if status == "revoked" else None
+    if status == "active":
+        webhook_control["consecutive_failures"] = 0
+        webhook_control["auto_paused_for_failures"] = False
+    metadata["webhook_control"] = webhook_control
+    item.metadata_ = metadata
     item.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(item)
     return _serialize_webhook(item)
+
+
+async def rotate_webhook_secret(db: AsyncSession, *, webhook_id: UUID, current_user: Users) -> dict:
+    item = await db.get(MerchantWebhooks, webhook_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Webhook marchand introuvable")
+    await _require_business_membership(db, business_id=item.business_id, current_user=current_user, write=True)
+    if item.status == "revoked":
+        raise HTTPException(status_code=400, detail="Webhook revoque")
+
+    plain_signing_secret = f"whsec_{secrets.token_urlsafe(24)}"
+    item.signing_secret_hash = _hash_secret(plain_signing_secret)
+    item.metadata_ = {
+        **dict(item.metadata_ or {}),
+        "last4": plain_signing_secret[-4:],
+        "secret_rotated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    item.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(item)
+    return _serialize_webhook(item, plain_signing_secret=plain_signing_secret)
 
 
 async def send_test_webhook(db: AsyncSession, *, webhook_id: UUID, current_user: Users) -> dict:
@@ -336,6 +433,8 @@ async def retry_webhook_event(db: AsyncSession, *, event_id: UUID, current_user:
     await _require_business_membership(db, business_id=webhook.business_id, current_user=current_user, write=True)
     if webhook.status == "revoked":
         raise HTTPException(status_code=400, detail="Webhook revoque")
+    if webhook.status != "active":
+        raise HTTPException(status_code=400, detail="Webhook en pause: reactive-le avant relance")
 
     retried = await _deliver_event(
         db,
@@ -374,7 +473,7 @@ async def retry_due_webhook_events(
     delivered_events: list[dict] = []
     for event in due_events:
         webhook = await db.get(MerchantWebhooks, event.webhook_id)
-        if not webhook or webhook.status == "revoked":
+        if not webhook or webhook.status != "active":
             continue
         retried = await _deliver_event(
             db,

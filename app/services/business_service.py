@@ -37,6 +37,31 @@ def _primary_wallet_stmt(user_id):
     )
 
 
+def _normalize_decimal(value) -> Decimal:
+    return Decimal(str(value or 0))
+
+
+def _sub_wallet_remaining_capacity(*, current_amount: Decimal, spending_limit: Decimal) -> Decimal:
+    limit = _normalize_decimal(spending_limit)
+    current = _normalize_decimal(current_amount)
+    remaining = limit - current
+    return remaining if remaining > Decimal("0") else Decimal("0")
+
+
+def _ensure_funding_within_limit(*, current_amount: Decimal, spending_limit: Decimal, amount: Decimal) -> None:
+    if _normalize_decimal(amount) <= Decimal("0"):
+        raise HTTPException(status_code=400, detail="Le montant doit etre strictement positif")
+    remaining = _sub_wallet_remaining_capacity(
+        current_amount=_normalize_decimal(current_amount),
+        spending_limit=_normalize_decimal(spending_limit),
+    )
+    if _normalize_decimal(amount) > remaining:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Plafond du sous-wallet depasse. Reste autorise: {remaining}",
+        )
+
+
 async def _serialize_sub_wallets(db: AsyncSession, business_id: UUID) -> list[dict]:
     rows = (
         await db.execute(
@@ -56,6 +81,10 @@ async def _serialize_sub_wallets(db: AsyncSession, business_id: UUID) -> list[di
             "currency_code": item.currency_code,
             "current_amount": Decimal(str(item.current_amount or 0)),
             "spending_limit": Decimal(str(item.spending_limit or 0)),
+            "remaining_capacity": _sub_wallet_remaining_capacity(
+                current_amount=Decimal(str(item.current_amount or 0)),
+                spending_limit=Decimal(str(item.spending_limit or 0)),
+            ),
             "status": item.status,
             "metadata": dict(item.metadata_ or {}),
             "created_at": item.created_at,
@@ -112,10 +141,13 @@ async def _require_business_membership(
     current_user: Users,
     business_id: UUID,
     allowed_roles: tuple[str, ...],
+    require_active: bool = True,
 ) -> tuple[BusinessAccounts, BusinessMembers]:
     business = await db.get(BusinessAccounts, business_id)
     if not business:
         raise HTTPException(status_code=404, detail="Compte business introuvable")
+    if require_active and not bool(business.is_active):
+        raise HTTPException(status_code=403, detail="Compte business inactif")
     membership = await db.scalar(
         select(BusinessMembers).where(
             BusinessMembers.business_id == business_id,
@@ -127,6 +159,28 @@ async def _require_business_membership(
     if not membership:
         raise HTTPException(status_code=403, detail="Vous ne pouvez pas gerer ce compte business")
     return business, membership
+
+
+async def update_business_account_status(
+    db: AsyncSession,
+    *,
+    current_user: Users,
+    business_id: UUID,
+    payload,
+) -> dict:
+    business, membership = await _require_business_membership(
+        db,
+        current_user=current_user,
+        business_id=business_id,
+        allowed_roles=("owner",),
+        require_active=False,
+    )
+    if membership.user_id != business.owner_user_id:
+        raise HTTPException(status_code=403, detail="Seul le proprietaire peut activer ou desactiver la structure")
+    business.is_active = bool(payload.is_active)
+    business.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    return await _serialize_business(db, business, current_user_id=current_user.user_id)
 
 
 async def create_business_account(db: AsyncSession, *, current_user: Users, payload) -> dict:
@@ -330,7 +384,13 @@ async def update_business_sub_wallet(
     if payload.label is not None and str(payload.label).strip():
         sub_wallet.label = str(payload.label).strip()
     if payload.spending_limit is not None:
-        sub_wallet.spending_limit = Decimal(str(payload.spending_limit))
+        next_limit = Decimal(str(payload.spending_limit))
+        if next_limit < Decimal(str(sub_wallet.current_amount or 0)):
+            raise HTTPException(
+                status_code=400,
+                detail="Le plafond ne peut pas etre inferieur au montant deja alloue",
+            )
+        sub_wallet.spending_limit = next_limit
     if payload.status is not None:
         next_status = str(payload.status or "").strip().lower()
         if next_status not in ALLOWED_SUB_WALLET_STATUSES:
@@ -364,6 +424,11 @@ async def fund_business_sub_wallet(db: AsyncSession, *, current_user: Users, sub
     if not owner_wallet:
         raise HTTPException(status_code=404, detail="Wallet proprietaire introuvable")
     amount = Decimal(str(payload.amount))
+    _ensure_funding_within_limit(
+        current_amount=Decimal(str(sub_wallet.current_amount or 0)),
+        spending_limit=Decimal(str(sub_wallet.spending_limit or 0)),
+        amount=amount,
+    )
     if Decimal(str(owner_wallet.available or 0)) < amount:
         raise HTTPException(status_code=400, detail="Solde insuffisant pour financer le sous-wallet")
 

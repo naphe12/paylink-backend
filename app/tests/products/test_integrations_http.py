@@ -168,6 +168,9 @@ def test_merchant_api_routes(monkeypatch):
         assert payload.status == "paused"
         return _webhook_payload(webhook_id, business_id, status="paused", is_active=False, plain_signing_secret=None)
 
+    async def fake_rotate_webhook_secret(db, *, webhook_id, current_user):
+        return _webhook_payload(webhook_id, business_id, plain_signing_secret="whsec_rotated")
+
     async def fake_send_test_webhook(db, *, webhook_id, current_user):
         return _event_payload(event_id, webhook_id, business_id, delivery_status="sent", attempt_count=1)
 
@@ -182,6 +185,7 @@ def test_merchant_api_routes(monkeypatch):
     monkeypatch.setattr(merchant_module, "revoke_business_api_key", fake_revoke_business_api_key)
     monkeypatch.setattr(merchant_module, "create_business_webhook", fake_create_business_webhook)
     monkeypatch.setattr(merchant_module, "update_business_webhook_status", fake_update_business_webhook_status)
+    monkeypatch.setattr(merchant_module, "rotate_webhook_secret", fake_rotate_webhook_secret)
     monkeypatch.setattr(merchant_module, "send_test_webhook", fake_send_test_webhook)
     monkeypatch.setattr(merchant_module, "retry_webhook_event", fake_retry_webhook_event)
     monkeypatch.setattr(merchant_module, "retry_due_webhook_events", fake_retry_due_webhook_events)
@@ -210,6 +214,10 @@ def test_merchant_api_routes(monkeypatch):
     webhook_status_response = client.post(f"/merchant-api/webhooks/{webhook_id}/status", json={"status": "paused"})
     assert webhook_status_response.status_code == 200
     assert webhook_status_response.json()["status"] == "paused"
+
+    rotate_secret_response = client.post(f"/merchant-api/webhooks/{webhook_id}/rotate-secret")
+    assert rotate_secret_response.status_code == 200
+    assert rotate_secret_response.json()["plain_signing_secret"] == "whsec_rotated"
 
     test_webhook_response = client.post(f"/merchant-api/webhooks/{webhook_id}/test")
     assert test_webhook_response.status_code == 200
@@ -245,10 +253,12 @@ def test_agent_offline_routes(monkeypatch):
         assert payload.operation_type == "cash_in"
         return _offline_operation_payload(operation_id, current_agent.user_id, current_agent.agent_id, payload.client_user_id)
 
-    async def fake_sync_pending_agent_offline_operations(db, *, current_agent):
+    async def fake_sync_pending_agent_offline_operations(db, *, current_agent, force=False):
+        assert force is False
         return {
             "synced": 1,
             "failed": 0,
+            "skipped": 0,
             "operations": [
                 _offline_operation_payload(
                     operation_id,
@@ -262,7 +272,8 @@ def test_agent_offline_routes(monkeypatch):
             ],
         }
 
-    async def fake_sync_agent_offline_operation(db, *, current_agent, operation_id):
+    async def fake_sync_agent_offline_operation(db, *, current_agent, operation_id, force=False):
+        assert force is False
         return _offline_operation_payload(
             operation_id,
             current_agent.user_id,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import decimal
+from calendar import monthrange
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
@@ -156,6 +157,33 @@ async def get_financial_insights(db: AsyncSession, *, current_user: Users) -> di
         if active_budget > 0
         else 0
     )
+    days_in_month = monthrange(now.year, now.month)[1]
+    elapsed_days = max(min(now.day, days_in_month), 1)
+    days_remaining_in_month = max(days_in_month - elapsed_days, 0)
+    projected_month_outflows = (
+        (month_outflows / decimal.Decimal(str(elapsed_days))) * decimal.Decimal(str(days_in_month))
+    ).quantize(decimal.Decimal("0.01"))
+    projected_overrun_amount = max(projected_month_outflows - active_budget, decimal.Decimal("0")).quantize(
+        decimal.Decimal("0.01")
+    )
+    daily_budget_allowance = (
+        (remaining_to_spend / decimal.Decimal(str(days_remaining_in_month))).quantize(decimal.Decimal("0.01"))
+        if days_remaining_in_month > 0
+        else decimal.Decimal("0.00")
+    )
+    expected_spend_to_date = (
+        (active_budget * decimal.Decimal(str(elapsed_days)) / decimal.Decimal(str(days_in_month))).quantize(decimal.Decimal("0.01"))
+        if active_budget > 0
+        else decimal.Decimal("0.00")
+    )
+    pace_status = "on_track"
+    if projected_overrun_amount > 0:
+        pace_status = "at_risk"
+    elif active_budget > 0:
+        if month_outflows > expected_spend_to_date * decimal.Decimal("1.10"):
+            pace_status = "above_pace"
+        elif month_outflows < expected_spend_to_date * decimal.Decimal("0.90"):
+            pace_status = "below_pace"
     over_limit_count = sum(1 for item in budget_rules if item["is_over_limit"])
 
     if active_budget > 0 and month_outflows > active_budget:
@@ -180,6 +208,12 @@ async def get_financial_insights(db: AsyncSession, *, current_user: Users) -> di
         guidance.append("Aucune epargne nette detectee sur la periode recente.")
     if any(item["is_over_limit"] for item in budget_rules):
         guidance.append("Au moins une categorie de depense depasse sa limite definie.")
+    if pace_status == "at_risk":
+        guidance.append("Au rythme actuel, le budget de fin de mois risque d'etre depasse.")
+    elif pace_status == "above_pace":
+        guidance.append("Le rythme de depense est au-dessus de votre cadence budgetaire cible.")
+    elif pace_status == "below_pace":
+        guidance.append("Votre depense est inferieure a la cadence budgetaire prevue ce mois-ci.")
     if not guidance:
         guidance.append("Votre rythme de depense reste coherent avec votre historique recent.")
 
@@ -194,6 +228,11 @@ async def get_financial_insights(db: AsyncSession, *, current_user: Users) -> di
         "remaining_to_spend": remaining_to_spend,
         "current_savings": current_savings,
         "budget_usage_percent": budget_usage_percent,
+        "daily_budget_allowance": daily_budget_allowance,
+        "projected_month_outflows": projected_month_outflows,
+        "projected_overrun_amount": projected_overrun_amount,
+        "days_remaining_in_month": days_remaining_in_month,
+        "pace_status": pace_status,
         "over_limit_count": over_limit_count,
         "alert_level": alert_level,
         "alert_message": alert_message,

@@ -81,6 +81,12 @@ class PotRead(BaseModel):
     updated_at: datetime
     progress_percent: float = 0
     remaining_amount: Decimal = Decimal("0")
+    days_remaining: int | None = None
+    deadline_passed: bool = False
+    recommended_daily_contribution: Decimal | None = None
+    recommended_per_member_contribution: Decimal | None = None
+    can_contribute: bool = True
+    contribution_block_reason: str | None = None
     pot_mode: str = "collection"
     access_role: str = "owner"
     members: list[PotMemberRead] = Field(default_factory=list)

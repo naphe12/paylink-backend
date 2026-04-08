@@ -4,13 +4,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
+from app.dependencies.step_up import require_admin_step_up
 from app.models.users import Users
 from app.services.product_automation_worker import run_product_automation_cycle
 
 router = APIRouter(prefix="/admin/ops/product-automation", tags=["Admin Product Automation"])
 
 
-@router.post("/run")
+@router.post(
+    "/run",
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def run_product_automation_cycle_route(
     db: AsyncSession = Depends(get_db),
     _: Users = Depends(get_current_admin),

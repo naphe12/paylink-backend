@@ -16,6 +16,7 @@ from app.models.users import Users
 
 VALID_CATEGORIES = {"payment_request", "wallet", "p2p", "escrow", "cash_in", "cash_out", "kyc", "fraud", "other"}
 VALID_STATUSES = {"open", "in_review", "waiting_user", "resolved", "closed"}
+VALID_USER_STATUS_ACTIONS = {"close", "reopen"}
 
 
 def _utcnow() -> datetime:
@@ -103,6 +104,21 @@ async def _list_case_attachments(db: AsyncSession, *, case_id: UUID) -> list[Sup
 
 
 def _serialize_case(case_obj: SupportCases, users: dict[UUID, Users]) -> dict:
+    now = _utcnow()
+    status = str(case_obj.status or "")
+    sla_due_at = case_obj.sla_due_at
+    sla_remaining_seconds = None
+    sla_status = "none"
+    if sla_due_at and status not in {"resolved", "closed"}:
+        delta_seconds = int((sla_due_at - now).total_seconds())
+        sla_remaining_seconds = delta_seconds
+        if delta_seconds < 0:
+            sla_status = "overdue"
+        elif delta_seconds <= 2 * 3600:
+            sla_status = "due_soon"
+        else:
+            sla_status = "on_time"
+
     customer = users.get(case_obj.user_id)
     assignee = users.get(case_obj.assigned_to_user_id) if case_obj.assigned_to_user_id else None
     return {
@@ -118,7 +134,7 @@ def _serialize_case(case_obj: SupportCases, users: dict[UUID, Users]) -> dict:
         "priority": case_obj.priority,
         "reason_code": case_obj.reason_code,
         "resolution_code": case_obj.resolution_code,
-        "sla_due_at": case_obj.sla_due_at,
+        "sla_due_at": sla_due_at,
         "first_response_at": case_obj.first_response_at,
         "resolved_at": case_obj.resolved_at,
         "closed_at": case_obj.closed_at,
@@ -127,6 +143,8 @@ def _serialize_case(case_obj: SupportCases, users: dict[UUID, Users]) -> dict:
         "updated_at": case_obj.updated_at,
         "customer_label": _display_user(customer),
         "assigned_to_label": _display_user(assignee),
+        "sla_status": sla_status,
+        "sla_remaining_seconds": sla_remaining_seconds,
     }
 
 
@@ -328,6 +346,67 @@ async def add_support_case_attachment_for_user(
         before_status=previous_status,
         after_status=case_obj.status,
         metadata={"source": "customer_attachment", "file_name": cleaned_name},
+    )
+    await db.commit()
+    return await get_support_case_detail_for_user(db, case_id=case_id, current_user=current_user)
+
+
+async def update_support_case_status_for_user(
+    db: AsyncSession,
+    *,
+    case_id: UUID,
+    current_user: Users,
+    action: str,
+    message: str | None = None,
+) -> dict:
+    case_obj = await db.scalar(select(SupportCases).where(SupportCases.case_id == case_id))
+    if not case_obj:
+        raise HTTPException(status_code=404, detail="Dossier introuvable.")
+    if case_obj.user_id != current_user.user_id:
+        raise HTTPException(status_code=403, detail="Acces refuse.")
+
+    normalized_action = str(action or "").strip().lower()
+    if normalized_action not in VALID_USER_STATUS_ACTIONS:
+        raise HTTPException(status_code=400, detail="Action de statut invalide.")
+
+    now = _utcnow()
+    previous_status = str(case_obj.status or "").strip().lower()
+
+    if normalized_action == "close":
+        if previous_status == "closed":
+            return await get_support_case_detail_for_user(db, case_id=case_id, current_user=current_user)
+        case_obj.status = "closed"
+        case_obj.closed_at = now
+    else:
+        if previous_status not in {"resolved", "closed"}:
+            raise HTTPException(status_code=409, detail="Seuls les dossiers resolus ou fermes peuvent etre reouverts.")
+        case_obj.status = "open"
+        case_obj.closed_at = None
+
+    case_obj.updated_at = now
+
+    cleaned_message = str(message or "").strip()
+    if cleaned_message:
+        await _add_message(
+            db,
+            case_id=case_id,
+            author_user_id=current_user.user_id,
+            author_role=_role_value(current_user) or "client",
+            body=cleaned_message,
+            message_type="status_update",
+            is_visible_to_customer=True,
+            metadata={"source": "customer", "action": normalized_action},
+        )
+
+    await _append_event(
+        db,
+        case_id=case_id,
+        actor_user_id=current_user.user_id,
+        actor_role=_role_value(current_user),
+        event_type="status_changed_by_customer",
+        before_status=previous_status,
+        after_status=case_obj.status,
+        metadata={"action": normalized_action},
     )
     await db.commit()
     return await get_support_case_detail_for_user(db, case_id=case_id, current_user=current_user)

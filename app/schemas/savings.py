@@ -43,6 +43,11 @@ class SavingsAutoContributionRunCreate(BaseModel):
     note: str | None = None
 
 
+class SavingsGoalLockUpdate(BaseModel):
+    locked: bool
+    reason: str | None = None
+
+
 class SavingsRoundUpRuleRead(BaseModel):
     enabled: bool = False
     increment: Decimal | None = None
@@ -92,6 +97,8 @@ class SavingsGoalRead(BaseModel):
     updated_at: datetime
     progress_percent: float = 0
     remaining_amount: Decimal = Decimal("0")
+    recommended_weekly_amount: Decimal | None = None
+    recommended_monthly_amount: Decimal | None = None
     round_up_rule: SavingsRoundUpRuleRead = Field(default_factory=SavingsRoundUpRuleRead)
     auto_contribution_rule: SavingsAutoContributionRuleRead = Field(default_factory=SavingsAutoContributionRuleRead)
     movements: list[SavingsMovementRead] = Field(default_factory=list)
