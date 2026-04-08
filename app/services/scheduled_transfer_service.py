@@ -378,6 +378,29 @@ async def _run_scheduled_transfer_item(
         if raise_on_failure:
             raise
         return _serialize_schedule(item)
+    except Exception as exc:
+        metadata = _schedule_metadata(item)
+        failure_count = _schedule_failure_count(item) + 1
+        max_consecutive_failures = _schedule_max_consecutive_failures(item)
+        metadata["failure_count"] = failure_count
+
+        message = f"Erreur technique planification ({exc.__class__.__name__})"
+        if failure_count >= max_consecutive_failures:
+            item.status = "paused"
+            item.last_result = f"{message} | Mise en pause auto apres {failure_count} echecs consecutifs."
+        else:
+            item.status = "failed"
+            item.last_result = message
+        item.metadata_ = metadata
+        item.updated_at = _utcnow()
+        await db.commit()
+        await db.refresh(item)
+        if raise_on_failure:
+            raise HTTPException(
+                status_code=500,
+                detail="Execution du transfert programme impossible pour le moment.",
+            ) from exc
+        return _serialize_schedule(item)
 
 
 async def create_scheduled_transfer(

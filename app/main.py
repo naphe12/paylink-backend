@@ -214,22 +214,30 @@ async def p2p_expiration_worker():
 
 
 async def product_automation_worker():
-    async for db in get_db():
-        while True:
-            try:
-                summary = await run_product_automation_cycle(
-                    db,
-                    batch_limit=settings.PRODUCT_AUTOMATION_BATCH_LIMIT,
-                )
-                if (
-                    summary["payment_requests"]["processed"]
-                    or summary["scheduled_transfers"]["processed"]
-                    or summary["savings"]["processed"]
-                ):
-                    logger.info("Product automation cycle processed: %s", summary)
-            except Exception as exc:
-                logger.error(f"Product automation worker error: {exc}")
-            await asyncio.sleep(settings.PRODUCT_AUTOMATION_INTERVAL_SECONDS)
+    while True:
+        try:
+            async for db in get_db():
+                try:
+                    summary = await run_product_automation_cycle(
+                        db,
+                        batch_limit=settings.PRODUCT_AUTOMATION_BATCH_LIMIT,
+                    )
+                    if (
+                        summary["payment_requests"]["processed"]
+                        or summary["scheduled_transfers"]["processed"]
+                        or summary["savings"]["processed"]
+                    ):
+                        logger.info("Product automation cycle processed: %s", summary)
+                except Exception as exc:
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
+                    logger.error(f"Product automation worker error: {exc}")
+                break
+        except Exception as exc:
+            logger.error(f"Product automation worker bootstrap error: {exc}")
+        await asyncio.sleep(settings.PRODUCT_AUTOMATION_INTERVAL_SECONDS)
 
 
 async def _count_unbalanced_journals(db) -> int:
