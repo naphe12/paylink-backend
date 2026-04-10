@@ -228,7 +228,10 @@ async def _build_payment_note_context(
         "sent_amount_text": format_note_amount(amount, origin_currency),
         "fee_amount_text": format_note_amount(fee_amount, origin_currency),
         "amount_text": format_note_amount(total_payment_amount, origin_currency),
-        "recipient_amount_text": format_note_amount(transfer.local_amount or amount, transfer.currency or "BIF"),
+        "recipient_amount_text": format_note_amount(
+            transfer.local_amount or amount,
+            str(metadata.get("destination_currency") or EXTERNAL_TRANSFER_SETTLEMENT_CURRENCY or "BIF"),
+        ),
         "payment_sentence": payment_sentence,
         "service": instruction["service"],
         "account_service": instruction["account_service"],
@@ -1039,6 +1042,7 @@ async def _external_transfer_core(
         raise HTTPException(status_code=404, detail="Portefeuille introuvable")
 
     wallet_balance = decimal.Decimal(wallet.available or 0)
+    wallet_currency = str(wallet.currency_code or "").upper()
     credit_line = await db.scalar(
         select(CreditLines)
         .where(
@@ -1049,6 +1053,15 @@ async def _external_transfer_core(
         .order_by(CreditLines.created_at.desc())
         .with_for_update()
     )
+    credit_line_currency = str(getattr(credit_line, "currency_code", "") or "").upper()
+    if wallet_currency and credit_line_currency and wallet_currency != credit_line_currency:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Devise incoherente entre portefeuille et ligne de credit. "
+                "Le transfert externe doit etre finance dans une devise unique."
+            ),
+        )
     if credit_line:
         credit_limit = decimal.Decimal(credit_line.initial_amount or 0)
         credit_used_total = decimal.Decimal(credit_line.used_amount or 0)
@@ -1058,8 +1071,7 @@ async def _external_transfer_core(
         credit_used_total = decimal.Decimal(user_locked.credit_used or 0)
         credit_available = max(credit_limit - credit_used_total, decimal.Decimal(0))
     credit_available_before = credit_available
-    origin_currency = await _get_sender_country_currency(db, current_user, wallet.currency_code or "EUR")
-    is_bif_client = str(origin_currency or "").upper() == "BIF"
+    origin_currency = wallet_currency or credit_line_currency or "EUR"
     is_bif_wallet = str(wallet.currency_code or "").upper() == "BIF"
     destination_currency = EXTERNAL_TRANSFER_SETTLEMENT_CURRENCY
     if is_bif_wallet and str(destination_currency or "").upper() == "BIF":
@@ -1200,7 +1212,7 @@ async def _external_transfer_core(
         recipient_name=data.recipient_name,
         recipient_phone=data.recipient_phone,
         amount=amount,
-        currency=destination_currency,
+        currency=origin_currency,
         rate=fx_rate,
         local_amount=local_amount,
         credit_used=(credit_used > 0),
@@ -1735,7 +1747,7 @@ async def approve_external_transfer(
             ),
             destination_currency=str(
                 transfer_metadata.get("destination_currency")
-                or transfer.currency
+                or EXTERNAL_TRANSFER_SETTLEMENT_CURRENCY
                 or "EUR"
             ),
             local_amount=str(transfer.local_amount or transfer.amount),
