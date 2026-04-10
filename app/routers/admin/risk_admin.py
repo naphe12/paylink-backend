@@ -8,6 +8,7 @@ from sqlalchemy import select, update, text
 from app.core.database import get_db
 from app.models.users import Users
 from app.core.security import admin_required
+from app.dependencies.step_up import require_admin_step_up
 from app.models.security_logs import SecurityLogs
 from sqlalchemy import UUID
 from fastapi import HTTPException
@@ -55,7 +56,10 @@ async def get_risky_users(
     result = (await db.execute(q)).mappings().all()
     return list(result)
 
-@router.post("/reset/{user_id}")
+@router.post(
+    "/reset/{user_id}",
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def reset_risk(user_id: str, db: AsyncSession = Depends(get_db), _=Depends(admin_required)):
     user = await db.scalar(select(Users).where(Users.user_id == user_id))
     if not user:
@@ -254,8 +258,16 @@ async def export_admin_step_up_events_csv(
         headers={"Content-Disposition": "attachment; filename=admin_step_up_events.csv"},
     )
 
-@router.post("/admin/unfreeze/{user_id}", response_model=None)
-async def unfreeze_user(user_id: int, db: AsyncSession = Depends(get_db)):
+@router.post(
+    "/admin/unfreeze/{user_id}",
+    response_model=None,
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
+async def unfreeze_user(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(admin_required),
+):
     result = await db.execute(
         update(Users)
         .where(Users.user_id == user_id)

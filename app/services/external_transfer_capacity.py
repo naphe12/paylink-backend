@@ -19,6 +19,7 @@ def compute_external_transfer_funding(
     credit_available: Decimal,
     total_required: Decimal,
     prefer_credit_only: bool = False,
+    mirror_wallet_with_credit: bool = False,
 ) -> dict[str, Decimal]:
     wallet = Decimal(wallet_available or 0)
     credit = max(Decimal(credit_available or 0), ZERO)
@@ -28,6 +29,13 @@ def compute_external_transfer_funding(
         wallet_debit_amount = ZERO
         credit_used = min(credit, total)
         residual_after_credit = total - credit_used
+    elif mirror_wallet_with_credit:
+        # Keep accounting balanced: wallet debit + credit debit must equal total.
+        # For non-BIF flows, consume wallet first, then complement with credit.
+        wallet_debit_amount = min(max(wallet, ZERO), total)
+        remaining_after_wallet = total - wallet_debit_amount
+        credit_used = min(credit, remaining_after_wallet)
+        residual_after_credit = remaining_after_wallet - credit_used
     else:
         if wallet < ZERO:
             credit_used = min(credit, total)

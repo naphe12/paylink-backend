@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
+from app.dependencies.step_up import require_admin_step_up
 
 router = APIRouter(prefix="/admin/loans", tags=["Admin Loans"])
 
@@ -37,7 +38,10 @@ async def list_collaterals(
     return [_row_to_collateral(r) for r in rows]
 
 
-@router.post("/{loan_id}/collaterals")
+@router.post(
+    "/{loan_id}/collaterals",
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def add_collateral(
     loan_id: uuid.UUID,
     payload: dict,
@@ -69,7 +73,10 @@ async def add_collateral(
     return _row_to_collateral(row)
 
 
-@router.delete("/{loan_id}/collaterals/{collateral_id}")
+@router.delete(
+    "/{loan_id}/collaterals/{collateral_id}",
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def delete_collateral(
     loan_id: uuid.UUID,
     collateral_id: uuid.UUID,

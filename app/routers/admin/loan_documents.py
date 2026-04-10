@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
+from app.dependencies.step_up import require_admin_step_up
 from app.models.loans import Loans
 
 router = APIRouter(prefix="/admin/loans", tags=["Admin Loans"])
@@ -23,7 +24,10 @@ async def get_loan_documents(
     return loan.metadata_ or {}
 
 
-@router.post("/{loan_id}/documents/validate")
+@router.post(
+    "/{loan_id}/documents/validate",
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def validate_loan_documents(
     loan_id: uuid.UUID,
     payload: dict,

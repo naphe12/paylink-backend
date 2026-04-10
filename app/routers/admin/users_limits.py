@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from app.core.database import get_db
 from app.core.security import admin_required
+from app.dependencies.step_up import require_admin_step_up
 from app.models.users import Users
 from pydantic import BaseModel, Field
 from decimal import Decimal
@@ -18,7 +19,10 @@ class LimitsPayload(BaseModel):
 
 
 
-@router.patch("/{user_id}/limits", dependencies=[Depends(admin_required)])
+@router.patch(
+    "/{user_id}/limits",
+    dependencies=[Depends(admin_required), Depends(require_admin_step_up("admin_write"))],
+)
 async def update_user_limits(user_id: str, body: LimitsPayload, db: AsyncSession = Depends(get_db)):
     user = await db.scalar(select(Users).where(Users.user_id==user_id))
     if not user:

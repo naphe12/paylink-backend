@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
+from app.dependencies.step_up import get_admin_step_up_method, require_admin_step_up
 from app.models.users import Users
 from app.models.wallet_cash_requests import (
     WalletCashRequestStatus,
@@ -35,6 +36,8 @@ from app.services.cash_credit_recovery import (
 )
 from app.services.cash_request_rules import transition_cash_request_status
 from app.services.ledger import LedgerLine, LedgerService
+from app.services.audit_service import audit_log
+from app.services.auth_sessions import get_request_ip, get_request_user_agent
 from app.services.wallet_history import log_wallet_movement
 
 router = APIRouter(prefix="/admin/cash-requests", tags=["Admin Cash Requests"])
@@ -94,6 +97,30 @@ class AdminCashDepositSearchRead(BaseModel):
     admin_user_id: UUID | None = None
     admin_full_name: str | None = None
     admin_email: str | None = None
+
+
+async def _audit_admin_cash_action(
+    *,
+    db: AsyncSession,
+    request: Request,
+    admin: Users,
+    action: str,
+    entity_id: str,
+    before_state: dict | None = None,
+    after_state: dict | None = None,
+) -> None:
+    await audit_log(
+        db,
+        actor_user_id=str(getattr(admin, "user_id", "") or "") or None,
+        actor_role=str(getattr(admin, "role", "") or "") or None,
+        action=action,
+        entity_type="wallet_cash_request",
+        entity_id=entity_id,
+        before_state=before_state,
+        after_state={**(after_state or {}), "step_up_method": get_admin_step_up_method(request)},
+        ip=get_request_ip(request),
+        user_agent=get_request_user_agent(request),
+    )
 
 
 async def _serialize_request(
@@ -387,8 +414,9 @@ async def list_admin_cash_deposits(
 @router.post("/deposit")
 async def admin_cash_deposit_direct(
     payload: AdminCashDepositCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    admin=Depends(get_current_admin),
+    admin: Users = Depends(require_admin_step_up("cash_request_admin_deposit_direct")),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     note = (payload.note or "").strip() or _default_admin_cash_note("direct_deposit", WalletCashRequestType.DEPOSIT)
@@ -507,6 +535,25 @@ async def admin_cash_deposit_direct(
         "new_balance": float(wallet.available),
         "credit_recovered": float(recovery["credit_recovered"]),
     }
+    if movement:
+        await _audit_admin_cash_action(
+            db=db,
+            request=request,
+            admin=admin,
+            action="ADMIN_CASH_REQUEST_DEPOSIT_DIRECT",
+            entity_id=str(movement.transaction_id),
+            before_state={
+                "user_id": str(user.user_id),
+                "wallet_id": str(wallet.wallet_id),
+                "amount": str(amount),
+                "currency_code": wallet.currency_code,
+            },
+            after_state={
+                "new_balance": str(wallet.available),
+                "credit_recovered": str(recovery["credit_recovered"]),
+                "note": note,
+            },
+        )
     if scoped_idempotency_key:
         await store_idempotency_response(
             db,
@@ -521,8 +568,9 @@ async def admin_cash_deposit_direct(
 @router.post("/withdraw")
 async def admin_cash_withdraw_direct(
     payload: AdminCashDepositCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    admin=Depends(get_current_admin),
+    admin: Users = Depends(require_admin_step_up("cash_request_admin_withdraw_direct")),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     note = (payload.note or "").strip() or _default_admin_cash_note("direct_deposit", WalletCashRequestType.WITHDRAW)
@@ -636,6 +684,25 @@ async def admin_cash_withdraw_direct(
         "new_balance": float(wallet.available),
         "credit_consumed": float(usage["credit_consumed"]),
     }
+    if movement:
+        await _audit_admin_cash_action(
+            db=db,
+            request=request,
+            admin=admin,
+            action="ADMIN_CASH_REQUEST_WITHDRAW_DIRECT",
+            entity_id=str(movement.transaction_id),
+            before_state={
+                "user_id": str(user.user_id),
+                "wallet_id": str(wallet.wallet_id),
+                "amount": str(amount),
+                "currency_code": wallet.currency_code,
+            },
+            after_state={
+                "new_balance": str(wallet.available),
+                "credit_consumed": str(usage["credit_consumed"]),
+                "note": note,
+            },
+        )
     if scoped_idempotency_key:
         await store_idempotency_response(
             db,
@@ -651,8 +718,9 @@ async def admin_cash_withdraw_direct(
 async def approve_cash_request(
     request_id: UUID,
     payload: WalletCashDecision,
+    request_context: Request,
     db: AsyncSession = Depends(get_db),
-    admin=Depends(get_current_admin),
+    admin: Users = Depends(require_admin_step_up("cash_request_approve")),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     note = (payload.note or "").strip() or _default_admin_cash_note("approve", None)
@@ -686,6 +754,12 @@ async def approve_cash_request(
     request = await db.get(WalletCashRequests, request_id)
     if not request:
         raise HTTPException(status_code=404, detail="Demande introuvable")
+    before_state = {
+        "status": str(request.status),
+        "type": str(request.type),
+        "amount": str(request.amount),
+        "total_amount": str(request.total_amount),
+    }
     note = (payload.note or "").strip() or _default_admin_cash_note("approve", request.type)
     transition_cash_request_status(request, WalletCashRequestStatus.APPROVED)
 
@@ -811,6 +885,19 @@ async def approve_cash_request(
     request.admin_note = note
     request.processed_by = admin.user_id
     request.processed_at = datetime.utcnow()
+    await _audit_admin_cash_action(
+        db=db,
+        request=request_context,
+        admin=admin,
+        action="ADMIN_CASH_REQUEST_APPROVE",
+        entity_id=str(request.request_id),
+        before_state=before_state,
+        after_state={
+            "status": str(request.status),
+            "processed_by": str(request.processed_by),
+            "admin_note": request.admin_note,
+        },
+    )
     await db.commit()
     await db.refresh(request)
     response_payload = (await _serialize_request(db, request)).model_dump(mode="json")
@@ -829,8 +916,9 @@ async def approve_cash_request(
 async def reject_cash_request(
     request_id: UUID,
     payload: WalletCashDecision,
+    request_context: Request,
     db: AsyncSession = Depends(get_db),
-    admin=Depends(get_current_admin),
+    admin: Users = Depends(require_admin_step_up("cash_request_reject")),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     note = (payload.note or "").strip() or _default_admin_cash_note("reject", None)
@@ -865,11 +953,30 @@ async def reject_cash_request(
     request = await db.get(WalletCashRequests, request_id)
     if not request:
         raise HTTPException(status_code=404, detail="Demande introuvable")
+    before_state = {
+        "status": str(request.status),
+        "type": str(request.type),
+        "amount": str(request.amount),
+        "total_amount": str(request.total_amount),
+    }
     note = (payload.note or "").strip() or _default_admin_cash_note("reject", request.type)
     transition_cash_request_status(request, WalletCashRequestStatus.REJECTED)
     request.admin_note = note
     request.processed_by = admin.user_id
     request.processed_at = datetime.utcnow()
+    await _audit_admin_cash_action(
+        db=db,
+        request=request_context,
+        admin=admin,
+        action="ADMIN_CASH_REQUEST_REJECT",
+        entity_id=str(request.request_id),
+        before_state=before_state,
+        after_state={
+            "status": str(request.status),
+            "processed_by": str(request.processed_by),
+            "admin_note": request.admin_note,
+        },
+    )
     await db.commit()
     await db.refresh(request)
     response_payload = (await _serialize_request(db, request)).model_dump(mode="json")

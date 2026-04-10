@@ -228,7 +228,10 @@ async def _build_payment_note_context(
         "sent_amount_text": format_note_amount(amount, origin_currency),
         "fee_amount_text": format_note_amount(fee_amount, origin_currency),
         "amount_text": format_note_amount(total_payment_amount, origin_currency),
-        "recipient_amount_text": format_note_amount(transfer.local_amount or amount, transfer.currency or "BIF"),
+        "recipient_amount_text": format_note_amount(
+            transfer.local_amount or amount,
+            str(metadata.get("destination_currency") or EXTERNAL_TRANSFER_SETTLEMENT_CURRENCY or "BIF"),
+        ),
         "payment_sentence": payment_sentence,
         "service": instruction["service"],
         "account_service": instruction["account_service"],
@@ -504,6 +507,16 @@ async def _notify_external_transfer(
             (override_context or {}).get("notify_agent_email")
         )
         explicit_agent_name = str((override_context or {}).get("notify_agent_name") or "").strip()
+        configured_agent_email = _normalize_optional_email(getattr(settings, "AGENT_EMAIL", None))
+        if configured_agent_email:
+            known_emails = {str(agent.email or "").strip().lower() for agent in agent_users if agent.email}
+            if configured_agent_email.lower() not in known_emails:
+                agent_users.append(
+                    Users(
+                        email=configured_agent_email,
+                        full_name="Agent PesaPaid",
+                    )
+                )
         if explicit_agent_email:
             known_emails = {str(agent.email or "").strip().lower() for agent in agent_users if agent.email}
             if explicit_agent_email.lower() not in known_emails:
@@ -983,6 +996,7 @@ async def _external_transfer_core(
     override_context: dict | None = None,
     final_status_override: str | None = None,
     processed_by_user_id: str | None = None,
+    execute_notifications_inline: bool = False,
 ):
     ledger = LedgerService(db)
     await calculate_risk_score(db, current_user.user_id)
@@ -1038,6 +1052,7 @@ async def _external_transfer_core(
         raise HTTPException(status_code=404, detail="Portefeuille introuvable")
 
     wallet_balance = decimal.Decimal(wallet.available or 0)
+    wallet_currency = str(wallet.currency_code or "").upper()
     credit_line = await db.scalar(
         select(CreditLines)
         .where(
@@ -1048,6 +1063,15 @@ async def _external_transfer_core(
         .order_by(CreditLines.created_at.desc())
         .with_for_update()
     )
+    credit_line_currency = str(getattr(credit_line, "currency_code", "") or "").upper()
+    if wallet_currency and credit_line_currency and wallet_currency != credit_line_currency:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Devise incoherente entre portefeuille et ligne de credit. "
+                "Le transfert externe doit etre finance dans une devise unique."
+            ),
+        )
     if credit_line:
         credit_limit = decimal.Decimal(credit_line.initial_amount or 0)
         credit_used_total = decimal.Decimal(credit_line.used_amount or 0)
@@ -1057,8 +1081,7 @@ async def _external_transfer_core(
         credit_used_total = decimal.Decimal(user_locked.credit_used or 0)
         credit_available = max(credit_limit - credit_used_total, decimal.Decimal(0))
     credit_available_before = credit_available
-    origin_currency = await _get_sender_country_currency(db, current_user, wallet.currency_code or "EUR")
-    is_bif_client = str(origin_currency or "").upper() == "BIF"
+    origin_currency = wallet_currency or credit_line_currency or "EUR"
     is_bif_wallet = str(wallet.currency_code or "").upper() == "BIF"
     destination_currency = EXTERNAL_TRANSFER_SETTLEMENT_CURRENCY
     if is_bif_wallet and str(destination_currency or "").upper() == "BIF":
@@ -1116,6 +1139,7 @@ async def _external_transfer_core(
             credit_available=credit_available_before,
             total_required=total_required,
             prefer_credit_only=is_bif_wallet,
+            mirror_wallet_with_credit=not is_bif_wallet,
         )
         wallet_after = funding["wallet_after"]
         credit_used = funding["credit_used"]
@@ -1198,7 +1222,7 @@ async def _external_transfer_core(
         recipient_name=data.recipient_name,
         recipient_phone=data.recipient_phone,
         amount=amount,
-        currency=destination_currency,
+        currency=origin_currency,
         rate=fx_rate,
         local_amount=local_amount,
         credit_used=(credit_used > 0),
@@ -1369,13 +1393,42 @@ async def _external_transfer_core(
         "requires_admin": requires_admin,
         "fx_rate": str(fx_rate),
         "override_context": override_context,
-        "notify_agents": transfer_status == "approved",
-        "notify_telegram": transfer_status == "approved"
+        "notify_agents": transfer_status in {"pending", "approved"},
+        "notify_telegram": transfer_status in {"pending", "approved"}
         or _is_truthy_flag((override_context or {}).get("notify_telegram_on_create")),
         "notify_client": True,
         "notify_recipient": transfer_status == "approved",
     }
-    background_tasks.add_task(_notify_external_transfer_task, **notification_kwargs)
+    if execute_notifications_inline:
+        try:
+            await _notify_external_transfer(
+                db=db,
+                current_user=current_user,
+                transfer=transfer,
+                data=data,
+                amount=amount,
+                origin_currency=origin_currency,
+                destination_currency=destination_currency,
+                local_amount=local_amount,
+                credit_used=credit_used,
+                credit_available_after=credit_available_after,
+                requires_admin=requires_admin,
+                fx_rate=fx_rate,
+                override_context=override_context,
+                notify_agents=notification_kwargs["notify_agents"],
+                notify_telegram=notification_kwargs["notify_telegram"],
+                notify_client=notification_kwargs["notify_client"],
+                notify_recipient=notification_kwargs["notify_recipient"],
+            )
+        except Exception as exc:
+            logger.exception(
+                "Inline external transfer notification failed transfer_id=%s user_id=%s: %s",
+                transfer.transfer_id,
+                current_user.user_id,
+                exc,
+            )
+    else:
+        background_tasks.add_task(_notify_external_transfer_task, **notification_kwargs)
     return payload_out if scoped_idempotency_key else _serialize_external_transfer_read(transfer)
 
 
@@ -1437,8 +1490,12 @@ async def _fund_pending_external_transfer_for_approval(
         if credit_line
         else decimal.Decimal("0")
     )
-    total_available_before = wallet_balance_before + credit_available_before
-    shortage = max(decimal.Decimal("0"), total_required - total_available_before)
+    approval_available_before = (
+        credit_available_before
+        if is_bif_wallet
+        else effective_external_transfer_capacity(wallet_balance_before, credit_available_before)
+    )
+    shortage = max(decimal.Decimal("0"), total_required - approval_available_before)
     now = datetime.utcnow()
 
     if shortage > 0:
@@ -1502,6 +1559,7 @@ async def _fund_pending_external_transfer_for_approval(
         credit_available=credit_available_before,
         total_required=total_required,
         prefer_credit_only=is_bif_wallet,
+        mirror_wallet_with_credit=not is_bif_wallet,
     )
     credit_used = funding["credit_used"]
     credit_available_after = funding["credit_available_after"]
@@ -1699,7 +1757,7 @@ async def approve_external_transfer(
             ),
             destination_currency=str(
                 transfer_metadata.get("destination_currency")
-                or transfer.currency
+                or EXTERNAL_TRANSFER_SETTLEMENT_CURRENCY
                 or "EUR"
             ),
             local_amount=str(transfer.local_amount or transfer.amount),

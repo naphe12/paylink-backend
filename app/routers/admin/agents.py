@@ -1,19 +1,22 @@
 from decimal import Decimal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, update, insert
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
+from app.dependencies.step_up import get_admin_step_up_method, require_admin_step_up
 from app.models.agent_commissions import AgentCommissions
 from app.models.agent_transactions import AgentTransactions
 from app.models.agents import Agents
 from app.models.users import Users
 from app.models.wallets import Wallets
 from app.services.admin_notifications import push_admin_notification
+from app.services.audit_service import audit_log
+from app.services.auth_sessions import get_request_ip, get_request_user_agent
 
 
 router = APIRouter(prefix="/admin/agents", tags=["Admin Agents"])
@@ -22,16 +25,52 @@ router = APIRouter(prefix="/admin/agents", tags=["Admin Agents"])
 class CommissionPayload(BaseModel):
     commission_rate: Decimal = Field(gt=0, le=1)
 
+
 class AgentCreatePayload(BaseModel):
     user_id: UUID
     display_name: str = Field(min_length=2, max_length=80)
     country_code: str = Field(min_length=2, max_length=2)
 
+
+def _agent_state(agent: Agents) -> dict:
+    return {
+        "active": bool(getattr(agent, "active", False)),
+        "commission_rate": float(getattr(agent, "commission_rate", 0) or 0),
+        "country_code": str(getattr(agent, "country_code", "") or ""),
+        "display_name": str(getattr(agent, "display_name", "") or ""),
+    }
+
+
+async def _audit_admin_agent_action(
+    *,
+    db: AsyncSession,
+    request: Request,
+    admin: Users,
+    agent: Agents,
+    action: str,
+    before_state: dict | None = None,
+    after_state: dict | None = None,
+) -> None:
+    await audit_log(
+        db,
+        actor_user_id=str(getattr(admin, "user_id", "") or "") or None,
+        actor_role=str(getattr(admin, "role", "") or "") or None,
+        action=action,
+        entity_type="agent",
+        entity_id=str(agent.agent_id),
+        before_state=before_state,
+        after_state={**(after_state or {}), "step_up_method": get_admin_step_up_method(request)},
+        ip=get_request_ip(request),
+        user_agent=get_request_user_agent(request),
+    )
+
+
 @router.post("/")
 async def create_agent(
     payload: AgentCreatePayload,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    admin=Depends(get_current_admin),
+    admin: Users = Depends(require_admin_step_up("agent_create")),
 ):
     existing = await db.scalar(select(Agents).where(Agents.user_id == payload.user_id))
     if existing:
@@ -53,6 +92,15 @@ async def create_agent(
     db.add(agent)
     await db.commit()
     await db.refresh(agent)
+    await _audit_admin_agent_action(
+        db=db,
+        request=request,
+        admin=admin,
+        agent=agent,
+        action="ADMIN_AGENT_CREATE",
+        before_state=None,
+        after_state=_agent_state(agent),
+    )
 
     await push_admin_notification(
         "agent_created",
@@ -64,6 +112,7 @@ async def create_agent(
         metadata={
             "agent_id": str(agent.agent_id),
             "country_code": agent.country_code,
+            "step_up_method": get_admin_step_up_method(request),
         },
     )
     await db.commit()
@@ -142,33 +191,57 @@ async def list_agents(
 @router.patch("/{agent_id}/toggle")
 async def toggle_agent(
     agent_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    admin=Depends(get_current_admin),
+    admin: Users = Depends(require_admin_step_up("agent_toggle_status")),
 ):
     agent = await db.scalar(select(Agents).where(Agents.agent_id == agent_id))
     if not agent:
         raise HTTPException(404, "Agent introuvable")
 
+    before_state = _agent_state(agent)
     agent.active = not agent.active
     await db.commit()
-    return {"message": "État mis à jour", "active": agent.active}
+    await _audit_admin_agent_action(
+        db=db,
+        request=request,
+        admin=admin,
+        agent=agent,
+        action="ADMIN_AGENT_TOGGLE_STATUS",
+        before_state=before_state,
+        after_state=_agent_state(agent),
+    )
+    await db.commit()
+    return {"message": "Etat mis a jour", "active": agent.active}
 
 
 @router.patch("/{agent_id}/commission")
 async def update_agent_commission(
     agent_id: str,
     payload: CommissionPayload,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    admin=Depends(get_current_admin),
+    admin: Users = Depends(require_admin_step_up("agent_update_commission")),
 ):
     agent = await db.scalar(select(Agents).where(Agents.agent_id == agent_id))
     if not agent:
         raise HTTPException(404, "Agent introuvable")
 
+    before_state = _agent_state(agent)
     agent.commission_rate = payload.commission_rate
     await db.commit()
+    await _audit_admin_agent_action(
+        db=db,
+        request=request,
+        admin=admin,
+        agent=agent,
+        action="ADMIN_AGENT_UPDATE_COMMISSION",
+        before_state=before_state,
+        after_state=_agent_state(agent),
+    )
+    await db.commit()
     return {
-        "message": "Commission mise à jour",
+        "message": "Commission mise a jour",
         "commission_rate": float(agent.commission_rate),
     }
 

@@ -1,6 +1,6 @@
 import decimal
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select, or_, func
 from sqlalchemy.orm import aliased
@@ -8,9 +8,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
+from app.dependencies.step_up import require_admin_step_up
 from app.models.transactions import Transactions
 from app.models.users import Users
 from app.models.wallets import Wallets
+from app.schemas.payment_requests import PaymentRequestAdminDetailRead, PaymentRequestAdminRead
+from app.services.payment_request_service import (
+    get_admin_payment_request_detail_v2,
+    list_admin_payment_requests_v2,
+)
 
 router = APIRouter(prefix="/admin/payment-requests", tags=["Admin Payment Requests"])
 
@@ -42,7 +48,7 @@ async def _find_user(db: AsyncSession, identifier: str) -> Users | None:
     )
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_admin_step_up("admin_write"))])
 async def create_admin_payment_request(
     payload: AdminPaymentRequestCreate,
     db: AsyncSession = Depends(get_db),
@@ -81,6 +87,26 @@ async def create_admin_payment_request(
     await db.commit()
     await db.refresh(tx)
     return {"request_id": str(tx.tx_id), "status": tx.status}
+
+
+@router.get("/v2", response_model=list[PaymentRequestAdminRead])
+async def list_payment_requests_v2(
+    status: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    limit: int = Query(200, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    return await list_admin_payment_requests_v2(db, status=status, q=q, limit=limit)
+
+
+@router.get("/v2/{request_id}", response_model=PaymentRequestAdminDetailRead)
+async def get_payment_request_detail_v2(
+    request_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    return await get_admin_payment_request_detail_v2(db, request_id=request_id)
 
 
 @router.get("")

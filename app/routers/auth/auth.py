@@ -17,6 +17,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import select, func, or_
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -150,36 +151,41 @@ async def login(
     raw_username = form_data.username.strip()
     normalized = raw_username.lower()
     paytag = normalized if normalized.startswith("@") else f"@{normalized}"
-
-    user = await db.scalar(
-        select(Users).where(
-            or_(
-                func.lower(Users.email) == normalized,
-                func.lower(Users.paytag) == paytag,
-                func.lower(Users.username) == normalized,
-                Users.phone_e164 == raw_username,
+    try:
+        user = await db.scalar(
+            select(Users).where(
+                or_(
+                    func.lower(Users.email) == normalized,
+                    func.lower(Users.paytag) == paytag,
+                    func.lower(Users.username) == normalized,
+                    Users.phone_e164 == raw_username,
+                )
             )
         )
-    )
-    if not user:
-        raise HTTPException(status_code=401, detail="Identifiant ou mot de passe incorrect")
+        if not user:
+            raise HTTPException(status_code=401, detail="Identifiant ou mot de passe incorrect")
 
-    auth_data = await db.scalar(select(UserAuth).where(UserAuth.user_id == user.user_id))
-    if not auth_data or not verify_password(form_data.password, auth_data.password_hash):
-        raise HTTPException(status_code=401, detail="Identifiant ou mot de passe incorrect")
+        auth_data = await db.scalar(select(UserAuth).where(UserAuth.user_id == user.user_id))
+        if not auth_data or not verify_password(form_data.password, auth_data.password_hash):
+            raise HTTPException(status_code=401, detail="Identifiant ou mot de passe incorrect")
 
-    auth_data.last_login_at = datetime.utcnow()
-    await db.commit()
+        auth_data.last_login_at = datetime.utcnow()
+        await db.commit()
 
-    access_token_expires = timedelta(minutes=settings.access_token_expire_minutes_for_role(user.role))
-    access_token = create_access_token(
-        data={"sub": str(user.user_id), "role": user.role},
-        expires_delta=access_token_expires,
-        role=user.role,
-    )
-    csrf_token = await issue_refresh_session(db, response, user, request)
-    await db.commit()
-    return _build_auth_response(user, access_token, csrf_token)
+        access_token_expires = timedelta(minutes=settings.access_token_expire_minutes_for_role(user.role))
+        access_token = create_access_token(
+            data={"sub": str(user.user_id), "role": user.role},
+            expires_delta=access_token_expires,
+            role=user.role,
+        )
+        csrf_token = await issue_refresh_session(db, response, user, request)
+        await db.commit()
+        return _build_auth_response(user, access_token, csrf_token)
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Service temporairement indisponible. Reessayez dans quelques instants.",
+        ) from exc
 
 
 @router.post("/refresh")

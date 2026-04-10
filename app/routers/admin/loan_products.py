@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
+from app.dependencies.step_up import require_admin_step_up
 
 router = APIRouter(prefix="/admin/loan-products", tags=["Admin Loans"])
 
@@ -85,7 +86,7 @@ async def list_products(
     return [_row_to_product(r) for r in rows]
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_admin_step_up("admin_write"))])
 async def create_product(
     payload: LoanProductCreate,
     db: AsyncSession = Depends(get_db),
@@ -123,7 +124,10 @@ async def create_product(
     return _row_to_product(row)
 
 
-@router.patch("/{product_id}")
+@router.patch(
+    "/{product_id}",
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def update_product(
     product_id: uuid.UUID,
     payload: LoanProductUpdate,
@@ -144,7 +148,10 @@ async def update_product(
     return _row_to_product(row)
 
 
-@router.delete("/{product_id}")
+@router.delete(
+    "/{product_id}",
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def delete_product(
     product_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),

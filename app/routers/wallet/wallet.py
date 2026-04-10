@@ -14,7 +14,6 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.dependencies.auth import get_current_admin
-from app.models.bonus_history import BonusHistory
 from app.models.transactions import Transactions
 from app.models.users import Users
 from app.models.agents import Agents
@@ -35,6 +34,12 @@ from app.schemas.wallet_cash_requests import (
     WalletCashRequestRead,
     WalletCashWithdrawCreate,
 )
+from app.schemas.bonus import (
+    BonusBalanceRead,
+    BonusHistoryRead,
+    BonusTransferCreate,
+    BonusTransferRead,
+)
 from app.schemas.wallets import WalletsRead, WalletTopUp
 from app.schemas.credit_line_history import CreditLineHistoryRead
 from app.services.aml import update_risk_score
@@ -46,6 +51,11 @@ from app.services.idempotency_service import (
     acquire_idempotency,
     compute_request_hash,
     store_idempotency_response,
+)
+from app.services.bonus_transfer_service import (
+    get_bonus_balance_payload,
+    list_bonus_history_payload,
+    send_bonus_by_identifier,
 )
 from app.models.credit_lines import CreditLines
 from app.models.credit_line_events import CreditLineEvents
@@ -904,62 +914,34 @@ async def get_credit_line_events(
             for ev in events_rows
         ],
     }
-@router.get("/bonus/history")
+@router.get("/bonus/history", response_model=list[BonusHistoryRead])
 async def bonus_history(
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user)
 ):
-    result = await db.execute(
-        select(BonusHistory)
-        .where(BonusHistory.user_id == current_user.user_id)
-        .order_by(BonusHistory.created_at.desc())
-    )
-    return result.scalars().all()
+    return await list_bonus_history_payload(db, user=current_user)
 
 
-@router.get("/bonus")
+@router.get("/bonus", response_model=BonusBalanceRead)
 async def get_bonus_balance(
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user)
 ):
-    result = await db.execute(_primary_wallet_stmt(current_user.user_id))
-    wallet = result.scalar_one()
-    return {"bonus_balance": wallet.bonus_balance}
-
-from app.models.bonus_history import BonusHistory
+    return await get_bonus_balance_payload(db, user=current_user)
 
 
-@router.post("/bonus/send")
+@router.post("/bonus/send", response_model=BonusTransferRead)
 async def send_bonus(
-    recipient: str,
-    amount_bif: decimal.Decimal,
+    payload: BonusTransferCreate,
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user)
 ):
-    # Trouver le wallet émetteur
-    sender_wallet = await _get_primary_wallet(db, current_user.user_id)
-    if sender_wallet.bonus_balance < amount_bif:
-        raise HTTPException(400, "Solde bonus insuffisant")
-
-    # Trouver le destinataire
-    recipient_user = await db.scalar(
-        select(Users).where((Users.email == recipient) | (Users.phone_e164 == recipient))
+    return await send_bonus_by_identifier(
+        db,
+        sender_user=current_user,
+        recipient_identifier=payload.recipient_identifier,
+        amount_bif=payload.amount_bif,
     )
-    if not recipient_user:
-        raise HTTPException(404, "Destinataire introuvable")
-
-    recipient_wallet = await _get_primary_wallet(db, recipient_user.user_id)
-
-    # Mise à jour des soldes
-    sender_wallet.bonus_balance -= amount_bif
-    recipient_wallet.bonus_balance += amount_bif
-
-    # Historique
-    db.add(BonusHistory(user_id=current_user.user_id, amount_bif=amount_bif, source="used"))
-    db.add(BonusHistory(user_id=recipient_user.user_id, amount_bif=amount_bif, source="earned"))
-
-    await db.commit()
-    return {"status": "success"}
 
 
 from sqlalchemy import or_, select

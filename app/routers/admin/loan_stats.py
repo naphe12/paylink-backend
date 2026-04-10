@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
+from app.dependencies.step_up import require_admin_step_up
 from app.models.loanrepayments import LoanRepayments
 from app.models.loans import Loans
 from app.routers.loans import LoanAdminItem
@@ -151,7 +152,10 @@ async def list_loans_admin_alias(
     return await list_loans_admin(status, overdue_only, limit, offset, product_type, db, _)
 
 
-@router.post("/{loan_id}/approve")
+@router.post(
+    "/{loan_id}/approve",
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def approve_loan(
     loan_id: str,
     db: AsyncSession = Depends(get_db),

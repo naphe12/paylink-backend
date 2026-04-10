@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
+from app.dependencies.step_up import require_admin_step_up
 from app.models.users import Users
 from app.schemas.operator_workflow import (
     OperatorUrgencyListRead,
@@ -139,7 +140,11 @@ async def get_operator_work_item(
     )
 
 
-@router.put("/{entity_type}/{entity_id}", response_model=OperatorWorkflowRead)
+@router.put(
+    "/{entity_type}/{entity_id}",
+    response_model=OperatorWorkflowRead,
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def put_operator_work_item(
     entity_type: str,
     entity_id: UUID,
@@ -163,7 +168,11 @@ async def put_operator_work_item(
     return result
 
 
-@router.post("/batch", response_model=OperatorWorkflowBatchResultRead)
+@router.post(
+    "/batch",
+    response_model=OperatorWorkflowBatchResultRead,
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def batch_upsert_operator_work_items(
     payload: OperatorWorkflowBatchUpsert,
     db: AsyncSession = Depends(get_db),

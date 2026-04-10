@@ -114,6 +114,10 @@ class Settings(BaseSettings):
     IDEMPOTENCY_CLEANUP_INTERVAL_SECONDS: int = 1800
     IDEMPOTENCY_RETENTION_HOURS: int = 72
     REQUEST_METRICS_ENABLED: bool = True
+    PRODUCT_AUTOMATION_ENABLED: bool = True
+    PRODUCT_AUTOMATION_INTERVAL_SECONDS: int = 60
+    PRODUCT_AUTOMATION_BATCH_LIMIT: int = 100
+    AGENT_OFFLINE_STALE_MINUTES: int = 180
 
     # -------------------------------------------------
     # EMAIL SMTP

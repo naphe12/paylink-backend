@@ -56,6 +56,47 @@ from app.models.ai_feedback_suggestions import AiFeedbackSuggestions
 from app.models.ai_prompt_fragments import AiPromptFragments
 from app.models.payment_intents import PaymentIntents
 from app.models.payment_events import PaymentEvents
+from app.models.payment_requests import PaymentRequests
+from app.models.payment_request_events import PaymentRequestEvents
+from app.models.payment_request_reminders import PaymentRequestReminders
+from app.models.support_cases import SupportCases
+from app.models.support_case_messages import SupportCaseMessages
+from app.models.support_case_attachments import SupportCaseAttachments
+from app.models.support_case_events import SupportCaseEvents
+from app.models.trust_profiles import TrustProfiles
+from app.models.trust_events import TrustEvents
+from app.models.trust_badges import TrustBadges
+from app.models.user_trust_badges import UserTrustBadges
+from app.models.user_currency_preferences import UserCurrencyPreferences
+from app.models.scheduled_transfers import ScheduledTransfers
+from app.models.savings_goals import SavingsGoals
+from app.models.savings_movements import SavingsMovements
+from app.models.financial_budget_rules import FinancialBudgetRules
+from app.models.referral_profiles import ReferralProfiles
+from app.models.referral_rewards import ReferralRewards
+from app.models.business_accounts import BusinessAccounts
+from app.models.business_members import BusinessMembers
+from app.models.business_sub_wallets import BusinessSubWallets
+from app.models.business_sub_wallet_movements import BusinessSubWalletMovements
+from app.models.merchant_api_keys import MerchantApiKeys
+from app.models.merchant_webhooks import MerchantWebhooks
+from app.models.merchant_webhook_events import MerchantWebhookEvents
+from app.models.merchant_profiles import MerchantProfiles
+from app.models.merchant_stores import MerchantStores
+from app.models.merchant_terminals import MerchantTerminals
+from app.models.merchant_orders import MerchantOrders
+from app.models.merchant_qr_codes import MerchantQrCodes
+from app.models.merchant_payment_links import MerchantPaymentLinks
+from app.models.merchant_payment_attempts import MerchantPaymentAttempts
+from app.models.merchant_refunds import MerchantRefunds
+from app.models.merchant_receipts import MerchantReceipts
+from app.models.merchant_payment_events import MerchantPaymentEvents
+from app.models.agent_offline_operations import AgentOfflineOperations
+from app.models.pots import Pots
+from app.models.pot_members import PotMembers
+from app.models.pot_contributions import PotContributions
+from app.models.virtual_cards import VirtualCards
+from app.models.virtual_card_transactions import VirtualCardTransactions
 from app.models.operator_work_item import OperatorWorkItem
 
 __all__ = [
@@ -116,5 +157,46 @@ __all__ = [
     "AiPromptFragments",
     "PaymentIntents",
     "PaymentEvents",
+    "PaymentRequests",
+    "PaymentRequestEvents",
+    "PaymentRequestReminders",
+    "SupportCases",
+    "SupportCaseMessages",
+    "SupportCaseAttachments",
+    "SupportCaseEvents",
+    "TrustProfiles",
+    "TrustEvents",
+    "TrustBadges",
+    "UserTrustBadges",
+    "UserCurrencyPreferences",
+    "ScheduledTransfers",
+    "SavingsGoals",
+    "SavingsMovements",
+    "FinancialBudgetRules",
+    "ReferralProfiles",
+    "ReferralRewards",
+    "BusinessAccounts",
+    "BusinessMembers",
+    "BusinessSubWallets",
+    "BusinessSubWalletMovements",
+    "MerchantApiKeys",
+    "MerchantWebhooks",
+    "MerchantWebhookEvents",
+    "MerchantProfiles",
+    "MerchantStores",
+    "MerchantTerminals",
+    "MerchantOrders",
+    "MerchantQrCodes",
+    "MerchantPaymentLinks",
+    "MerchantPaymentAttempts",
+    "MerchantRefunds",
+    "MerchantReceipts",
+    "MerchantPaymentEvents",
+    "AgentOfflineOperations",
+    "Pots",
+    "PotMembers",
+    "PotContributions",
+    "VirtualCards",
+    "VirtualCardTransactions",
     "OperatorWorkItem",
 ]

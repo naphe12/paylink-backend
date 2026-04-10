@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
+from app.dependencies.step_up import require_admin_step_up
 from app.models.fx_custom_rates import FxCustomRates
 from app.models.general_settings import GeneralSettings
 
@@ -45,7 +46,10 @@ async def get_general_settings(
     return {**serialize(latest), "items": [serialize(r) for r in rows]}
 
 
-@router.put("/general")
+@router.put(
+    "/general",
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def update_general_settings(
     charge: Optional[float] = None,
     fix_charge: Optional[float] = None,
@@ -111,7 +115,10 @@ async def list_fx_custom_rates(
     ]
 
 
-@router.put("/fx-custom/{currency}")
+@router.put(
+    "/fx-custom/{currency}",
+    dependencies=[Depends(require_admin_step_up("admin_write"))],
+)
 async def update_fx_custom_rate(
     currency: str,
     new_rate: float,
