@@ -30,9 +30,12 @@ def compute_external_transfer_funding(
         credit_used = min(credit, total)
         residual_after_credit = total - credit_used
     elif mirror_wallet_with_credit:
-        credit_used = min(credit, total)
-        residual_after_credit = total - credit_used
-        wallet_debit_amount = total
+        # Keep accounting balanced: wallet debit + credit debit must equal total.
+        # For non-BIF flows, consume wallet first, then complement with credit.
+        wallet_debit_amount = min(max(wallet, ZERO), total)
+        remaining_after_wallet = total - wallet_debit_amount
+        credit_used = min(credit, remaining_after_wallet)
+        residual_after_credit = remaining_after_wallet - credit_used
     else:
         if wallet < ZERO:
             credit_used = min(credit, total)

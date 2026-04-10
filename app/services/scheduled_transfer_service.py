@@ -293,13 +293,25 @@ async def _execute_external_transfer(
         raise HTTPException(status_code=400, detail="Configuration du transfert externe invalide") from exc
 
     background_tasks = BackgroundTasks()
-    return await _external_transfer_core(
+    result = await _external_transfer_core(
         data=payload,
         background_tasks=background_tasks,
         idempotency_key=None,
         db=db,
         current_user=sender,
     )
+    # Outside HTTP request lifecycle, BackgroundTasks are not auto-executed.
+    # Scheduled transfers must run them explicitly (emails, telegram, etc.).
+    for task in list(getattr(background_tasks, "tasks", []) or []):
+        try:
+            await task()
+        except Exception:
+            logger.exception(
+                "Scheduled external transfer notification task failed schedule_id=%s user_id=%s",
+                getattr(item, "schedule_id", None),
+                getattr(sender, "user_id", None),
+            )
+    return result
 
 
 async def _run_scheduled_transfer_item(

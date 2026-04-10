@@ -160,6 +160,43 @@ def test_run_scheduled_transfer_item_executes_external_schedule(monkeypatch):
     assert item.remaining_runs == 1
 
 
+def test_execute_external_transfer_runs_background_tasks(monkeypatch):
+    sender = SimpleNamespace(user_id=uuid4(), email="client@example.com", paytag="@client")
+    item = SimpleNamespace(
+        amount=Decimal("10.00"),
+        metadata_={
+            "transfer_type": "external",
+            "external_transfer": {
+                "partner_name": "Lumicash",
+                "country_destination": "Burundi",
+                "recipient_name": "Jean",
+                "recipient_phone": "+25761234567",
+                "recipient_email": "jean@example.com",
+            },
+        },
+    )
+    task_executed = {"value": False}
+
+    async def fake_core(*, data, background_tasks, idempotency_key, db, current_user):
+        assert str(data.recipient_email) == "jean@example.com"
+        assert current_user.user_id == sender.user_id
+
+        async def fake_task():
+            task_executed["value"] = True
+
+        background_tasks.add_task(fake_task)
+        return {"status": "approved", "reference_code": "EXT-TEST1234", "currency": "EUR"}
+
+    from app.routers.wallet import transfer as transfer_module
+
+    monkeypatch.setattr(transfer_module, "_external_transfer_core", fake_core)
+
+    result = asyncio.run(service._execute_external_transfer(_RunDb(), sender=sender, item=item))
+
+    assert result["status"] == "approved"
+    assert task_executed["value"] is True
+
+
 def test_advance_next_run_monthly_preserves_calendar_month():
     january_end = datetime(2026, 1, 31, 8, 0, tzinfo=timezone.utc)
     february = service._advance_next_run(january_end, "monthly")

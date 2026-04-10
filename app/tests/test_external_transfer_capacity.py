@@ -67,7 +67,7 @@ def test_compute_external_transfer_funding_can_force_credit_only_for_bif_wallets
     assert funding["credit_available_after"] == Decimal("40")
 
 
-def test_compute_external_transfer_funding_can_mirror_wallet_and_credit_for_eur_clients():
+def test_compute_external_transfer_funding_mirror_mode_keeps_balanced_wallet_first_split():
     funding = compute_external_transfer_funding(
         wallet_available=Decimal("25"),
         credit_available=Decimal("80"),
@@ -75,13 +75,13 @@ def test_compute_external_transfer_funding_can_mirror_wallet_and_credit_for_eur_
         mirror_wallet_with_credit=True,
     )
 
-    assert funding["wallet_debit_amount"] == Decimal("40")
-    assert funding["wallet_after"] == Decimal("-15")
-    assert funding["credit_used"] == Decimal("40")
+    assert funding["wallet_debit_amount"] == Decimal("25")
+    assert funding["wallet_after"] == Decimal("0")
+    assert funding["credit_used"] == Decimal("15")
     assert funding["credit_available_after"] == Decimal("40")
 
 
-def test_compute_external_transfer_funding_mirrors_wallet_even_when_credit_only_covers_shortage():
+def test_compute_external_transfer_funding_mirror_mode_uses_credit_for_shortage_only():
     funding = compute_external_transfer_funding(
         wallet_available=Decimal("25"),
         credit_available=Decimal("15"),
@@ -89,7 +89,7 @@ def test_compute_external_transfer_funding_mirrors_wallet_even_when_credit_only_
         mirror_wallet_with_credit=True,
     )
 
-    assert funding["wallet_debit_amount"] == Decimal("40")
-    assert funding["wallet_after"] == Decimal("-15")
+    assert funding["wallet_debit_amount"] == Decimal("25")
+    assert funding["wallet_after"] == Decimal("0")
     assert funding["credit_used"] == Decimal("15")
     assert funding["credit_available_after"] == Decimal("0")
