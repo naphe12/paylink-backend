@@ -507,6 +507,16 @@ async def _notify_external_transfer(
             (override_context or {}).get("notify_agent_email")
         )
         explicit_agent_name = str((override_context or {}).get("notify_agent_name") or "").strip()
+        configured_agent_email = _normalize_optional_email(getattr(settings, "AGENT_EMAIL", None))
+        if configured_agent_email:
+            known_emails = {str(agent.email or "").strip().lower() for agent in agent_users if agent.email}
+            if configured_agent_email.lower() not in known_emails:
+                agent_users.append(
+                    Users(
+                        email=configured_agent_email,
+                        full_name="Agent PesaPaid",
+                    )
+                )
         if explicit_agent_email:
             known_emails = {str(agent.email or "").strip().lower() for agent in agent_users if agent.email}
             if explicit_agent_email.lower() not in known_emails:
@@ -1383,8 +1393,8 @@ async def _external_transfer_core(
         "requires_admin": requires_admin,
         "fx_rate": str(fx_rate),
         "override_context": override_context,
-        "notify_agents": transfer_status == "approved",
-        "notify_telegram": transfer_status == "approved"
+        "notify_agents": transfer_status in {"pending", "approved"},
+        "notify_telegram": transfer_status in {"pending", "approved"}
         or _is_truthy_flag((override_context or {}).get("notify_telegram_on_create")),
         "notify_client": True,
         "notify_recipient": transfer_status == "approved",
