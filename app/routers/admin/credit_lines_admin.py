@@ -208,6 +208,128 @@ async def list_credit_debtors(
     return items
 
 
+@router.get("/debtors/breakdown")
+async def list_credit_debtors_breakdown(
+    q: Optional[str] = Query(None, description="Filtre nom/email"),
+    limit: int = Query(200, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    stmt = (
+        select(Users, Wallets)
+        .join(Wallets, Wallets.user_id == Users.user_id)
+        .order_by(Users.full_name.asc())
+        .limit(limit)
+    )
+    if q:
+        pattern = f"%{q}%"
+        stmt = stmt.where((Users.full_name.ilike(pattern)) | (Users.email.ilike(pattern)))
+
+    rows = (await db.execute(stmt)).all()
+    items = []
+
+    for user, wallet in rows:
+        credit_line = await _get_latest_credit_line(db, user.user_id)
+        wallet_available = Decimal(wallet.available or 0)
+        credit_used = Decimal(credit_line.used_amount or 0) if credit_line else Decimal("0")
+        if wallet_available >= 0 and credit_used <= 0:
+            continue
+
+        wallet_currency = str(wallet.currency_code or "").upper()
+        debt_entries = []
+
+        if wallet_available < 0:
+            latest_negative_event = await db.scalar(
+                select(ClientBalanceEvents)
+                .where(
+                    ClientBalanceEvents.user_id == user.user_id,
+                    ClientBalanceEvents.balance_after < 0,
+                )
+                .order_by(ClientBalanceEvents.occurred_at.desc(), ClientBalanceEvents.created_at.desc())
+                .limit(1)
+            )
+            debt_entries.append(
+                {
+                    "entry_id": f"wallet_negative:{user.user_id}",
+                    "amount": float(abs(wallet_available)),
+                    "currency_code": wallet_currency,
+                    "occurred_at": (
+                        latest_negative_event.occurred_at
+                        if latest_negative_event is not None
+                        else None
+                    ),
+                    "operation": "Wallet negatif",
+                    "source": (
+                        str(latest_negative_event.source or "")
+                        if latest_negative_event is not None
+                        else "wallet"
+                    ),
+                    "detail_path": f"/dashboard/admin/users/{user.user_id}",
+                }
+            )
+
+        if credit_line and credit_used > 0:
+            latest_credit_event = await db.scalar(
+                select(CreditLineEvents)
+                .where(CreditLineEvents.credit_line_id == credit_line.credit_line_id)
+                .order_by(CreditLineEvents.occurred_at.desc(), CreditLineEvents.created_at.desc())
+                .limit(1)
+            )
+            debt_entries.append(
+                {
+                    "entry_id": f"credit_line:{credit_line.credit_line_id}",
+                    "amount": float(credit_used),
+                    "currency_code": str(credit_line.currency_code or wallet_currency).upper(),
+                    "occurred_at": (
+                        latest_credit_event.occurred_at
+                        if latest_credit_event is not None
+                        else None
+                    ),
+                    "operation": "Credit utilise",
+                    "source": (
+                        str(latest_credit_event.source or "")
+                        if latest_credit_event is not None
+                        else "credit_line"
+                    ),
+                    "detail_path": f"/dashboard/admin/users/{user.user_id}",
+                }
+            )
+
+        total_debt_amount = sum(Decimal(str(entry["amount"])) for entry in debt_entries)
+        latest_entry = max(
+            (
+                entry for entry in debt_entries if entry.get("occurred_at") is not None
+            ),
+            key=lambda entry: entry["occurred_at"],
+            default=None,
+        )
+
+        items.append(
+            {
+                "user_id": str(user.user_id),
+                "full_name": user.full_name,
+                "email": user.email,
+                "paytag": user.paytag,
+                "username": user.username,
+                "wallet_currency": wallet_currency,
+                "debt_entries": debt_entries,
+                "debt_entries_count": len(debt_entries),
+                "total_debt_amount": float(total_debt_amount),
+                "last_debt_at": latest_entry["occurred_at"] if latest_entry else None,
+                "detail_path": f"/dashboard/admin/users/{user.user_id}",
+            }
+        )
+
+    items.sort(
+        key=lambda item: (
+            item.get("last_debt_at") is None,
+            -(item.get("total_debt_amount") or 0),
+            (item.get("full_name") or "").lower(),
+        )
+    )
+    return items
+
+
 @router.get("")
 async def list_credit_lines(
     q: Optional[str] = Query(None, description="Filtre nom/email"),
