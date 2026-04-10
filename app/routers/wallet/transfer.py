@@ -983,6 +983,7 @@ async def _external_transfer_core(
     override_context: dict | None = None,
     final_status_override: str | None = None,
     processed_by_user_id: str | None = None,
+    execute_notifications_inline: bool = False,
 ):
     ledger = LedgerService(db)
     await calculate_risk_score(db, current_user.user_id)
@@ -1376,7 +1377,10 @@ async def _external_transfer_core(
         "notify_client": True,
         "notify_recipient": transfer_status == "approved",
     }
-    background_tasks.add_task(_notify_external_transfer_task, **notification_kwargs)
+    if execute_notifications_inline:
+        await _notify_external_transfer_task(**notification_kwargs)
+    else:
+        background_tasks.add_task(_notify_external_transfer_task, **notification_kwargs)
     return payload_out if scoped_idempotency_key else _serialize_external_transfer_read(transfer)
 
 

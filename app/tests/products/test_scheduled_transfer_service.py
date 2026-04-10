@@ -160,7 +160,7 @@ def test_run_scheduled_transfer_item_executes_external_schedule(monkeypatch):
     assert item.remaining_runs == 1
 
 
-def test_execute_external_transfer_runs_background_tasks(monkeypatch):
+def test_execute_external_transfer_enables_inline_notifications(monkeypatch):
     sender = SimpleNamespace(user_id=uuid4(), email="client@example.com", paytag="@client")
     item = SimpleNamespace(
         amount=Decimal("10.00"),
@@ -175,16 +175,21 @@ def test_execute_external_transfer_runs_background_tasks(monkeypatch):
             },
         },
     )
-    task_executed = {"value": False}
+    inline_notifications = {"value": False}
 
-    async def fake_core(*, data, background_tasks, idempotency_key, db, current_user):
+    async def fake_core(
+        *,
+        data,
+        background_tasks,
+        idempotency_key,
+        db,
+        current_user,
+        execute_notifications_inline=False,
+    ):
         assert str(data.recipient_email) == "jean@example.com"
         assert current_user.user_id == sender.user_id
-
-        async def fake_task():
-            task_executed["value"] = True
-
-        background_tasks.add_task(fake_task)
+        assert execute_notifications_inline is True
+        inline_notifications["value"] = True
         return {"status": "approved", "reference_code": "EXT-TEST1234", "currency": "EUR"}
 
     from app.routers.wallet import transfer as transfer_module
@@ -194,7 +199,7 @@ def test_execute_external_transfer_runs_background_tasks(monkeypatch):
     result = asyncio.run(service._execute_external_transfer(_RunDb(), sender=sender, item=item))
 
     assert result["status"] == "approved"
-    assert task_executed["value"] is True
+    assert inline_notifications["value"] is True
 
 
 def test_advance_next_run_monthly_preserves_calendar_month():
