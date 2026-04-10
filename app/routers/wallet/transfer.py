@@ -1378,7 +1378,33 @@ async def _external_transfer_core(
         "notify_recipient": transfer_status == "approved",
     }
     if execute_notifications_inline:
-        await _notify_external_transfer_task(**notification_kwargs)
+        try:
+            await _notify_external_transfer(
+                db=db,
+                current_user=current_user,
+                transfer=transfer,
+                data=data,
+                amount=amount,
+                origin_currency=origin_currency,
+                destination_currency=destination_currency,
+                local_amount=local_amount,
+                credit_used=credit_used,
+                credit_available_after=credit_available_after,
+                requires_admin=requires_admin,
+                fx_rate=fx_rate,
+                override_context=override_context,
+                notify_agents=notification_kwargs["notify_agents"],
+                notify_telegram=notification_kwargs["notify_telegram"],
+                notify_client=notification_kwargs["notify_client"],
+                notify_recipient=notification_kwargs["notify_recipient"],
+            )
+        except Exception as exc:
+            logger.exception(
+                "Inline external transfer notification failed transfer_id=%s user_id=%s: %s",
+                transfer.transfer_id,
+                current_user.user_id,
+                exc,
+            )
     else:
         background_tasks.add_task(_notify_external_transfer_task, **notification_kwargs)
     return payload_out if scoped_idempotency_key else _serialize_external_transfer_read(transfer)
