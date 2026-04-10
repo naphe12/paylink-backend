@@ -83,6 +83,7 @@ class FinancialSummary(BaseModel):
     credit_limit: decimal.Decimal
     credit_used: decimal.Decimal
     credit_available: decimal.Decimal
+    has_active_credit_line: bool = False
     tontines_count: int
 
 
@@ -1381,11 +1382,14 @@ async def financial_summary(
         credit_used = decimal.Decimal(credit_line.used_amount or 0)
         credit_available = max(decimal.Decimal(credit_line.outstanding_amount or 0), decimal.Decimal(0))
         credit_currency = str(credit_line.currency_code or wallet_row.currency_code or "EUR").upper()
+        has_active_credit_line = True
     else:
         credit_limit = decimal.Decimal(getattr(current_user, "credit_limit", 0) or 0)
         credit_used = decimal.Decimal(getattr(current_user, "credit_used", 0) or 0)
-        credit_available = max(credit_limit - credit_used, decimal.Decimal(0))
+        # Without an active credit line, no usable credit capacity should be exposed.
+        credit_available = decimal.Decimal(0)
         credit_currency = str(wallet_row.currency_code or "EUR").upper()
+        has_active_credit_line = False
 
     tontines_count = await db.scalar(
         select(func.count())
@@ -1402,6 +1406,7 @@ async def financial_summary(
         credit_limit=credit_limit,
         credit_used=credit_used,
         credit_available=credit_available,
+        has_active_credit_line=has_active_credit_line,
         tontines_count=int(tontines_count or 0),
     )
 
@@ -1435,11 +1440,14 @@ async def financial_summary_admin(
         credit_used = decimal.Decimal(credit_line.used_amount or 0)
         credit_available = max(decimal.Decimal(credit_line.outstanding_amount or 0), decimal.Decimal(0))
         credit_currency = str(credit_line.currency_code or wallet_row.currency_code or "EUR").upper()
+        has_active_credit_line = True
     else:
         credit_limit = decimal.Decimal(getattr(user, "credit_limit", 0) or 0)
         credit_used = decimal.Decimal(getattr(user, "credit_used", 0) or 0)
-        credit_available = max(credit_limit - credit_used, decimal.Decimal(0))
+        # Without an active credit line, no usable credit capacity should be exposed.
+        credit_available = decimal.Decimal(0)
         credit_currency = str(wallet_row.currency_code or "EUR").upper()
+        has_active_credit_line = False
 
     tontines_count = await db.scalar(
         select(func.count())
@@ -1456,6 +1464,7 @@ async def financial_summary_admin(
         credit_limit=credit_limit,
         credit_used=credit_used,
         credit_available=credit_available,
+        has_active_credit_line=has_active_credit_line,
         tontines_count=int(tontines_count or 0),
     )
 
@@ -1474,6 +1483,7 @@ async def admin_financial_capacity_timeline(
     summary = await financial_summary_admin(user_id=user_id, db=db, current_admin=current_admin)
     wallet_currency = str(summary.wallet_currency or "EUR").upper()
     credit_currency = str(summary.credit_currency or wallet_currency).upper()
+    has_active_credit_line = bool(getattr(summary, "has_active_credit_line", False))
 
     wallet_rows = (
         await db.execute(
@@ -1544,6 +1554,20 @@ async def admin_financial_capacity_timeline(
             operation_amount = abs(credit_delta)
             operation_currency = credit_currency
 
+        display_credit_before = credit_before
+        display_credit_after = credit_after
+        # When no credit line exists, expose synthetic credit view as the inverse
+        # of a negative wallet balance so operators can see deficit magnitude.
+        if not has_active_credit_line:
+            if wallet_before < 0:
+                display_credit_before = abs(wallet_before)
+            else:
+                display_credit_before = decimal.Decimal("0")
+            if wallet_after < 0:
+                display_credit_after = abs(wallet_after)
+            else:
+                display_credit_after = decimal.Decimal("0")
+
         capacity_before, capacity_currency = _combined_capacity_value(
             wallet_before,
             wallet_currency,
@@ -1570,8 +1594,8 @@ async def admin_financial_capacity_timeline(
                 "wallet_after": float(wallet_after),
                 "credit_currency": credit_currency,
                 "credit_delta": float(credit_delta),
-                "credit_before": float(credit_before),
-                "credit_after": float(credit_after),
+                "credit_before": float(display_credit_before),
+                "credit_after": float(display_credit_after),
                 "capacity_currency": capacity_currency,
                 "capacity_before": float(capacity_before) if capacity_before is not None else None,
                 "capacity_after": float(capacity_after) if capacity_after is not None else None,
