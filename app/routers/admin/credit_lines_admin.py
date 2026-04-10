@@ -294,7 +294,11 @@ async def list_credit_debtors_breakdown(
                 }
             )
 
-        total_debt_amount = sum(Decimal(str(entry["amount"])) for entry in debt_entries)
+        entry_amounts = [Decimal(str(entry["amount"])) for entry in debt_entries]
+        if wallet_currency == "BIF":
+            total_debt_amount = sum(entry_amounts)
+        else:
+            total_debt_amount = max(entry_amounts, default=Decimal("0"))
         latest_entry = max(
             (
                 entry for entry in debt_entries if entry.get("occurred_at") is not None
