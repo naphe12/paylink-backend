@@ -138,6 +138,36 @@ def _extract_transfer_flags(metadata: dict | None) -> dict:
     }
 
 
+def _safe_decimal(value, default: Decimal = Decimal("0")) -> Decimal:
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return default
+
+
+def _build_transfer_funding_payload(*, transfer: ExternalTransfers, metadata: dict) -> dict:
+    amount = Decimal(transfer.amount or 0)
+    debited_amount = max(_safe_decimal(metadata.get("debited_amount")), Decimal("0"))
+    credit_used_amount = max(_safe_decimal(metadata.get("credit_used_amount")), Decimal("0"))
+    fee_amount = max(_safe_decimal(metadata.get("fee_amount")), Decimal("0"))
+    total_from_metadata = _safe_decimal(metadata.get("total_required"))
+
+    total_required = max(total_from_metadata, amount + fee_amount, debited_amount + credit_used_amount)
+    if fee_amount <= Decimal("0") and total_required > amount:
+        fee_amount = total_required - amount
+
+    return {
+        "currency": str(metadata.get("origin_currency") or transfer.currency or "EUR").upper(),
+        "amount": serialize_decimal(amount),
+        "fee_amount": serialize_decimal(fee_amount),
+        "total_required": serialize_decimal(total_required),
+        "debited_amount": serialize_decimal(debited_amount),
+        "credit_used_amount": serialize_decimal(credit_used_amount),
+        "funding_pending": bool(metadata.get("funding_pending")),
+        "required_credit_topup": serialize_decimal(max(_safe_decimal(metadata.get("required_credit_topup")), Decimal("0"))),
+    }
+
+
 def _is_recent_payment_note_candidate(created_at: datetime | None) -> bool:
     if created_at is None:
         return False
@@ -543,6 +573,7 @@ async def get_external_transfer_detail(
     if transfer is None:
         return {"detail": "Transfert introuvable."}
     metadata = dict(getattr(transfer, "metadata_", {}) or {})
+    funding = _build_transfer_funding_payload(transfer=transfer, metadata=metadata)
     return {
         "tx_id": str(getattr(tx, "tx_id", "") or "") or None,
         "transfer_id": str(transfer.transfer_id),
@@ -570,6 +601,7 @@ async def get_external_transfer_detail(
             "rate": serialize_decimal(transfer.rate) if transfer.rate is not None else None,
         },
         "flags": _extract_transfer_flags(metadata),
+        "funding": funding,
         "metadata": metadata,
         "created_at": transfer.created_at.isoformat() if transfer.created_at else None,
         "processed_at": transfer.processed_at.isoformat() if transfer.processed_at else None,
