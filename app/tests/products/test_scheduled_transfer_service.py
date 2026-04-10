@@ -318,6 +318,56 @@ def test_run_scheduled_transfer_item_handles_unexpected_exception(monkeypatch):
     assert "Erreur technique planification" in (result["last_result"] or "")
 
 
+def test_run_scheduled_transfer_item_surfaces_value_error_message(monkeypatch):
+    current_user = SimpleNamespace(user_id=uuid4(), email="client@example.com", paytag="@client")
+    item = SimpleNamespace(
+        schedule_id=uuid4(),
+        user_id=current_user.user_id,
+        receiver_user_id=None,
+        receiver_identifier="+25761234567",
+        amount=Decimal("12.00"),
+        currency_code="EUR",
+        frequency="weekly",
+        status="active",
+        note="Test",
+        next_run_at=datetime(2026, 4, 8, 8, 0, tzinfo=timezone.utc),
+        last_run_at=None,
+        last_result=None,
+        remaining_runs=None,
+        metadata_={
+            "transfer_type": "external",
+            "external_transfer": {
+                "partner_name": "Lumicash",
+                "country_destination": "Burundi",
+                "recipient_name": "Jean",
+                "recipient_phone": "+25761234567",
+            },
+            "failure_count": 0,
+            "max_consecutive_failures": 3,
+        },
+        created_at=datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc),
+    )
+
+    async def fake_execute_external_transfer(*args, **kwargs):
+        raise ValueError("Devise incoherente entre lignes comptables")
+
+    monkeypatch.setattr(service, "_execute_external_transfer", fake_execute_external_transfer)
+
+    result = asyncio.run(
+        service._run_scheduled_transfer_item(
+            _RunDb(),
+            current_user=current_user,
+            item=item,
+            raise_on_failure=False,
+        )
+    )
+
+    assert result["status"] == "failed"
+    assert result["failure_count"] == 1
+    assert result["last_result"] == "Devise incoherente entre lignes comptables"
+
+
 def test_update_scheduled_transfer_updates_programming(monkeypatch):
     current_user = SimpleNamespace(user_id=uuid4())
     schedule_id = uuid4()

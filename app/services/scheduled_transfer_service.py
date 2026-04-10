@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from calendar import monthrange
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -18,6 +19,8 @@ from app.models.wallets import Wallets
 from app.schemas.external_transfers import ExternalTransferCreate
 from app.services.ledger import LedgerLine, LedgerService
 from app.services.wallet_history import log_wallet_movement
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -390,7 +393,40 @@ async def _run_scheduled_transfer_item(
         if raise_on_failure:
             raise
         return _serialize_schedule(item)
+    except ValueError as exc:
+        logger.exception(
+            "Scheduled transfer execution failed with ValueError schedule_id=%s user_id=%s",
+            item.schedule_id,
+            item.user_id,
+        )
+        metadata = _schedule_metadata(item)
+        failure_count = _schedule_failure_count(item) + 1
+        max_consecutive_failures = _schedule_max_consecutive_failures(item)
+        metadata["failure_count"] = failure_count
+
+        message = str(exc).strip() or "Erreur de validation planification"
+        if failure_count >= max_consecutive_failures:
+            item.status = "paused"
+            item.last_result = f"{message} | Mise en pause auto apres {failure_count} echecs consecutifs."
+        else:
+            item.status = "failed"
+            item.last_result = message
+        item.metadata_ = metadata
+        item.updated_at = _utcnow()
+        await db.commit()
+        await db.refresh(item)
+        if raise_on_failure:
+            raise HTTPException(
+                status_code=500,
+                detail="Execution du transfert programme impossible pour le moment.",
+            ) from exc
+        return _serialize_schedule(item)
     except Exception as exc:
+        logger.exception(
+            "Scheduled transfer execution failed with unexpected error schedule_id=%s user_id=%s",
+            item.schedule_id,
+            item.user_id,
+        )
         metadata = _schedule_metadata(item)
         failure_count = _schedule_failure_count(item) + 1
         max_consecutive_failures = _schedule_max_consecutive_failures(item)

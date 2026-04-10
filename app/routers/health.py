@@ -3,6 +3,7 @@ import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,13 +23,23 @@ async def health():
 
 @router.get("/version")
 async def version():
-    return {
+    payload = {
         "ok": True,
         "env": settings.APP_ENV,
         "version": settings.APP_VERSION,
         "commit_sha": settings.APP_COMMIT_SHA,
         "build_time": settings.APP_BUILD_TIME,
     }
+    response = JSONResponse(payload)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
+@router.get("/app/version")
+async def app_version():
+    return await version()
 
 @router.get("/health/db")
 async def health_db(db: AsyncSession = Depends(get_db)):
