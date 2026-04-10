@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
-from app.dependencies.step_up import require_admin_step_up
 from app.models.credit_line_history import CreditLineHistory
 from app.models.credit_lines import CreditLines
 from app.models.credit_line_events import CreditLineEvents
@@ -439,7 +438,7 @@ class CreditLineCreate(BaseModel):
     currency_code: str = Field(default="EUR", min_length=3, max_length=3)
 
 
-@router.post("", dependencies=[Depends(require_admin_step_up("admin_write"))])
+@router.post("")
 async def create_credit_line(
     payload: CreditLineCreate,
     db: AsyncSession = Depends(get_db),
@@ -504,10 +503,7 @@ async def create_credit_line(
     return await get_credit_line_detail(credit_line.credit_line_id, db, admin)
 
 
-@router.post(
-    "/{credit_line_id}/increase",
-    dependencies=[Depends(require_admin_step_up("admin_write"))],
-)
+@router.post("/{credit_line_id}/increase")
 async def increase_credit_line(
     credit_line_id: UUID,
     payload: CreditLineIncrease,
@@ -565,10 +561,7 @@ class CreditLineDecrease(BaseModel):
     amount: Decimal = Field(..., gt=0)
 
 
-@router.post(
-    "/corrections/preview",
-    dependencies=[Depends(require_admin_step_up("admin_write"))],
-)
+@router.post("/corrections/preview")
 async def preview_credit_line_correction(
     payload: CreditLineCorrectionPreviewRequest,
     db: AsyncSession = Depends(get_db),
@@ -593,10 +586,7 @@ async def preview_credit_line_correction(
     return preview
 
 
-@router.post(
-    "/corrections/apply",
-    dependencies=[Depends(require_admin_step_up("admin_write"))],
-)
+@router.post("/corrections/apply")
 async def apply_credit_line_correction(
     payload: CreditLineCorrectionPreviewRequest,
     db: AsyncSession = Depends(get_db),
@@ -658,10 +648,7 @@ async def apply_credit_line_correction(
     }
 
 
-@router.post(
-    "/{credit_line_id}/decrease",
-    dependencies=[Depends(require_admin_step_up("admin_write"))],
-)
+@router.post("/{credit_line_id}/decrease")
 async def decrease_credit_line(
     credit_line_id: UUID,
     payload: CreditLineDecrease,
@@ -728,10 +715,7 @@ class CreditLineRepay(BaseModel):
     amount: Decimal = Field(..., gt=0)
 
 
-@router.post(
-    "/users/{user_id}/repay",
-    dependencies=[Depends(require_admin_step_up("admin_write"))],
-)
+@router.post("/users/{user_id}/repay")
 async def repay_client_debt(
     user_id: UUID,
     payload: CreditLineRepay,
@@ -840,10 +824,7 @@ async def repay_client_debt(
     }
 
 
-@router.post(
-    "/{credit_line_id}/repay",
-    dependencies=[Depends(require_admin_step_up("admin_write"))],
-)
+@router.post("/{credit_line_id}/repay")
 async def repay_credit_line(
     credit_line_id: UUID,
     payload: CreditLineRepay,
