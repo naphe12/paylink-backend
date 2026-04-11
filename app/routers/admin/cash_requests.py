@@ -416,7 +416,7 @@ async def admin_cash_deposit_direct(
     payload: AdminCashDepositCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    admin: Users = Depends(require_admin_step_up("cash_request_admin_deposit_direct")),
+    admin: Users = Depends(get_current_admin),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     note = (payload.note or "").strip() or _default_admin_cash_note("direct_deposit", WalletCashRequestType.DEPOSIT)
