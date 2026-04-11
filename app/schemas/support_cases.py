@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class SupportCaseCreate(BaseModel):
@@ -51,7 +51,11 @@ class SupportCaseMessageRead(BaseModel):
     message_type: str
     body: str
     is_visible_to_customer: bool
-    metadata_: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+    metadata_: dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
@@ -65,7 +69,11 @@ class SupportCaseEventRead(BaseModel):
     event_type: str
     before_status: str | None = None
     after_status: str | None = None
-    metadata_: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+    metadata_: dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
@@ -80,7 +88,11 @@ class SupportCaseAttachmentRead(BaseModel):
     file_size_bytes: int | None = None
     storage_key: str
     checksum_sha256: str | None = None
-    metadata_: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+    metadata_: dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
@@ -103,7 +115,11 @@ class SupportCaseRead(BaseModel):
     first_response_at: datetime | None = None
     resolved_at: datetime | None = None
     closed_at: datetime | None = None
-    metadata_: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+    metadata_: dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
     created_at: datetime
     updated_at: datetime
     customer_label: str | None = None

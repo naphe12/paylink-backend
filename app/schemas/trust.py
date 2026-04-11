@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class TrustBadgeRead(BaseModel):
@@ -22,7 +22,11 @@ class TrustEventRead(BaseModel):
     source_id: str | None = None
     score_delta: int
     reason_code: str
-    metadata_: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+    metadata_: dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
@@ -57,7 +61,11 @@ class TrustProfileRead(BaseModel):
     reputation_note: str | None = None
     auto_limit_applied_at: datetime | None = None
     last_computed_at: datetime | None = None
-    metadata_: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+    metadata_: dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
     created_at: datetime
     updated_at: datetime
     badges: list[TrustBadgeRead] = Field(default_factory=list)
