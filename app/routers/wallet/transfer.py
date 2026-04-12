@@ -9,7 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import case, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -104,6 +104,39 @@ def _primary_wallet_for_update_stmt(user_id):
         .limit(1)
         .with_for_update()
     )
+
+
+def _primary_wallet_stmt(user_id):
+    wallet_priority = case(
+        (Wallets.type == "personal", 0),
+        (Wallets.type == "consumer", 1),
+        else_=2,
+    )
+    return (
+        select(Wallets)
+        .where(Wallets.user_id == user_id)
+        .order_by(wallet_priority, Wallets.wallet_id.asc())
+        .limit(1)
+    )
+
+
+def _serialize_decimal(value: decimal.Decimal | None) -> float:
+    return float(value or 0)
+
+
+class ExternalTransferSimulationRequest(BaseModel):
+    amount: decimal.Decimal = Field(..., gt=decimal.Decimal("0"), le=decimal.Decimal("100000000"))
+    currency: str | None = Field(default=None, min_length=3, max_length=10)
+
+    @field_validator("currency")
+    @classmethod
+    def _normalize_currency(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        raw = str(value or "").strip().upper()
+        if not raw:
+            raise ValueError("currency invalide")
+        return raw
 
 
 def _derive_external_transfer_aml_reason_codes(
@@ -1447,6 +1480,143 @@ async def external_transfer(
         db=db,
         current_user=current_user,
     )
+
+
+@router.post("/external/simulate")
+async def simulate_external_transfer(
+    payload: ExternalTransferSimulationRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user),
+):
+    wallet = await db.scalar(_primary_wallet_stmt(current_user.user_id))
+    if not wallet:
+        return {
+            "possible": False,
+            "reasons": ["Portefeuille principal introuvable."],
+            "refusal_reasons": ["wallet_not_found"],
+        }
+
+    credit_line = await db.scalar(
+        select(CreditLines)
+        .where(
+            CreditLines.user_id == current_user.user_id,
+            CreditLines.deleted_at.is_(None),
+            CreditLines.status == "active",
+        )
+        .order_by(CreditLines.created_at.desc())
+    )
+
+    wallet_balance = decimal.Decimal(wallet.available or 0)
+    wallet_currency = str(wallet.currency_code or "EUR").upper()
+    credit_available = (
+        max(decimal.Decimal(credit_line.outstanding_amount or 0), decimal.Decimal("0"))
+        if credit_line
+        else max(
+            decimal.Decimal(current_user.credit_limit or 0)
+            - decimal.Decimal(current_user.credit_used or 0),
+            decimal.Decimal("0"),
+        )
+    )
+    credit_currency = (
+        str(credit_line.currency_code or wallet_currency).upper()
+        if credit_line
+        else wallet_currency
+    )
+    sender_currency = await _get_sender_country_currency(db, current_user, wallet_currency)
+    requested_currency = str(payload.currency or sender_currency).upper()
+    is_bif_wallet = wallet_currency == "BIF"
+    destination_currency = EXTERNAL_TRANSFER_SETTLEMENT_CURRENCY
+
+    if is_bif_wallet and destination_currency == "BIF":
+        fee_rate = decimal.Decimal("6.25")
+    else:
+        settings_row = await db.scalar(select(GeneralSettings).order_by(GeneralSettings.created_at.desc()))
+        fee_rate = decimal.Decimal(getattr(settings_row, "charge", 0) or 0)
+    fee_amount = (payload.amount * fee_rate / decimal.Decimal(100)).quantize(decimal.Decimal("0.01"))
+    total_required = payload.amount + fee_amount
+
+    fx_rate = await _resolve_fx_rate(db, sender_currency, destination_currency)
+    local_amount = (payload.amount * fx_rate).quantize(decimal.Decimal("0.01"))
+
+    approval_capacity = (
+        credit_available
+        if is_bif_wallet
+        else effective_external_transfer_capacity(wallet_balance, credit_available)
+    )
+    funding = compute_external_transfer_funding(
+        wallet_available=wallet_balance,
+        credit_available=credit_available,
+        total_required=total_required,
+        prefer_credit_only=is_bif_wallet,
+        mirror_wallet_with_credit=not is_bif_wallet,
+    )
+    capacity_after = (
+        funding["credit_available_after"]
+        if is_bif_wallet
+        else effective_external_transfer_capacity(
+            funding["wallet_after"],
+            funding["credit_available_after"],
+        )
+    )
+
+    reasons: list[str] = []
+    refusal_reasons: list[str] = []
+    if requested_currency != sender_currency:
+        refusal_reasons.append("currency_mismatch")
+        reasons.append(
+            f"Devise demandee {requested_currency} non compatible: ce client transfere en {sender_currency}."
+        )
+    if total_required > approval_capacity:
+        refusal_reasons.append("insufficient_capacity")
+        shortfall = (total_required - approval_capacity).quantize(decimal.Decimal("0.01"))
+        reasons.append(
+            f"Capacite insuffisante: il manque {shortfall} {wallet_currency} pour couvrir montant + frais."
+        )
+    if is_bif_wallet:
+        reasons.append("Regle wallet BIF: seule la ligne de credit finance le transfert externe.")
+    elif credit_available > decimal.Decimal("0"):
+        reasons.append("Regle standard: le wallet est consomme d'abord, puis la ligne de credit si necessaire.")
+    else:
+        reasons.append("Aucune ligne de credit active: seul le wallet est utilise.")
+
+    return {
+        "possible": len(refusal_reasons) == 0,
+        "reasons": reasons,
+        "refusal_reasons": refusal_reasons,
+        "user": {
+            "user_id": str(current_user.user_id),
+            "full_name": current_user.full_name,
+            "email": current_user.email,
+        },
+        "rule": {
+            "wallet_bif_credit_only": is_bif_wallet,
+            "sender_currency": sender_currency,
+            "requested_currency": requested_currency,
+            "destination_currency": destination_currency,
+        },
+        "amounts": {
+            "amount": _serialize_decimal(payload.amount),
+            "fee_rate": _serialize_decimal(fee_rate),
+            "fee_amount": _serialize_decimal(fee_amount),
+            "total_required": _serialize_decimal(total_required),
+            "fx_rate": _serialize_decimal(fx_rate),
+            "local_amount": _serialize_decimal(local_amount),
+        },
+        "before": {
+            "wallet_balance": _serialize_decimal(wallet_balance),
+            "wallet_currency": wallet_currency,
+            "credit_available": _serialize_decimal(credit_available),
+            "credit_currency": credit_currency,
+            "financial_capacity": _serialize_decimal(approval_capacity),
+        },
+        "after": {
+            "wallet_balance": _serialize_decimal(funding["wallet_after"]),
+            "wallet_currency": wallet_currency,
+            "credit_available": _serialize_decimal(funding["credit_available_after"]),
+            "credit_currency": credit_currency,
+            "financial_capacity": _serialize_decimal(capacity_after),
+        },
+    }
 
 
 async def _fund_pending_external_transfer_for_approval(
