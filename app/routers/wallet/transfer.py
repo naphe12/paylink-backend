@@ -1347,31 +1347,33 @@ async def _external_transfer_core(
             for key, value in override_context.items()
             if value is not None
         }
-    if debited > 0:
-        entries.append(
-            LedgerLine(
-                account=sender_account,
-                direction="debit",
-                amount=debited,
-                currency_code=wallet.currency_code,
-            )
-        )
-    if credit_used > 0:
-        credit_account = await ledger.ensure_system_account(
-            code=settings.LEDGER_ACCOUNT_CREDIT_LINE,
-            name="Ligne de credit clients",
-            currency_code=wallet.currency_code,
-            metadata={"kind": "system", "purpose": "credit_line"},
-        )
-        entries.append(
-            LedgerLine(
-                account=credit_account,
-                direction="debit",
-                amount=credit_used,
-                currency_code=wallet.currency_code,
-            )
-        )
     if not insufficient_funds_review_required:
+        if debited > 0:
+            entries.append(
+                LedgerLine(
+                    account=sender_account,
+                    direction="debit",
+                    amount=debited,
+                    currency_code=wallet.currency_code,
+                )
+            )
+        # Keep journal balanced even when funding logic mirrors wallet debit with credit exposure.
+        ledger_credit_component = max(decimal.Decimal("0"), total_required - debited)
+        if ledger_credit_component > 0:
+            credit_account = await ledger.ensure_system_account(
+                code=settings.LEDGER_ACCOUNT_CREDIT_LINE,
+                name="Ligne de credit clients",
+                currency_code=wallet.currency_code,
+                metadata={"kind": "system", "purpose": "credit_line"},
+            )
+            entries.append(
+                LedgerLine(
+                    account=credit_account,
+                    direction="debit",
+                    amount=ledger_credit_component,
+                    currency_code=wallet.currency_code,
+                )
+            )
         entries.append(
             LedgerLine(
                 account=cash_out_account,
@@ -1813,7 +1815,9 @@ async def _fund_pending_external_transfer_for_approval(
                 currency_code=wallet.currency_code,
             )
         )
-    if credit_used > 0:
+    # Keep journal balanced even when funding logic mirrors wallet debit with credit exposure.
+    ledger_credit_component = max(decimal.Decimal("0"), total_required - debited)
+    if ledger_credit_component > 0:
         credit_account = await ledger.ensure_system_account(
             code=settings.LEDGER_ACCOUNT_CREDIT_LINE,
             name="Ligne de credit clients",
@@ -1824,7 +1828,7 @@ async def _fund_pending_external_transfer_for_approval(
             LedgerLine(
                 account=credit_account,
                 direction="debit",
-                amount=credit_used,
+                amount=ledger_credit_component,
                 currency_code=wallet.currency_code,
             )
         )
