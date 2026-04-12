@@ -16,7 +16,14 @@ from app.services.admin_notifications import push_admin_notification
 ALERT_THRESHOLD = int(os.getenv("AML_SCORE_ALERT", 50))
 FREEZE_THRESHOLD = int(os.getenv("AML_SCORE_FREEZE", 80))
 
-async def update_risk_score(db: AsyncSession, user: Users, tx_amount: Decimal = None, channel: str = None):
+async def update_risk_score(
+    db: AsyncSession,
+    user: Users,
+    tx_amount: Decimal = None,
+    channel: str = None,
+    *,
+    autocommit: bool = True,
+):
     """
     Recalcule entièrement le score de risque et applique les conséquences.
     """
@@ -119,11 +126,13 @@ async def update_risk_score(db: AsyncSession, user: Users, tx_amount: Decimal = 
                     "channel": channel,
                 },
             )
-            await db.commit()
+            if autocommit:
+                await db.commit()
             return score
 
         user.status = "frozen"
-        await db.commit()
+        if autocommit:
+            await db.commit()
         await push_admin_notification(
             "aml_high",
             db=db,
@@ -137,7 +146,8 @@ async def update_risk_score(db: AsyncSession, user: Users, tx_amount: Decimal = 
                 "channel": channel,
             },
         )
-        await db.commit()
+        if autocommit:
+            await db.commit()
         raise HTTPException(423, "Compte gele pour enquete AML.")
 
     if score >= ALERT_THRESHOLD:
@@ -154,5 +164,6 @@ async def update_risk_score(db: AsyncSession, user: Users, tx_amount: Decimal = 
             },
         )
 
-    await db.commit()
+    if autocommit:
+        await db.commit()
     return score

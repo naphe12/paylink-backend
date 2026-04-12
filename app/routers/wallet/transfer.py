@@ -1175,7 +1175,13 @@ async def _external_transfer_core(
             ),
         )
 
-    risk = await update_risk_score(db, current_user, amount, channel="external")
+    risk = await update_risk_score(
+        db,
+        current_user,
+        amount,
+        channel="external",
+        autocommit=False,
+    )
     aml_manual_review_required = risk >= 60
     aml_reason_codes = _derive_external_transfer_aml_reason_codes(
         user=user_locked,
