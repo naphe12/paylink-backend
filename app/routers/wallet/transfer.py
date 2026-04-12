@@ -2,6 +2,7 @@ import decimal
 import logging
 import re
 import uuid
+from datetime import date
 from datetime import datetime
 from datetime import timedelta
 from uuid import UUID
@@ -89,6 +90,17 @@ EXTERNAL_TRANSFER_SETTLEMENT_CURRENCY = "BIF"
 
 def _is_valid_external_phone(value: str | None) -> bool:
     return bool(EXTERNAL_TRANSFER_PHONE_RE.fullmatch(str(value or "").strip()))
+
+
+def _refresh_user_limits_counters_inplace(user: Users) -> None:
+    """Reset daily/monthly counters when the period changed, without committing."""
+    today = date.today()
+    last_reset = getattr(user, "last_reset", None)
+    if last_reset != today:
+        user.used_daily = decimal.Decimal("0")
+    if last_reset is None or (last_reset.year, last_reset.month) != (today.year, today.month):
+        user.used_monthly = decimal.Decimal("0")
+    user.last_reset = today
 
 
 def _primary_wallet_for_update_stmt(user_id):
@@ -1078,6 +1090,7 @@ async def _external_transfer_core(
     )
     if not user_locked:
         raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    _refresh_user_limits_counters_inplace(user_locked)
     if user_locked.status == "frozen":
         raise HTTPException(423, "Votre compte est gele pour raisons de securite.")
     wallet = await db.scalar(_primary_wallet_for_update_stmt(current_user.user_id))
@@ -1143,10 +1156,24 @@ async def _external_transfer_core(
     monthly_limit = decimal.Decimal(user_locked.monthly_limit or 0)
 
     if daily_limit > 0 and amount + used_daily > daily_limit:
-        raise HTTPException(400, "Limite journaliere atteinte. Passez au niveau KYC superieur.")
+        raise HTTPException(
+            400,
+            (
+                "Limite journaliere atteinte. "
+                f"Montant demande: {amount}. Utilise aujourd'hui: {used_daily}. "
+                f"Plafond journalier: {daily_limit}."
+            ),
+        )
 
     if monthly_limit > 0 and amount + used_monthly > monthly_limit:
-        raise HTTPException(400, "Limite mensuelle atteinte.")
+        raise HTTPException(
+            400,
+            (
+                "Limite mensuelle atteinte. "
+                f"Montant demande: {amount}. Utilise ce mois: {used_monthly}. "
+                f"Plafond mensuel: {monthly_limit}."
+            ),
+        )
 
     risk = await update_risk_score(db, current_user, amount, channel="external")
     aml_manual_review_required = risk >= 60
@@ -1575,9 +1602,12 @@ async def simulate_external_transfer(
     if is_bif_wallet:
         reasons.append("Regle wallet BIF: seule la ligne de credit finance le transfert externe.")
     elif credit_available > decimal.Decimal("0"):
-        reasons.append("Regle standard: le wallet est consomme d'abord, puis la ligne de credit si necessaire.")
+        reasons.append(
+            "Regle standard: le wallet est debite du total (montant + frais), "
+            "et la ligne de credit couvre uniquement la part en wallet negatif."
+        )
     else:
-        reasons.append("Aucune ligne de credit active: seul le wallet est utilise.")
+        reasons.append("Aucune ligne de credit active: le wallet supporte integralement le total (montant + frais).")
 
     return {
         "possible": len(refusal_reasons) == 0,
@@ -1883,6 +1913,9 @@ async def approve_external_transfer(
     if not transfer:
         raise HTTPException(status_code=404, detail="Transfert introuvable")
 
+    pre_approval_metadata = dict(transfer.metadata_ or {})
+    was_funding_pending = bool(pre_approval_metadata.get("funding_pending"))
+
     await _fund_pending_external_transfer_for_approval(db, transfer=transfer)
 
     transition_external_transfer_status(transfer, "approved")
@@ -1941,7 +1974,7 @@ async def approve_external_transfer(
             override_context=transfer_metadata.get("override_context"),
             notify_agents=True,
             notify_telegram=True,
-            notify_client=False,
+            notify_client=was_funding_pending,
             notify_recipient=True,
         )
     return {"message": "Transfert valide"}
