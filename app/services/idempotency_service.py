@@ -6,6 +6,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
+
 
 def compute_request_hash(payload: dict[str, Any]) -> str:
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
@@ -55,6 +57,11 @@ async def acquire_idempotency(
     key: str,
     request_hash: str,
 ) -> IdempotencyAcquireResult:
+    stale_after_seconds = max(
+        10,
+        int(getattr(settings, "IDEMPOTENCY_IN_PROGRESS_TIMEOUT_SECONDS", 120) or 120),
+    )
+
     inserted = await db.execute(
         text(
             """
@@ -96,6 +103,33 @@ async def acquire_idempotency(
 
     if accepted:
         return IdempotencyAcquireResult(accepted=True)
+
+    stale_takeover = await db.execute(
+        text(
+            """
+            UPDATE paylink.idempotency_keys
+            SET request_hash = :request_hash,
+                response_status = NULL,
+                response_payload = NULL,
+                created_at = now()
+            WHERE client_key = :key
+              AND response_payload IS NULL
+              AND (
+                created_at IS NULL
+                OR created_at < (now() - make_interval(secs => :stale_after_seconds))
+              )
+            RETURNING key_id
+            """
+        ),
+        {
+            "key": key,
+            "request_hash": request_hash,
+            "stale_after_seconds": stale_after_seconds,
+        },
+    )
+    if stale_takeover.first() is not None:
+        return IdempotencyAcquireResult(accepted=True)
+
     return IdempotencyAcquireResult(accepted=False, in_progress=True)
 
 
