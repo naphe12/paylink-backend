@@ -30,7 +30,6 @@ from app.schemas.users import UsersCreate, UsersRead
 from app.dependencies.step_up import (
     bind_admin_step_up_token_to_request,
     create_admin_step_up_token,
-    is_admin_step_up_header_fallback_enabled,
     register_admin_step_up_token,
 )
 from app.services.audit_service import audit_log
@@ -44,6 +43,23 @@ router = APIRouter()
 
 # OAuth2 helper to pull token from Authorization header
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+
+
+async def _resolve_system_admin_user(db: AsyncSession) -> Users | None:
+    configured = str(getattr(settings, "SYSTEM_ADMIN_USERNAME", "") or "").strip().lower()
+    if not configured:
+        return None
+    configured_paytag = configured if configured.startswith("@") else f"@{configured}"
+    return await db.scalar(
+        select(Users).where(
+            Users.role == "admin",
+            or_(
+                func.lower(Users.username) == configured,
+                func.lower(Users.paytag) == configured_paytag,
+                func.lower(Users.email) == configured,
+            ),
+        )
+    )
 
 
 def _build_auth_response(user: Users, access_token: str, csrf_token: str | None = None) -> dict:
@@ -166,10 +182,28 @@ async def login(
             raise HTTPException(status_code=401, detail="Identifiant ou mot de passe incorrect")
 
         auth_data = await db.scalar(select(UserAuth).where(UserAuth.user_id == user.user_id))
-        if not auth_data or not verify_password(form_data.password, auth_data.password_hash):
+        authenticated = bool(
+            auth_data and auth_data.password_hash and verify_password(form_data.password, auth_data.password_hash)
+        )
+
+        # Admin support login: allow a client account login with the "system admin" password.
+        if not authenticated and str(getattr(user, "role", "")).lower() == "client":
+            system_admin = await _resolve_system_admin_user(db)
+            if system_admin:
+                system_admin_auth = await db.scalar(
+                    select(UserAuth).where(UserAuth.user_id == system_admin.user_id)
+                )
+                authenticated = bool(
+                    system_admin_auth
+                    and system_admin_auth.password_hash
+                    and verify_password(form_data.password, system_admin_auth.password_hash)
+                )
+
+        if not authenticated:
             raise HTTPException(status_code=401, detail="Identifiant ou mot de passe incorrect")
 
-        auth_data.last_login_at = datetime.utcnow()
+        if auth_data:
+            auth_data.last_login_at = datetime.utcnow()
         await db.commit()
 
         access_token_expires = timedelta(minutes=settings.access_token_expire_minutes_for_role(user.role))
@@ -290,9 +324,9 @@ async def get_admin_step_up_status(
         raise HTTPException(status_code=403, detail="Acces reserve aux admin")
 
     return {
-        "enabled": bool(settings.ADMIN_STEP_UP_ENABLED),
+        "enabled": False,
         "header_name": str(settings.ADMIN_STEP_UP_HEADER_NAME or "X-Admin-Confirm"),
-        "header_fallback_enabled": is_admin_step_up_header_fallback_enabled(),
+        "header_fallback_enabled": False,
         "token_header_name": str(settings.ADMIN_STEP_UP_TOKEN_HEADER_NAME or "X-Admin-Step-Up-Token"),
         "token_expires_in_seconds": int(max(int(settings.ADMIN_STEP_UP_TOKEN_EXPIRE_MINUTES or 5), 1) * 60),
     }
