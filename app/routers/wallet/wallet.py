@@ -1347,17 +1347,25 @@ async def get_wallet_ledger(
 
 @router.get("/limits")
 async def get_limits(current_user: Users = Depends(get_current_user)):
+    def _safe_float(value: object) -> float:
+        try:
+            if value is None:
+                return 0.0
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
     today = date.today()
     last_reset = getattr(current_user, "last_reset", None)
-    used_daily = float(current_user.used_daily or 0)
-    used_monthly = float(current_user.used_monthly or 0)
+    used_daily = _safe_float(getattr(current_user, "used_daily", 0))
+    used_monthly = _safe_float(getattr(current_user, "used_monthly", 0))
     if last_reset != today:
         used_daily = 0.0
     if last_reset is None or (last_reset.year, last_reset.month) != (today.year, today.month):
         used_monthly = 0.0
     return {
-        "daily_limit": float(current_user.daily_limit or 0),
-        "monthly_limit": float(current_user.monthly_limit or 0),
+        "daily_limit": _safe_float(getattr(current_user, "daily_limit", 0)),
+        "monthly_limit": _safe_float(getattr(current_user, "monthly_limit", 0)),
         "used_daily": used_daily,
         "used_monthly": used_monthly,
     }
