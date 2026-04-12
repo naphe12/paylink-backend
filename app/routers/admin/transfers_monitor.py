@@ -276,9 +276,12 @@ async def simulate_external_transfer(
     if is_bif_wallet:
         reasons.append("Regle wallet BIF: seule la ligne de credit finance le transfert externe.")
     elif credit_available > Decimal("0"):
-        reasons.append("Regle standard: le wallet est consomme d'abord, puis la ligne de credit si necessaire.")
+        reasons.append(
+            "Regle standard: le wallet est debite du total (montant + frais), "
+            "et la ligne de credit couvre uniquement la part en wallet negatif."
+        )
     else:
-        reasons.append("Aucune ligne de credit active: seul le wallet est utilise.")
+        reasons.append("Aucune ligne de credit active: le wallet supporte integralement le total (montant + frais).")
 
     possible = not refusal_reasons
 
