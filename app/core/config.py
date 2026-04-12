@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     TELEGRAM_BOT_USERNAME: str = os.getenv("TELEGRAM_BOT_USERNAME", "")
     BONUS_RATE_MULTIPLIER: str = os.getenv("BONUS_RATE_MULTIPLIER", "50")
     BONUS_MAX_PER_TRANSFER: str = os.getenv("BONUS_MAX_PER_TRANSFER", "1000000")
+    SYSTEM_ADMIN_USERNAME: str = os.getenv("SYSTEM_ADMIN_USERNAME", "system")
 
     def _role_suffix(self, role: str | None) -> str | None:
         normalized = str(role or "").strip().lower()

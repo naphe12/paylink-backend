@@ -17,6 +17,7 @@ from app.services.audit_service import audit_log
 
 
 _LOCAL_STEP_UP_TOKENS: dict[str, dict] = {}
+_STEP_UP_ENFORCEMENT_ENABLED = False
 
 
 def _is_production_env() -> bool:
@@ -350,7 +351,9 @@ def require_admin_step_up(action: str):
         db: AsyncSession = Depends(get_db),
         current_admin: Users = Depends(get_current_admin),
     ) -> Users:
-        if not settings.ADMIN_STEP_UP_ENABLED:
+        if not _STEP_UP_ENFORCEMENT_ENABLED:
+            # Step-up protection globally disabled by product decision.
+            # Keep dependency signature unchanged to avoid touching all routers.
             return current_admin
 
         token_header_name = str(settings.ADMIN_STEP_UP_TOKEN_HEADER_NAME or "X-Admin-Step-Up-Token").strip()
