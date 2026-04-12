@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from decimal import Decimal
 from app.models.agent_commissions import AgentCommissions
 from app.models.wallets import Wallets
+from app.models.wallet_transactions import WalletTransactions
 from app.models.external_transfers import ExternalTransfers
 from app.models.transactions import Transactions
 from app.models.agents import Agents
