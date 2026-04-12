@@ -1428,17 +1428,17 @@ async def _external_transfer_core(
         if credit_line and credit_used <= decimal.Decimal("0"):
             user_locked.credit_limit = decimal.Decimal(credit_line.initial_amount or 0)
             user_locked.credit_used = decimal.Decimal(credit_line.used_amount or 0)
-    await db.commit()
+    await db.flush()
     await db.refresh(transfer)
+    payload_out = _serialize_external_transfer_read(transfer)
     if scoped_idempotency_key:
-        payload_out = _serialize_external_transfer_read(transfer)
         await store_idempotency_response(
             db,
             key=scoped_idempotency_key,
             status_code=200,
             payload=payload_out,
         )
-        await db.commit()
+    await db.commit()
 
     notification_kwargs = {
         "current_user_id": str(current_user.user_id),
@@ -1489,7 +1489,7 @@ async def _external_transfer_core(
             )
     else:
         background_tasks.add_task(_notify_external_transfer_task, **notification_kwargs)
-    return payload_out if scoped_idempotency_key else _serialize_external_transfer_read(transfer)
+    return payload_out if scoped_idempotency_key else payload_out
 
 
 @router.post("/external", response_model=ExternalTransferRead)
