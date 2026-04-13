@@ -195,6 +195,79 @@ async def list_users(
     ]
 
 
+@router.get("/bonus-balances")
+async def list_users_bonus_balances(
+    q: str = "",
+    role: str = "client",
+    status: str = "",
+    min_bonus: float = 0,
+    limit: int = 200,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    safe_limit = max(1, min(int(limit or 200), 500))
+    safe_min_bonus = max(float(min_bonus or 0), 0)
+    search = f"%{q.lower()}%"
+    bonus_total_expr = func.coalesce(func.sum(func.coalesce(Wallets.bonus_balance, 0)), 0)
+
+    stmt = (
+        select(
+            Users.user_id,
+            Users.full_name,
+            Users.email,
+            Users.phone_e164,
+            Users.role,
+            Users.status,
+            Users.kyc_status,
+            bonus_total_expr.label("bonus_balance"),
+            func.count(Wallets.wallet_id).label("wallet_count"),
+        )
+        .select_from(Users)
+        .outerjoin(Wallets, Wallets.user_id == Users.user_id)
+        .where(
+            (Users.full_name.ilike(search))
+            | (Users.email.ilike(search))
+            | (Users.phone_e164.ilike(search))
+        )
+    )
+    if role:
+        stmt = stmt.where(Users.role == role)
+    if status:
+        stmt = stmt.where(Users.status == status)
+
+    stmt = (
+        stmt.group_by(
+            Users.user_id,
+            Users.full_name,
+            Users.email,
+            Users.phone_e164,
+            Users.role,
+            Users.status,
+            Users.kyc_status,
+        )
+        .having(bonus_total_expr >= safe_min_bonus)
+        .order_by(bonus_total_expr.desc(), Users.created_at.desc())
+        .limit(safe_limit)
+    )
+
+    rows = (await db.execute(stmt)).all()
+    return [
+        {
+            "user_id": str(r.user_id),
+            "full_name": r.full_name,
+            "email": r.email,
+            "phone": r.phone_e164,
+            "role": r.role,
+            "status": r.status,
+            "kyc_status": r.kyc_status,
+            "bonus_balance": float(r.bonus_balance or 0),
+            "bonus_currency": "BIF",
+            "wallet_count": int(r.wallet_count or 0),
+        }
+        for r in rows
+    ]
+
+
 @router.get("/{user_id}")
 async def get_user_detail(
     user_id: str,
