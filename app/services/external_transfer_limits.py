@@ -180,24 +180,27 @@ async def build_user_external_transfer_limit_analysis(
             select(ExternalTransfers.amount, ExternalTransfers.created_at)
             .where(
                 ExternalTransfers.user_id == user_id,
-                ExternalTransfers.created_at >= since_90,
                 ExternalTransfers.status.in_(SUCCESSFUL_EXTERNAL_TRANSFER_STATUSES),
             )
             .order_by(ExternalTransfers.created_at.desc())
         )
     ).all()
 
+    amounts_all: list[decimal.Decimal] = []
     amounts_90d: list[decimal.Decimal] = []
     amounts_30d: list[decimal.Decimal] = []
     for amount, created_at in rows:
         value = max(_safe_decimal(amount), DECIMAL_ZERO)
-        amounts_90d.append(value)
+        amounts_all.append(value)
+        if created_at and created_at >= since_90:
+            amounts_90d.append(value)
         if created_at and created_at >= since_30:
             amounts_30d.append(value)
 
-    stats = build_external_transfer_history_stats(amounts_30d, amounts_90d)
+    stats_recent = build_external_transfer_history_stats(amounts_30d, amounts_90d)
+    stats_all = build_external_transfer_history_stats(amounts_all, amounts_all)
     recommendation = build_external_transfer_limit_recommendation(
-        stats=stats,
+        stats=stats_all,
         current_daily_limit=current_daily_limit,
         current_monthly_limit=current_monthly_limit,
         kyc_tier=kyc_tier,
@@ -206,14 +209,20 @@ async def build_user_external_transfer_limit_analysis(
     return {
         "window_days": int(window_days or 90),
         "history": {
-            "count_30d": stats.count_30d,
-            "count_90d": stats.count_90d,
-            "total_30d": str(stats.total_30d),
-            "total_90d": str(stats.total_90d),
-            "avg_90d": str(stats.avg_90d),
-            "p50_90d": str(stats.p50_90d),
-            "p90_90d": str(stats.p90_90d),
-            "max_90d": str(stats.max_90d),
+            "count_30d": stats_recent.count_30d,
+            "count_90d": stats_recent.count_90d,
+            "total_30d": str(stats_recent.total_30d),
+            "total_90d": str(stats_recent.total_90d),
+            "avg_90d": str(stats_recent.avg_90d),
+            "p50_90d": str(stats_recent.p50_90d),
+            "p90_90d": str(stats_recent.p90_90d),
+            "max_90d": str(stats_recent.max_90d),
+            "count_all": stats_all.count_90d,
+            "total_all": str(stats_all.total_90d),
+            "avg_all": str(stats_all.avg_90d),
+            "p50_all": str(stats_all.p50_90d),
+            "p90_all": str(stats_all.p90_90d),
+            "max_all": str(stats_all.max_90d),
         },
         "recommendation": {
             "recommended_per_tx": str(recommendation["recommended_per_tx"]),
@@ -221,6 +230,7 @@ async def build_user_external_transfer_limit_analysis(
             "recommended_monthly_limit": str(recommendation["recommended_monthly_limit"]),
             "confidence": recommendation["confidence"],
             "confidence_score": recommendation["confidence_score"],
+            "scope": "all_history",
             "explanations": recommendation["explanations"],
         },
     }
