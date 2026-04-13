@@ -46,6 +46,10 @@ from app.services.external_transfer_capacity import (
     compute_external_transfer_funding,
     effective_external_transfer_capacity,
 )
+from app.services.external_transfer_limits import (
+    build_user_external_transfer_limit_analysis,
+    normalize_external_transfer_limit_policy,
+)
 
 
 def _normalize_optional_email(value: str | None) -> str | None:
@@ -1154,26 +1158,51 @@ async def _external_transfer_core(
     used_monthly = decimal.Decimal(user_locked.used_monthly or 0)
     daily_limit = decimal.Decimal(user_locked.daily_limit or 0)
     monthly_limit = decimal.Decimal(user_locked.monthly_limit or 0)
+    external_limit_policy = normalize_external_transfer_limit_policy(
+        getattr(settings, "EXTERNAL_TRANSFER_LIMIT_POLICY", None)
+    )
 
-    if daily_limit > 0 and amount + used_daily > daily_limit:
-        raise HTTPException(
-            400,
-            (
-                "Limite journaliere atteinte. "
-                f"Montant demande: {amount}. Utilise aujourd'hui: {used_daily}. "
-                f"Plafond journalier: {daily_limit}."
-            ),
-        )
+    limit_analysis = await build_user_external_transfer_limit_analysis(
+        db,
+        user_id=user_locked.user_id,
+        current_daily_limit=daily_limit,
+        current_monthly_limit=monthly_limit,
+        kyc_tier=int(getattr(user_locked, "kyc_tier", 0) or 0),
+        risk_score=int(getattr(user_locked, "risk_score", 0) or 0),
+    )
+    recommendation = (limit_analysis or {}).get("recommendation") or {}
+    recommended_daily = decimal.Decimal(str(recommendation.get("recommended_daily_limit") or "0"))
+    recommended_monthly = decimal.Decimal(str(recommendation.get("recommended_monthly_limit") or "0"))
+    effective_daily_limit = daily_limit
+    effective_monthly_limit = monthly_limit
+    if external_limit_policy == "dynamic":
+        if recommended_daily > 0:
+            effective_daily_limit = max(effective_daily_limit, recommended_daily)
+        if recommended_monthly > 0:
+            effective_monthly_limit = max(effective_monthly_limit, recommended_monthly)
 
-    if monthly_limit > 0 and amount + used_monthly > monthly_limit:
-        raise HTTPException(
-            400,
-            (
-                "Limite mensuelle atteinte. "
-                f"Montant demande: {amount}. Utilise ce mois: {used_monthly}. "
-                f"Plafond mensuel: {monthly_limit}."
-            ),
-        )
+    if external_limit_policy != "financial_capacity_only":
+        if effective_daily_limit > 0 and amount + used_daily > effective_daily_limit:
+            raise HTTPException(
+                400,
+                (
+                    "Limite journaliere atteinte sur transfert externe. "
+                    f"Montant demande: {amount}. Utilise aujourd'hui: {used_daily}. "
+                    f"Plafond journalier effectif: {effective_daily_limit}. "
+                    f"Politique active: {external_limit_policy}."
+                ),
+            )
+
+        if effective_monthly_limit > 0 and amount + used_monthly > effective_monthly_limit:
+            raise HTTPException(
+                400,
+                (
+                    "Limite mensuelle atteinte sur transfert externe. "
+                    f"Montant demande: {amount}. Utilise ce mois: {used_monthly}. "
+                    f"Plafond mensuel effectif: {effective_monthly_limit}. "
+                    f"Politique active: {external_limit_policy}."
+                ),
+            )
 
     risk = await update_risk_score(
         db,
@@ -1340,6 +1369,11 @@ async def _external_transfer_core(
         "payment_note_required": bool(
             credit_used > decimal.Decimal("0") or wallet_after < decimal.Decimal("0")
         ),
+        "external_transfer_limit_policy": external_limit_policy,
+        "effective_daily_limit": str(effective_daily_limit),
+        "effective_monthly_limit": str(effective_monthly_limit),
+        "recommended_daily_limit": str(recommended_daily),
+        "recommended_monthly_limit": str(recommended_monthly),
     }
     if override_context and isinstance(override_context, dict):
         metadata["override_context"] = {
@@ -1654,6 +1688,143 @@ async def simulate_external_transfer(
             "credit_currency": credit_currency,
             "financial_capacity": _serialize_decimal(capacity_after),
         },
+    }
+
+
+@router.get("/external/limits-insights")
+async def get_my_external_transfer_limits_insights(
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user),
+):
+    user = await db.scalar(select(Users).where(Users.user_id == current_user.user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    _refresh_user_limits_counters_inplace(user)
+
+    wallet = await db.scalar(_primary_wallet_stmt(current_user.user_id))
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Portefeuille principal introuvable")
+
+    wallet_balance = decimal.Decimal(wallet.available or 0)
+    wallet_currency = str(wallet.currency_code or "EUR").upper()
+    credit_line = await db.scalar(
+        select(CreditLines)
+        .where(
+            CreditLines.user_id == current_user.user_id,
+            CreditLines.deleted_at.is_(None),
+            CreditLines.status == "active",
+        )
+        .order_by(CreditLines.created_at.desc())
+    )
+    credit_available = (
+        max(decimal.Decimal(credit_line.outstanding_amount or 0), decimal.Decimal("0"))
+        if credit_line
+        else max(
+            decimal.Decimal(user.credit_limit or 0) - decimal.Decimal(user.credit_used or 0),
+            decimal.Decimal("0"),
+        )
+    )
+    financial_capacity = effective_external_transfer_capacity(wallet_balance, credit_available)
+
+    current_daily = decimal.Decimal(user.daily_limit or 0)
+    current_monthly = decimal.Decimal(user.monthly_limit or 0)
+    used_daily = decimal.Decimal(user.used_daily or 0)
+    used_monthly = decimal.Decimal(user.used_monthly or 0)
+    policy = normalize_external_transfer_limit_policy(
+        getattr(settings, "EXTERNAL_TRANSFER_LIMIT_POLICY", None)
+    )
+    analysis = await build_user_external_transfer_limit_analysis(
+        db,
+        user_id=user.user_id,
+        current_daily_limit=current_daily,
+        current_monthly_limit=current_monthly,
+        kyc_tier=int(getattr(user, "kyc_tier", 0) or 0),
+        risk_score=int(getattr(user, "risk_score", 0) or 0),
+    )
+    recommendation = (analysis or {}).get("recommendation") or {}
+    recommended_daily = decimal.Decimal(str(recommendation.get("recommended_daily_limit") or "0"))
+    recommended_monthly = decimal.Decimal(str(recommendation.get("recommended_monthly_limit") or "0"))
+
+    effective_daily = current_daily
+    effective_monthly = current_monthly
+    if policy == "dynamic":
+        if recommended_daily > 0:
+            effective_daily = max(effective_daily, recommended_daily)
+        if recommended_monthly > 0:
+            effective_monthly = max(effective_monthly, recommended_monthly)
+    if effective_monthly > 0:
+        effective_monthly = max(effective_monthly, effective_daily)
+
+    blockers: list[str] = []
+    next_steps: list[str] = []
+    if str(getattr(user, "status", "")).lower() == "frozen":
+        blockers.append("account_frozen")
+        next_steps.append("Contacte le support pour verifier la securite du compte.")
+    if bool(getattr(user, "external_transfers_blocked", False)):
+        blockers.append("external_transfers_blocked")
+        next_steps.append("Demande la levee de blocage transfert externe au support.")
+    if str(getattr(user, "kyc_status", "unverified")).lower() != "verified":
+        blockers.append("kyc_not_verified")
+        next_steps.append("Complete la verification KYC pour debloquer les transferts externes.")
+    if int(getattr(user, "risk_score", 0) or 0) >= AML_AUTO_FREEZE_THRESHOLD:
+        blockers.append("risk_too_high")
+        next_steps.append("Un controle de conformite est necessaire avant de reprendre les transferts.")
+    if financial_capacity <= decimal.Decimal("0"):
+        blockers.append("insufficient_financial_capacity")
+        next_steps.append("Ajoute du solde ou reduis le montant du prochain transfert.")
+
+    blocked_now = len(blockers) > 0
+    if blocked_now:
+        primary_blocker = blockers[0]
+        simple_message = "Transfert externe temporairement bloque. Consulte la raison principale ci-dessous."
+    elif policy == "financial_capacity_only":
+        primary_blocker = "none"
+        simple_message = "Aucun blocage de limite. Seule ta capacite financiere sera verifiee."
+    else:
+        primary_blocker = "none"
+        simple_message = "Aucun blocage en cours. Tes limites sont adaptees selon ton historique."
+
+    remaining_daily = None
+    remaining_monthly = None
+    if policy != "financial_capacity_only":
+        remaining_daily = max(effective_daily - used_daily, decimal.Decimal("0"))
+        remaining_monthly = max(effective_monthly - used_monthly, decimal.Decimal("0"))
+
+    # De-duplicate while keeping order.
+    next_steps = list(dict.fromkeys(next_steps))
+    if not next_steps:
+        next_steps.append("Tu peux continuer les transferts externes normalement.")
+
+    return {
+        "policy_mode": policy,
+        "blocked_now": blocked_now,
+        "primary_blocker": primary_blocker,
+        "blocked_reasons": blockers,
+        "simple_message": simple_message,
+        "next_steps": next_steps,
+        "financial_capacity": {
+            "wallet_balance": _serialize_decimal(wallet_balance),
+            "credit_available": _serialize_decimal(credit_available),
+            "capacity": _serialize_decimal(financial_capacity),
+            "currency": wallet_currency,
+        },
+        "limits": {
+            "current_daily_limit": _serialize_decimal(current_daily),
+            "current_monthly_limit": _serialize_decimal(current_monthly),
+            "effective_daily_limit": _serialize_decimal(effective_daily),
+            "effective_monthly_limit": _serialize_decimal(effective_monthly),
+            "used_daily": _serialize_decimal(used_daily),
+            "used_monthly": _serialize_decimal(used_monthly),
+            "remaining_daily": _serialize_decimal(remaining_daily) if remaining_daily is not None else None,
+            "remaining_monthly": _serialize_decimal(remaining_monthly) if remaining_monthly is not None else None,
+            "recommended_daily_limit": _serialize_decimal(recommended_daily),
+            "recommended_monthly_limit": _serialize_decimal(recommended_monthly),
+            "recommended_per_tx": _serialize_decimal(decimal.Decimal(str(recommendation.get("recommended_per_tx") or "0"))),
+            "recommendation_confidence": recommendation.get("confidence"),
+            "recommendation_confidence_score": recommendation.get("confidence_score"),
+            "recommendation_explanations": recommendation.get("explanations") or [],
+        },
+        "history": (analysis or {}).get("history") or {},
     }
 
 
