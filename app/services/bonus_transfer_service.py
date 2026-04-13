@@ -292,6 +292,8 @@ async def list_bonus_history_payload(db: AsyncSession, *, user: Users) -> list[d
             "received": "Bonus recu",
             "earned": "Bonus gagne",
             "used": "Bonus utilise",
+            "admin_credit": "Correction bonus admin (credit)",
+            "admin_debit": "Correction bonus admin (debit)",
         }.get(str(row.source or "").lower(), str(row.source or "").strip() or "Bonus")
         counterpart = counterpart_map.get(row.reference_id) if row.reference_id else None
         items.append(
