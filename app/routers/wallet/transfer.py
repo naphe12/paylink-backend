@@ -1822,6 +1822,7 @@ async def get_my_external_transfer_limits_insights(
             "recommended_per_tx": _serialize_decimal(decimal.Decimal(str(recommendation.get("recommended_per_tx") or "0"))),
             "recommendation_confidence": recommendation.get("confidence"),
             "recommendation_confidence_score": recommendation.get("confidence_score"),
+            "recommendation_calculation_inputs": recommendation.get("calculation_inputs") or {},
             "recommendation_explanations": recommendation.get("explanations") or [],
         },
         "history": (analysis or {}).get("history") or {},

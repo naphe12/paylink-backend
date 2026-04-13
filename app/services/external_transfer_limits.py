@@ -5,10 +5,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.external_transfers import ExternalTransfers
+from app.models.wallets import Wallets
+from app.routers.ref.exchange import _resolve_exchange_rate
 
 
 SUCCESSFUL_EXTERNAL_TRANSFER_STATUSES = {"approved", "completed", "succeeded"}
@@ -56,6 +58,26 @@ def _as_utc_aware(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+async def _get_user_reference_currency(db: AsyncSession, *, user_id) -> str:
+    wallet_priority = case(
+        (Wallets.type == "personal", 0),
+        (Wallets.type == "consumer", 1),
+        else_=2,
+    )
+    wallet = await db.scalar(
+        select(Wallets)
+        .where(Wallets.user_id == user_id)
+        .order_by(wallet_priority, Wallets.wallet_id.asc())
+        .limit(1)
+    )
+    return str(getattr(wallet, "currency_code", None) or "EUR").upper()
+
+
+def _extract_transfer_currency(transfer_currency, metadata) -> str:
+    meta = dict(metadata or {})
+    return str(meta.get("origin_currency") or transfer_currency or "EUR").upper()
 
 
 @dataclass
@@ -106,20 +128,6 @@ def build_external_transfer_limit_recommendation(
     tier = max(int(kyc_tier or 0), 0)
     risk = max(int(risk_score or 0), 0)
 
-    kyc_factor = {
-        0: decimal.Decimal("0.55"),
-        1: decimal.Decimal("0.80"),
-        2: decimal.Decimal("1.00"),
-        3: decimal.Decimal("1.15"),
-    }.get(min(tier, 3), decimal.Decimal("1.00"))
-
-    if risk >= 80:
-        risk_factor = decimal.Decimal("0.70")
-    elif risk >= 60:
-        risk_factor = decimal.Decimal("0.85")
-    else:
-        risk_factor = decimal.Decimal("1.00")
-
     if stats.count_90d == 0:
         seeded_daily = current_daily if current_daily > 0 else decimal.Decimal("100")
         seeded_monthly = current_monthly if current_monthly > 0 else seeded_daily * decimal.Decimal("20")
@@ -135,36 +143,39 @@ def build_external_transfer_limit_recommendation(
             ],
         }
 
-    behavior_anchor = max(
-        stats.p90_90d,
-        stats.p50_90d * decimal.Decimal("1.35"),
-        stats.avg_90d * decimal.Decimal("1.25"),
-    )
-    recommended_per_tx = _quantize_2(behavior_anchor * kyc_factor * risk_factor)
-    recommended_per_tx = max(recommended_per_tx, decimal.Decimal("5.00"))
-
-    cadence_multiplier = decimal.Decimal(str(min(max(stats.count_30d, 2), 12)))
-    recommended_daily = _quantize_2(recommended_per_tx * cadence_multiplier)
-    if stats.total_30d > DECIMAL_ZERO:
-        recommended_daily = max(recommended_daily, _quantize_2((stats.total_30d / decimal.Decimal("30")) * decimal.Decimal("3.0")))
-    recommended_monthly = _quantize_2(max(recommended_daily * decimal.Decimal("12"), stats.total_90d * decimal.Decimal("0.5")))
+    # Requested product rule:
+    # - daily limit = historical average transfer amount
+    # - monthly limit = daily limit * 30
+    avg_per_transfer = _quantize_2(stats.avg_90d)
+    recommended_per_tx = max(avg_per_transfer, decimal.Decimal("5.00"))
+    recommended_daily = recommended_per_tx
+    recommended_monthly = _quantize_2(recommended_daily * decimal.Decimal("30"))
 
     confidence_score = min(100, (stats.count_90d * 5) + (20 if stats.count_30d >= 6 else 0))
     confidence = "high" if confidence_score >= 70 else "medium" if confidence_score >= 45 else "low"
 
     explanations: list[str] = [
-        f"Base historique 90 jours: p90={stats.p90_90d}, moyenne={stats.avg_90d}.",
-        f"Ajustement profil: kyc_tier={tier}, risk_score={risk}.",
+        (
+            "Base tout historique: "
+            f"total={stats.total_90d}, nombre_transferts={stats.count_90d}, "
+            f"moyenne_par_transfert={avg_per_transfer}."
+        ),
+        "Regle active: limite_jour = moyenne historique, limite_mois = limite_jour x 30.",
+        f"Contexte profil (informatif): kyc_tier={tier}, risk_score={risk}.",
     ]
-    if risk >= 60:
-        explanations.append("Reduction prudente appliquee car risque eleve.")
 
     return {
         "recommended_per_tx": recommended_per_tx,
-        "recommended_daily_limit": max(recommended_daily, recommended_per_tx),
-        "recommended_monthly_limit": max(recommended_monthly, recommended_daily),
+        "recommended_daily_limit": max(recommended_daily, decimal.Decimal("5.00")),
+        "recommended_monthly_limit": max(recommended_monthly, decimal.Decimal("150.00")),
         "confidence": confidence,
         "confidence_score": confidence_score,
+        "calculation_inputs": {
+            "total_all": str(stats.total_90d),
+            "count_all": stats.count_90d,
+            "avg_per_transfer": str(avg_per_transfer),
+            "formula": "avg_per_transfer = total_all / count_all; daily = avg_per_transfer; monthly = daily * 30",
+        },
         "explanations": explanations,
     }
 
@@ -182,10 +193,17 @@ async def build_user_external_transfer_limit_analysis(
     now = datetime.now(timezone.utc)
     since_90 = now - timedelta(days=max(int(window_days or 90), 1))
     since_30 = now - timedelta(days=30)
+    reference_currency = await _get_user_reference_currency(db, user_id=user_id)
 
     rows = (
         await db.execute(
-            select(ExternalTransfers.amount, ExternalTransfers.created_at)
+            select(
+                ExternalTransfers.amount,
+                ExternalTransfers.created_at,
+                ExternalTransfers.currency,
+                ExternalTransfers.local_amount,
+                ExternalTransfers.metadata_,
+            )
             .where(
                 ExternalTransfers.user_id == user_id,
                 ExternalTransfers.status.in_(SUCCESSFUL_EXTERNAL_TRANSFER_STATUSES),
@@ -194,11 +212,38 @@ async def build_user_external_transfer_limit_analysis(
         )
     ).all()
 
+    fx_cache: dict[tuple[str, str], decimal.Decimal | None] = {}
+    converted_count = 0
+    unconverted_count = 0
     amounts_all: list[decimal.Decimal] = []
     amounts_90d: list[decimal.Decimal] = []
     amounts_30d: list[decimal.Decimal] = []
-    for amount, created_at in rows:
-        value = max(_safe_decimal(amount), DECIMAL_ZERO)
+    for amount, created_at, transfer_currency, local_amount, metadata in rows:
+        raw_amount = max(_safe_decimal(amount), DECIMAL_ZERO)
+        source_currency = _extract_transfer_currency(transfer_currency, metadata)
+        normalized_value = raw_amount
+        if source_currency != reference_currency:
+            pair = (source_currency, reference_currency)
+            if pair not in fx_cache:
+                rate, _ = await _resolve_exchange_rate(db, source_currency, reference_currency)
+                fx_cache[pair] = _safe_decimal(rate) if rate else None
+            rate_used = fx_cache.get(pair)
+            if rate_used and rate_used > DECIMAL_ZERO:
+                normalized_value = _quantize_2(raw_amount * rate_used)
+                converted_count += 1
+            else:
+                meta = dict(metadata or {})
+                destination_currency = str(meta.get("destination_currency") or "BIF").upper()
+                if destination_currency == reference_currency and local_amount is not None:
+                    normalized_value = max(_safe_decimal(local_amount), DECIMAL_ZERO)
+                    converted_count += 1
+                else:
+                    # Keep backward-compatible fallback when no FX path exists.
+                    unconverted_count += 1
+        else:
+            converted_count += 1
+
+        value = normalized_value
         amounts_all.append(value)
         created_at_utc = _as_utc_aware(created_at)
         if created_at_utc and created_at_utc >= since_90:
@@ -217,6 +262,11 @@ async def build_user_external_transfer_limit_analysis(
     )
     return {
         "window_days": int(window_days or 90),
+        "aggregation_currency": reference_currency,
+        "conversion": {
+            "converted_count": converted_count,
+            "unconverted_count": unconverted_count,
+        },
         "history": {
             "count_30d": stats_recent.count_30d,
             "count_90d": stats_recent.count_90d,
@@ -240,6 +290,7 @@ async def build_user_external_transfer_limit_analysis(
             "confidence": recommendation["confidence"],
             "confidence_score": recommendation["confidence_score"],
             "scope": "all_history",
+            "calculation_inputs": recommendation.get("calculation_inputs") or {},
             "explanations": recommendation["explanations"],
         },
     }
