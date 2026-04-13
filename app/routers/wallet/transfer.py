@@ -2072,6 +2072,8 @@ async def _fund_pending_external_transfer_for_approval(
             )
         )
 
+    # Keep daily/monthly counters aligned with the current period at approval time.
+    _refresh_user_limits_counters_inplace(user)
     user.used_daily = decimal.Decimal(user.used_daily or 0) + decimal.Decimal(transfer.amount or 0)
     user.used_monthly = decimal.Decimal(user.used_monthly or 0) + decimal.Decimal(transfer.amount or 0)
     txn.status = map_external_transfer_to_transaction_status(transfer.status)
