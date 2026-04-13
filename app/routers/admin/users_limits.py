@@ -60,6 +60,16 @@ async def get_external_transfer_limits_recommendation(
     return {
         "user_id": str(user.user_id),
         "policy_mode": effective_policy,
+        "users_table_values": {
+            "daily_limit": str(Decimal(str(getattr(user, "daily_limit", 0) or 0))),
+            "monthly_limit": str(Decimal(str(getattr(user, "monthly_limit", 0) or 0))),
+            "used_daily": str(Decimal(str(getattr(user, "used_daily", 0) or 0))),
+            "used_monthly": str(Decimal(str(getattr(user, "used_monthly", 0) or 0))),
+            "last_reset": str(getattr(user, "last_reset", "") or ""),
+            "kyc_status": str(getattr(user, "kyc_status", "") or ""),
+            "kyc_tier": int(getattr(user, "kyc_tier", 0) or 0),
+            "risk_score": int(getattr(user, "risk_score", 0) or 0),
+        },
         "current_limits": {
             "daily_limit": str(current_daily),
             "monthly_limit": str(current_monthly),
