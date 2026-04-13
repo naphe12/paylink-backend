@@ -1,4 +1,7 @@
 # app/routers/admin_users.py
+from decimal import Decimal
+from uuid import uuid4
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import case, exists, func, select, update
@@ -8,6 +11,7 @@ from app.core.database import get_db
 from app.dependencies.auth import get_current_admin
 from app.dependencies.step_up import get_admin_step_up_method, require_admin_step_up
 from app.models.agent_transactions import AgentTransactions
+from app.models.bonus_history import BonusHistory
 from app.models.external_transfers import ExternalTransfers
 from app.models.users import Users
 from app.models.wallet_transactions import WalletTransactions
@@ -30,12 +34,87 @@ class ResolveAmlLockBody(BaseModel):
     reset_risk_score: bool = True
 
 
+class BonusCorrectionPreviewRequest(BaseModel):
+    user_id: str
+    scenario: str
+    amount: Decimal
+    reason: str
+    note: str | None = None
+
+
 def _user_admin_state(user: Users) -> dict:
     return {
         "status": str(getattr(user, "status", "") or ""),
         "external_transfers_blocked": bool(getattr(user, "external_transfers_blocked", False)),
         "risk_score": int(getattr(user, "risk_score", 0) or 0),
         "kyc_tier": int(getattr(user, "kyc_tier", 0) or 0),
+    }
+
+
+def _wallet_priority_case():
+    return case(
+        (Wallets.type == "personal", 0),
+        (Wallets.type == "consumer", 1),
+        else_=2,
+    )
+
+
+def _serialize_decimal(value: Decimal | None) -> float:
+    return float(value or 0)
+
+
+async def _get_primary_wallet(db: AsyncSession, user_id) -> Wallets | None:
+    return await db.scalar(
+        select(Wallets)
+        .where(Wallets.user_id == user_id)
+        .order_by(_wallet_priority_case(), Wallets.wallet_id.asc())
+        .limit(1)
+    )
+
+
+def _build_bonus_correction_preview(wallet: Wallets, payload: BonusCorrectionPreviewRequest) -> dict:
+    scenario = str(payload.scenario or "").strip().lower()
+    amount = Decimal(str(payload.amount or 0)).quantize(Decimal("0.01"))
+    if amount <= Decimal("0"):
+        raise HTTPException(status_code=400, detail="Montant bonus invalide.")
+    reason = str(payload.reason or "").strip()
+    if len(reason) < 3:
+        raise HTTPException(status_code=400, detail="Motif obligatoire (min 3 caracteres).")
+
+    bonus_before = Decimal(str(getattr(wallet, "bonus_balance", 0) or 0))
+    if scenario == "credit_adjustment":
+        signed_delta = amount
+        source = "admin_credit"
+        direction = "credit"
+    elif scenario == "debit_adjustment":
+        if bonus_before < amount:
+            raise HTTPException(status_code=400, detail="Solde bonus insuffisant pour debiter.")
+        signed_delta = -amount
+        source = "admin_debit"
+        direction = "debit"
+    else:
+        raise HTTPException(status_code=400, detail="Scenario non supporte.")
+
+    bonus_after = bonus_before + signed_delta
+    warnings: list[str] = []
+    if bonus_after < Decimal("0"):
+        warnings.append("Le solde bonus deviendra negatif.")
+
+    return {
+        "user_id": str(wallet.user_id) if wallet.user_id else None,
+        "wallet_id": str(wallet.wallet_id),
+        "scenario": scenario,
+        "source": source,
+        "direction": direction,
+        "amount": _serialize_decimal(amount),
+        "signed_delta": _serialize_decimal(signed_delta),
+        "bonus_before": _serialize_decimal(bonus_before),
+        "bonus_after": _serialize_decimal(bonus_after),
+        "currency_code": "BIF",
+        "reason": reason,
+        "note": payload.note,
+        "warnings": warnings,
+        "can_apply": True,
     }
 
 
@@ -304,6 +383,97 @@ async def get_user_detail(
         "created_at": getattr(user, "created_at", None),
         "updated_at": getattr(user, "updated_at", None),
         "external_transfers_blocked": getattr(user, "external_transfers_blocked", False),
+    }
+
+
+@router.get("/{user_id}/bonus-balance")
+async def get_user_bonus_balance(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    user = await db.scalar(select(Users).where(Users.user_id == user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    wallet = await _get_primary_wallet(db, user.user_id)
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Wallet introuvable")
+    return {
+        "user_id": str(user.user_id),
+        "full_name": user.full_name,
+        "email": user.email,
+        "phone_e164": user.phone_e164,
+        "bonus_balance": _serialize_decimal(Decimal(str(getattr(wallet, "bonus_balance", 0) or 0))),
+        "currency_code": "BIF",
+        "wallet_id": str(wallet.wallet_id),
+        "wallet_type": str(getattr(wallet, "type", "") or ""),
+    }
+
+
+@router.post("/bonus-corrections/preview")
+async def preview_bonus_correction(
+    payload: BonusCorrectionPreviewRequest,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    user = await db.scalar(select(Users).where(Users.user_id == payload.user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    wallet = await _get_primary_wallet(db, user.user_id)
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Wallet introuvable")
+    preview = _build_bonus_correction_preview(wallet, payload)
+    preview.update(
+        {
+            "full_name": user.full_name,
+            "email": user.email,
+            "wallet_type": str(getattr(wallet, "type", "") or ""),
+        }
+    )
+    return preview
+
+
+@router.post("/bonus-corrections/apply")
+async def apply_bonus_correction(
+    payload: BonusCorrectionPreviewRequest,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    user = await db.scalar(select(Users).where(Users.user_id == payload.user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    wallet = await db.scalar(
+        select(Wallets)
+        .where(Wallets.user_id == user.user_id)
+        .order_by(_wallet_priority_case(), Wallets.wallet_id.asc())
+        .limit(1)
+        .with_for_update()
+    )
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Wallet introuvable")
+
+    preview = _build_bonus_correction_preview(wallet, payload)
+    signed_delta = Decimal(str(preview["signed_delta"] or 0))
+    wallet.bonus_balance = Decimal(str(getattr(wallet, "bonus_balance", 0) or 0)) + signed_delta
+
+    reference = uuid4()
+    history = BonusHistory(
+        user_id=user.user_id,
+        amount_bif=Decimal(str(preview["amount"] or 0)),
+        source=preview["source"],
+        reference_id=reference,
+    )
+    db.add(history)
+    await db.commit()
+    await db.refresh(wallet)
+
+    return {
+        "message": "Correction bonus appliquee.",
+        "reference_id": str(reference),
+        "preview": preview,
+        "bonus_balance": _serialize_decimal(Decimal(str(getattr(wallet, "bonus_balance", 0) or 0))),
+        "currency_code": "BIF",
+        "user_id": str(user.user_id),
     }
 
 
