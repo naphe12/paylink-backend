@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import decimal
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 from sqlalchemy import select
@@ -48,6 +48,14 @@ def _percentile(values: list[decimal.Decimal], p: float) -> decimal.Decimal:
 
 def _quantize_2(value: decimal.Decimal) -> decimal.Decimal:
     return max(value, DECIMAL_ZERO).quantize(decimal.Decimal("0.01"))
+
+
+def _as_utc_aware(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 @dataclass
@@ -171,7 +179,7 @@ async def build_user_external_transfer_limit_analysis(
     risk_score: int,
     window_days: int = 90,
 ) -> dict:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     since_90 = now - timedelta(days=max(int(window_days or 90), 1))
     since_30 = now - timedelta(days=30)
 
@@ -192,9 +200,10 @@ async def build_user_external_transfer_limit_analysis(
     for amount, created_at in rows:
         value = max(_safe_decimal(amount), DECIMAL_ZERO)
         amounts_all.append(value)
-        if created_at and created_at >= since_90:
+        created_at_utc = _as_utc_aware(created_at)
+        if created_at_utc and created_at_utc >= since_90:
             amounts_90d.append(value)
-        if created_at and created_at >= since_30:
+        if created_at_utc and created_at_utc >= since_30:
             amounts_30d.append(value)
 
     stats_recent = build_external_transfer_history_stats(amounts_30d, amounts_90d)
