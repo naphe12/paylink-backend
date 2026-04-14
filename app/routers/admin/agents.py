@@ -144,6 +144,7 @@ async def list_agents(
             Users.full_name,
             Users.phone_e164,
             func.coalesce(Wallets.available, 0).label("balance"),
+            Wallets.currency_code.label("currency_code"),
             func.coalesce(
                 select(func.sum(AgentTransactions.commission))
                 .where(AgentTransactions.agent_id == Agents.agent_id)
@@ -182,6 +183,7 @@ async def list_agents(
                 "phone": r.phone_e164,
             },
             "balance": float(r.balance or 0),
+            "currency_code": str(r.currency_code or "").upper() or "BIF",
             "total_commission": float(r.total_commission or 0),
         }
         for r in rows.all()
@@ -257,6 +259,16 @@ async def agent_history(
     if not agent:
         raise HTTPException(404, "Agent introuvable")
 
+    agent_wallet = await db.scalar(
+        select(Wallets)
+        .where(
+            Wallets.user_id == agent.user_id,
+            Wallets.type == "agent",
+        )
+        .limit(1)
+    )
+    currency_code = str(getattr(agent_wallet, "currency_code", "") or "").upper() or "BIF"
+
     stmt = (
         select(
             AgentTransactions,
@@ -289,6 +301,7 @@ async def agent_history(
                 "direction": tx.direction,
                 "amount": float(tx.amount),
                 "commission": float(tx.commission),
+                "currency_code": currency_code,
                 "status": tx.status,
                 "client_name": client_name,
                 "client_phone": client_phone,
@@ -300,8 +313,10 @@ async def agent_history(
             {
                 "amount": float(c.amount),
                 "type": c.operation_type,
+                "currency_code": currency_code,
                 "created_at": c.created_at.isoformat(),
             }
             for c in commissions
         ],
+        "currency_code": currency_code,
     }
