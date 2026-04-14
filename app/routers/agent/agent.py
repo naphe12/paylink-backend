@@ -665,6 +665,7 @@ async def agent_dashboard(
 
     return {
         "balance": float(wallet.available) if wallet else 0,
+        "currency_code": str(getattr(wallet, "currency_code", "") or "").upper() or "BIF",
         "metrics": {
             "cashin_today": float(cashin_today or 0),
             "cashin_month": float(cashin_month or 0),
@@ -678,6 +679,7 @@ async def agent_dashboard(
                 "amount": float(r.amount),
                 "direction": r.direction,
                 "commission": float(r.commission),
+                "currency_code": str(getattr(wallet, "currency_code", "") or "").upper() or "BIF",
                 "status": r.status,
                 "created_at": r.created_at.isoformat(),
             }
