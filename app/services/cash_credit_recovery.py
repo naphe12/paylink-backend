@@ -11,6 +11,9 @@ from app.models.credit_line_history import CreditLineHistory
 from app.models.credit_lines import CreditLines
 from app.models.users import Users
 from app.models.wallets import Wallets
+from app.services.external_transfer_credit_repayment import (
+    allocate_credit_repayment_to_external_transfers,
+)
 
 
 async def apply_cash_deposit_with_credit_recovery(
@@ -82,6 +85,19 @@ async def apply_cash_deposit_with_credit_recovery(
         else:
             credit_available_after = credit_available_before
 
+    external_transfer_repayment = {
+        "total_repaid": Decimal("0"),
+        "remaining_unallocated": Decimal("0"),
+        "allocations": [],
+    }
+    if credit_recovered > Decimal("0"):
+        external_transfer_repayment = await allocate_credit_repayment_to_external_transfers(
+            db,
+            user_id=user.user_id,
+            repayment_amount=credit_recovered,
+            source=credit_event_source,
+        )
+
     return {
         "wallet_before": wallet_before,
         "wallet_after": wallet_after,
@@ -90,6 +106,7 @@ async def apply_cash_deposit_with_credit_recovery(
         "credit_available_after": credit_available_after,
         "has_credit_line": bool(credit_line),
         "credit_line_id": getattr(credit_line, "credit_line_id", None),
+        "external_transfer_repayment": external_transfer_repayment,
     }
 
 

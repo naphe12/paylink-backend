@@ -137,7 +137,7 @@ async def _close_external_transfer_core(
     if not transfer:
         raise HTTPException(status_code=404, detail="Transfert introuvable ou deja clos.")
     current_status = normalize_external_transfer_status(transfer.status)
-    if current_status in {"completed", "succeeded"}:
+    if current_status in {"completed", "succeeded", "partially_repaid", "repaid"}:
         wallet = await db.scalar(
             select(Wallets).where(
                 Wallets.user_id == acting_agent_user.user_id,

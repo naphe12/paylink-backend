@@ -534,6 +534,21 @@ async def admin_cash_deposit_direct(
         "currency": wallet.currency_code,
         "new_balance": float(wallet.available),
         "credit_recovered": float(recovery["credit_recovered"]),
+        "external_transfer_repayment": {
+            "total_repaid": float((recovery.get("external_transfer_repayment") or {}).get("total_repaid", 0) or 0),
+            "remaining_unallocated": float(
+                (recovery.get("external_transfer_repayment") or {}).get("remaining_unallocated", 0) or 0
+            ),
+            "allocations": [
+                {
+                    **allocation,
+                    "applied_amount": float(allocation.get("applied_amount", 0) or 0),
+                    "outstanding_before": float(allocation.get("outstanding_before", 0) or 0),
+                    "outstanding_after": float(allocation.get("outstanding_after", 0) or 0),
+                }
+                for allocation in (recovery.get("external_transfer_repayment") or {}).get("allocations", [])
+            ],
+        },
     }
     if movement:
         await _audit_admin_cash_action(

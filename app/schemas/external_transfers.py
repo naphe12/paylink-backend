@@ -41,6 +41,12 @@ class ExternalTransferRead(BaseModel):
     local_amount: Optional[Decimal]
     credit_used: bool
     status: str
+    settlement_status: str | None = None
+    credit_used_amount: Decimal | None = None
+    credit_repaid_amount: Decimal | None = None
+    credit_outstanding_amount: Decimal | None = None
+    credit_repayment_status: str | None = None
+    credit_repayment_updated_at: datetime | None = None
     reference_code: Optional[str]
     created_at: datetime
 
