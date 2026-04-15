@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
+from uuid import UUID
 
-from pydantic import UUID4, BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr
 
 from app.schemas.user_auth import UserAuthRead
 
@@ -67,7 +68,7 @@ class UserTokenData(BaseModel):
     Contient les infos extraites du JWT — sans accès à la DB.
     Utilisé pour get_current_user_token().
     """
-    user_id: UUID4
+    user_id: UUID
     email: str
     role: Optional[str] = None
 
@@ -97,7 +98,7 @@ class UsersRead_all(UsersBase):
 
 
 class UsersRead(BaseModel):
-    user_id: UUID4
+    user_id: UUID
     full_name: str
     email: str | None = None
     phone_e164: str | None = None
