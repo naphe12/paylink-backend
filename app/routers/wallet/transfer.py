@@ -140,6 +140,13 @@ def _serialize_decimal(value: decimal.Decimal | None) -> float:
     return float(value or 0)
 
 
+def _safe_decimal(value, default: decimal.Decimal = decimal.Decimal("0")) -> decimal.Decimal:
+    try:
+        return decimal.Decimal(str(value))
+    except Exception:
+        return default
+
+
 class ExternalTransferSimulationRequest(BaseModel):
     amount: decimal.Decimal = Field(..., gt=decimal.Decimal("0"), le=decimal.Decimal("100000000"))
     currency: str | None = Field(default=None, min_length=3, max_length=10)
@@ -299,6 +306,12 @@ async def _build_payment_note_context(
 
 def _serialize_external_transfer_read(transfer: ExternalTransfers) -> dict:
     metadata = dict(getattr(transfer, "metadata_", {}) or {})
+    credit_used_amount = _safe_decimal(metadata.get("credit_used_amount"))
+    credit_repaid_amount = _safe_decimal(metadata.get("credit_repaid_amount"))
+    credit_outstanding_amount = _safe_decimal(
+        metadata.get("credit_outstanding_amount"),
+        max(credit_used_amount - credit_repaid_amount, decimal.Decimal("0")),
+    )
     return ExternalTransferRead.model_validate(
         {
             "transfer_id": transfer.transfer_id,
@@ -314,6 +327,12 @@ def _serialize_external_transfer_read(transfer: ExternalTransfers) -> dict:
             "local_amount": transfer.local_amount,
             "credit_used": transfer.credit_used,
             "status": transfer.status,
+            "settlement_status": metadata.get("settlement_status"),
+            "credit_used_amount": credit_used_amount,
+            "credit_repaid_amount": credit_repaid_amount,
+            "credit_outstanding_amount": max(credit_outstanding_amount, decimal.Decimal("0")),
+            "credit_repayment_status": metadata.get("credit_repayment_status"),
+            "credit_repayment_updated_at": metadata.get("credit_repayment_updated_at"),
             "reference_code": transfer.reference_code,
             "created_at": transfer.created_at,
         }
@@ -1343,6 +1362,11 @@ async def _external_transfer_core(
         "user_id": str(current_user.user_id),
         "transfer_id": str(transfer.transfer_id),
         "credit_used_amount": str(credit_used),
+        "credit_repaid_amount": "0.00",
+        "credit_outstanding_amount": str(credit_used),
+        "credit_repayment_status": (
+            "not_repaid" if credit_used > decimal.Decimal("0") else "no_credit_debt"
+        ),
         "credit_available_after": str(credit_available_after),
         "debited_amount": str(debited),
         "transaction_id": str(txn.tx_id),
@@ -2018,6 +2042,17 @@ async def _fund_pending_external_transfer_for_approval(
             "funding_pending": False,
             "required_credit_topup": str(shortage),
             "credit_used_amount": str(credit_used),
+            "credit_repaid_amount": str(_safe_decimal(metadata.get("credit_repaid_amount"), decimal.Decimal("0"))),
+            "credit_outstanding_amount": str(
+                max(
+                    credit_used
+                    - _safe_decimal(metadata.get("credit_repaid_amount"), decimal.Decimal("0")),
+                    decimal.Decimal("0"),
+                )
+            ),
+            "credit_repayment_status": (
+                "not_repaid" if credit_used > decimal.Decimal("0") else "no_credit_debt"
+            ),
             "debited_amount": str(debited),
             "approval_funded_at": now.isoformat(),
         }

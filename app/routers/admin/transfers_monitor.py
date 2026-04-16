@@ -135,6 +135,10 @@ def _extract_transfer_flags(metadata: dict | None) -> dict:
         "aml_manual_review_required": bool(payload.get("aml_manual_review_required")),
         "funding_pending": bool(payload.get("funding_pending")),
         "required_credit_topup": payload.get("required_credit_topup"),
+        "credit_repayment_status": payload.get("credit_repayment_status"),
+        "credit_repaid_amount": payload.get("credit_repaid_amount"),
+        "credit_outstanding_amount": payload.get("credit_outstanding_amount"),
+        "settlement_status": payload.get("settlement_status"),
     }
 
 
@@ -163,6 +167,11 @@ def _build_transfer_funding_payload(*, transfer: ExternalTransfers, metadata: di
         "total_required": serialize_decimal(total_required),
         "debited_amount": serialize_decimal(debited_amount),
         "credit_used_amount": serialize_decimal(credit_used_amount),
+        "credit_repaid_amount": serialize_decimal(_safe_decimal(metadata.get("credit_repaid_amount"))),
+        "credit_outstanding_amount": serialize_decimal(
+            _safe_decimal(metadata.get("credit_outstanding_amount"), max(credit_used_amount - _safe_decimal(metadata.get("credit_repaid_amount")), Decimal("0")))
+        ),
+        "credit_repayment_status": metadata.get("credit_repayment_status"),
         "funding_pending": bool(metadata.get("funding_pending")),
         "required_credit_topup": serialize_decimal(max(_safe_decimal(metadata.get("required_credit_topup")), Decimal("0"))),
     }
