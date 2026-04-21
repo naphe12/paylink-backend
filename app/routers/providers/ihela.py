@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db
 from app.dependencies.auth import get_current_user
-from app.middlewares.rate_limit import rate_limit
+from app.security.rate_limit import rate_limit
 from app.models.external_transfers import ExternalTransfers
 from app.models.users import Users
 from app.services.external_transfer_provider_workflow import (
@@ -114,4 +114,3 @@ async def ihela_reconcile_now(
 
     summary = await reconcile_external_transfer_providers()
     return {"status": "ok", "summary": summary}
-
