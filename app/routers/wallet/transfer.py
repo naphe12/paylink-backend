@@ -23,7 +23,6 @@ from app.models.credit_line_events import CreditLineEvents
 from app.models.credit_lines import CreditLines
 from app.models.countries import Countries
 from app.models.external_beneficiaries import ExternalBeneficiaries
-from app.models.external_transfer_partners import ExternalTransferPartners
 from app.models.external_transfers import ExternalTransfers
 from app.models.transactions import Transactions
 from app.models.users import Users
@@ -98,16 +97,43 @@ def _is_valid_external_phone(value: str | None) -> bool:
     return bool(EXTERNAL_TRANSFER_PHONE_RE.fullmatch(str(value or "").strip()))
 
 
+async def _resolve_external_transfer_partners_schema(db: AsyncSession) -> str | None:
+    paylink_rel = await db.scalar(text("SELECT to_regclass('paylink.external_transfer_partners')"))
+    if paylink_rel:
+        return "paylink"
+    public_rel = await db.scalar(text("SELECT to_regclass('public.external_transfer_partners')"))
+    if public_rel:
+        return "public"
+    return None
+
+
 async def _resolve_external_provider_name(db: AsyncSession, partner_name: str | None) -> str:
     name = str(partner_name or "").strip()
     if name:
-        partner = await db.scalar(
-            select(ExternalTransferPartners).where(
-                text("lower(partner_name) = :partner_name")
-            ).params(partner_name=name.lower())
-        )
-        if partner and str(getattr(partner, "provider", "") or "").strip():
-            return str(partner.provider).strip().lower()
+        schema = await _resolve_external_transfer_partners_schema(db)
+        if schema:
+            row = (
+                await db.execute(
+                    text(
+                        f"""
+                        SELECT provider
+                        FROM {schema}.external_transfer_partners
+                        WHERE is_active = true
+                          AND lower(partner_name) = lower(:partner_name)
+                        LIMIT 1
+                        """
+                    ),
+                    {"partner_name": name},
+                )
+            ).mappings().first()
+            provider_name = str((row or {}).get("provider") or "").strip().lower()
+            if provider_name:
+                return provider_name
+        else:
+            logger.warning(
+                "Table external_transfer_partners absente (schemas paylink/public); fallback provider default pour partner=%s",
+                name,
+            )
     return str(getattr(settings, "EXTERNAL_TRANSFER_PROVIDER_DEFAULT", "internal") or "internal").strip().lower()
 
 
@@ -1074,13 +1100,27 @@ async def list_external_transfer_partners(
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user),
 ):
-    rows = (
-        await db.execute(
-            select(ExternalTransferPartners)
-            .where(ExternalTransferPartners.is_active.is_(True))
-            .order_by(ExternalTransferPartners.display_order.asc(), ExternalTransferPartners.partner_name.asc())
-        )
-    ).scalars().all()
+    schema = await _resolve_external_transfer_partners_schema(db)
+    rows = []
+    if schema:
+        rows = (
+            await db.execute(
+                text(
+                    f"""
+                    SELECT
+                      partner_id::text AS partner_id,
+                      partner_name,
+                      provider,
+                      display_order
+                    FROM {schema}.external_transfer_partners
+                    WHERE is_active = true
+                    ORDER BY display_order ASC, partner_name ASC
+                    """
+                )
+            )
+        ).mappings().all()
+    else:
+        logger.warning("Table external_transfer_partners absente (schemas paylink/public); fallback partenaires statiques.")
     if not rows:
         return [
             {"partner_name": "Lumicash", "provider": "internal"},
@@ -1089,10 +1129,10 @@ async def list_external_transfer_partners(
         ]
     return [
         {
-            "partner_id": str(item.partner_id),
-            "partner_name": item.partner_name,
-            "provider": item.provider,
-            "display_order": int(item.display_order or 100),
+            "partner_id": str(item.get("partner_id") or ""),
+            "partner_name": str(item.get("partner_name") or ""),
+            "provider": str(item.get("provider") or "internal"),
+            "display_order": int(item.get("display_order") or 100),
         }
         for item in rows
     ]
