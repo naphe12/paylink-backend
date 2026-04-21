@@ -5,6 +5,7 @@ import uuid
 from datetime import date
 from datetime import datetime
 from datetime import timedelta
+from decimal import ROUND_DOWN
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
@@ -1327,7 +1328,10 @@ async def _external_transfer_core(
 
     wallet_balance_before = wallet_balance
     credit_available_after = credit_available_before
-    local_amount = (amount * fx_rate).quantize(decimal.Decimal("0.01"))
+    if str(destination_currency or "").upper() == "BIF":
+        local_amount = (amount * fx_rate).quantize(decimal.Decimal("1"), rounding=ROUND_DOWN)
+    else:
+        local_amount = (amount * fx_rate).quantize(decimal.Decimal("0.01"))
     wallet_after = wallet_balance_before
     credit_used = decimal.Decimal("0")
     wallet_debit_amount = decimal.Decimal("0")
@@ -1725,7 +1729,10 @@ async def simulate_external_transfer(
     total_required = payload.amount + fee_amount
 
     fx_rate = await _resolve_fx_rate(db, sender_currency, destination_currency)
-    local_amount = (payload.amount * fx_rate).quantize(decimal.Decimal("0.01"))
+    if str(destination_currency or "").upper() == "BIF":
+        local_amount = (payload.amount * fx_rate).quantize(decimal.Decimal("1"), rounding=ROUND_DOWN)
+    else:
+        local_amount = (payload.amount * fx_rate).quantize(decimal.Decimal("0.01"))
 
     approval_capacity = (
         credit_available
