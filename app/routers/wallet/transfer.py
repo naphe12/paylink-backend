@@ -23,6 +23,7 @@ from app.models.credit_line_events import CreditLineEvents
 from app.models.credit_lines import CreditLines
 from app.models.countries import Countries
 from app.models.external_beneficiaries import ExternalBeneficiaries
+from app.models.external_transfer_partners import ExternalTransferPartners
 from app.models.external_transfers import ExternalTransfers
 from app.models.transactions import Transactions
 from app.models.users import Users
@@ -81,6 +82,7 @@ from app.services.external_transfer_rules import (
     map_external_transfer_to_transaction_status,
     transition_external_transfer_status,
 )
+from app.services.external_transfer_provider_workflow import dispatch_external_transfer_provider_by_id
 from app.services.fx_provider import get_open_exchange_rate_to_eur
 
 router = APIRouter(prefix="/wallet/transfer", tags=["External Transfer"])
@@ -94,6 +96,19 @@ EXTERNAL_TRANSFER_SETTLEMENT_CURRENCY = "BIF"
 
 def _is_valid_external_phone(value: str | None) -> bool:
     return bool(EXTERNAL_TRANSFER_PHONE_RE.fullmatch(str(value or "").strip()))
+
+
+async def _resolve_external_provider_name(db: AsyncSession, partner_name: str | None) -> str:
+    name = str(partner_name or "").strip()
+    if name:
+        partner = await db.scalar(
+            select(ExternalTransferPartners).where(
+                text("lower(partner_name) = :partner_name")
+            ).params(partner_name=name.lower())
+        )
+        if partner and str(getattr(partner, "provider", "") or "").strip():
+            return str(partner.provider).strip().lower()
+    return str(getattr(settings, "EXTERNAL_TRANSFER_PROVIDER_DEFAULT", "internal") or "internal").strip().lower()
 
 
 def _refresh_user_limits_counters_inplace(user: Users) -> None:
@@ -1054,6 +1069,35 @@ async def list_my_external_transfers(
     ]
 
 
+@router.get("/external/partners")
+async def list_external_transfer_partners(
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user),
+):
+    rows = (
+        await db.execute(
+            select(ExternalTransferPartners)
+            .where(ExternalTransferPartners.is_active.is_(True))
+            .order_by(ExternalTransferPartners.display_order.asc(), ExternalTransferPartners.partner_name.asc())
+        )
+    ).scalars().all()
+    if not rows:
+        return [
+            {"partner_name": "Lumicash", "provider": "internal"},
+            {"partner_name": "Ecocash", "provider": "internal"},
+            {"partner_name": "eNoti", "provider": "internal"},
+        ]
+    return [
+        {
+            "partner_id": str(item.partner_id),
+            "partner_name": item.partner_name,
+            "provider": item.provider,
+            "display_order": int(item.display_order or 100),
+        }
+        for item in rows
+    ]
+
+
 async def _external_transfer_core(
     data: ExternalTransferCreate,
     background_tasks: BackgroundTasks,
@@ -1341,6 +1385,10 @@ async def _external_transfer_core(
         local_amount=local_amount,
         credit_used=(credit_used > 0),
         status=transfer_status,
+        provider=await _resolve_external_provider_name(db, data.partner_name),
+        provider_status="created",
+        idempotency_key=f"ext-{transfer_id}",
+        retry_count=0,
         processed_by=processed_by_user_id if transfer_status == "completed" else None,
         processed_at=datetime.utcnow() if transfer_status == "completed" else None,
         reference_code=reference_code,
@@ -1376,6 +1424,8 @@ async def _external_transfer_core(
         "origin_currency": origin_currency,
         "destination_currency": destination_currency,
         "idempotency_key": scoped_idempotency_key,
+        "provider": str(getattr(transfer, "provider", "") or "internal"),
+        "provider_transfer_idempotency_key": str(getattr(transfer, "idempotency_key", "") or f"ext-{transfer_id}"),
         "override_balance_check": bool(override_balance_check),
         "force_negative_wallet": bool(override_balance_check),
         "final_status_override": requested_status or None,
@@ -1555,6 +1605,12 @@ async def _external_transfer_core(
             )
     else:
         background_tasks.add_task(_notify_external_transfer_task, **notification_kwargs)
+    provider_name = str(getattr(transfer, "provider", "") or "").lower()
+    if transfer_status == "approved" and provider_name not in {"", "internal", "none"}:
+        background_tasks.add_task(
+            dispatch_external_transfer_provider_by_id,
+            str(transfer.transfer_id),
+        )
     return payload_out if scoped_idempotency_key else payload_out
 
 
@@ -2195,6 +2251,12 @@ async def approve_external_transfer(
             notify_telegram=True,
             notify_client=was_funding_pending,
             notify_recipient=True,
+        )
+    provider_name = str(getattr(transfer, "provider", "") or "").lower()
+    if provider_name not in {"", "internal", "none"}:
+        background_tasks.add_task(
+            dispatch_external_transfer_provider_by_id,
+            str(transfer.transfer_id),
         )
     return {"message": "Transfert valide"}
 

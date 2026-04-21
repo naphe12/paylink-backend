@@ -76,6 +76,30 @@ class Settings(BaseSettings):
     BONUS_MAX_PER_TRANSFER: str = os.getenv("BONUS_MAX_PER_TRANSFER", "1000000")
     SYSTEM_ADMIN_USERNAME: str = os.getenv("SYSTEM_ADMIN_USERNAME", "system")
     EXTERNAL_TRANSFER_LIMIT_POLICY: str = os.getenv("EXTERNAL_TRANSFER_LIMIT_POLICY", "financial_capacity_only")
+    EXTERNAL_TRANSFER_PROVIDER_DEFAULT: str = os.getenv("EXTERNAL_TRANSFER_PROVIDER_DEFAULT", "internal")
+    EXTERNAL_TRANSFER_PROVIDER_RETRY_MAX: int = int(os.getenv("EXTERNAL_TRANSFER_PROVIDER_RETRY_MAX", "3"))
+    EXTERNAL_TRANSFER_PROVIDER_BACKOFF_BASE_SECONDS: int = int(
+        os.getenv("EXTERNAL_TRANSFER_PROVIDER_BACKOFF_BASE_SECONDS", "30")
+    )
+    EXTERNAL_TRANSFER_PROVIDER_RECONCILE_ENABLED: bool = (
+        os.getenv("EXTERNAL_TRANSFER_PROVIDER_RECONCILE_ENABLED", "true").lower() == "true"
+    )
+    EXTERNAL_TRANSFER_PROVIDER_RECONCILE_INTERVAL_SECONDS: int = int(
+        os.getenv("EXTERNAL_TRANSFER_PROVIDER_RECONCILE_INTERVAL_SECONDS", "60")
+    )
+    EXTERNAL_TRANSFER_PROVIDER_RECONCILE_BATCH_SIZE: int = int(
+        os.getenv("EXTERNAL_TRANSFER_PROVIDER_RECONCILE_BATCH_SIZE", "100")
+    )
+
+    IHELA_ENABLED: bool = os.getenv("IHELA_ENABLED", "false").lower() == "true"
+    IHELA_API_BASE_URL: str = os.getenv("IHELA_API_BASE_URL", "")
+    IHELA_API_KEY: str = os.getenv("IHELA_API_KEY", "")
+    IHELA_TIMEOUT_SECONDS: float = float(os.getenv("IHELA_TIMEOUT_SECONDS", "12"))
+    IHELA_SEND_PATH: str = os.getenv("IHELA_SEND_PATH", "/transfers")
+    IHELA_STATUS_PATH: str = os.getenv("IHELA_STATUS_PATH", "/transfers/{provider_ref}")
+    IHELA_AUTH_SCHEME: str = os.getenv("IHELA_AUTH_SCHEME", "Bearer")
+    IHELA_WEBHOOK_SECRET: str = os.getenv("IHELA_WEBHOOK_SECRET", "")
+    IHELA_WEBHOOK_SIGNATURE_HEADER: str = os.getenv("IHELA_WEBHOOK_SIGNATURE_HEADER", "X-IHela-Signature")
 
     def _role_suffix(self, role: str | None) -> str | None:
         normalized = str(role or "").strip().lower()

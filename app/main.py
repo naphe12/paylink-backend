@@ -123,6 +123,7 @@ from app.routers.wallet.crypto_wallet import router as crypto_wallet_router
 from app.routers.telegram_external_transfer import router as telegram_external_transfer_router
 from app.routers.wallet.usdc_wallet import router as usdc_wallet_router
 from app.routers.wallet.transfer import router as transfer_router
+from app.routers.providers.ihela import router as ihela_provider_router
 from app.routers.ws import router as ws_router
 from app.services.backoffice_risk import router as backoffice_risk_router
 from app.services.idempotency_service import ensure_idempotency_schema
@@ -149,6 +150,7 @@ from app.services.telegram_external_transfer_service import ensure_telegram_exte
 from app.services.auth_sessions import ensure_auth_refresh_schema
 from app.services.sandbox_transition_worker import run_sandbox_auto_transitions
 from app.services.p2p_expiration_worker import run_p2p_expiration_worker
+from app.services.external_transfer_provider_workflow import reconcile_external_transfer_providers
 from app.services.tontine_rotation import process_tontine_rotations
 from app.websocket_manager import admin_ws_join, admin_ws_leave
 from app.workers.alerts_worker import deliver_alerts
@@ -238,6 +240,25 @@ async def product_automation_worker():
         except Exception as exc:
             logger.error(f"Product automation worker bootstrap error: {exc}")
         await asyncio.sleep(settings.PRODUCT_AUTOMATION_INTERVAL_SECONDS)
+
+
+async def external_transfer_provider_reconcile_worker():
+    interval_seconds = max(
+        15,
+        int(getattr(settings, "EXTERNAL_TRANSFER_PROVIDER_RECONCILE_INTERVAL_SECONDS", 60) or 60),
+    )
+    while True:
+        try:
+            summary = await reconcile_external_transfer_providers(
+                limit=int(
+                    getattr(settings, "EXTERNAL_TRANSFER_PROVIDER_RECONCILE_BATCH_SIZE", 100) or 100
+                )
+            )
+            if int(summary.get("updated", 0) or 0) > 0:
+                logger.info("External provider reconcile summary: %s", summary)
+        except Exception as exc:
+            logger.error("External provider reconcile worker error: %s", exc)
+        await asyncio.sleep(interval_seconds)
 
 
 async def _count_unbalanced_journals(db) -> int:
@@ -594,6 +615,7 @@ app.include_router(merchant_router)
 app.include_router(loans_router)
 app.include_router(transactions.router)
 app.include_router(transfer_router)
+app.include_router(ihela_provider_router)
 app.include_router(tontine_router, prefix="/tontines", tags=["Tontines"])
 app.include_router(ws_router)
 app.include_router(risk_admin_router.router)
@@ -1039,6 +1061,8 @@ async def startup_event():
         background_tasks.append(asyncio.create_task(ledger_daily_control_worker()))
     if settings.IDEMPOTENCY_CLEANUP_ENABLED:
         background_tasks.append(asyncio.create_task(idempotency_cleanup_worker()))
+    if getattr(settings, "EXTERNAL_TRANSFER_PROVIDER_RECONCILE_ENABLED", True):
+        background_tasks.append(asyncio.create_task(external_transfer_provider_reconcile_worker()))
     if settings.APP_ENV != "prod" and settings.SANDBOX_ENABLED:
         background_tasks.append(asyncio.create_task(sandbox_transition_worker()))
     app.state.background_tasks = background_tasks

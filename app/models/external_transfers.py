@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (JSON, TIMESTAMP, Boolean, Column, DateTime, ForeignKey,
-                        Numeric, String, Text)
+                        Integer, Numeric, String, Text)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from typing import Optional
@@ -33,6 +33,12 @@ class ExternalTransfers(Base):
     credit_used = Column(Boolean, default=False)
     status = Column(String(20), default="pending")  # pending, success, failed
     reference_code = Column(String(50), unique=True)
+    provider = Column(String(30), nullable=False, default="internal")
+    provider_ref = Column(String(120), nullable=True)
+    provider_status = Column(String(30), nullable=False, default="created")
+    idempotency_key = Column(String(120), nullable=True)
+    retry_count = Column(Integer, nullable=False, default=0)
+    last_error = Column(Text, nullable=True)
 
     
     metadata_ : Mapped[Optional[dict]] = mapped_column('metadata', JSONB, server_default=text("'{}'::jsonb"))
