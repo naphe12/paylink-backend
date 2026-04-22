@@ -39,6 +39,7 @@ async def get_general_settings(
             "fixvalue": item.fixValue,
             "sms_notification": item.sms_notification,
             "email_notification": item.email_notification,
+            "manual_external_transfer": bool(getattr(item, "manual_external_transfer", False)),
             "updated_at": item.updated_at,
             "created_at": item.created_at,
         }
@@ -56,6 +57,7 @@ async def update_general_settings(
     coefficient: Optional[float] = None,
     smstransfert_fees: Optional[float] = None,
     currency: Optional[str] = None,
+    manual_external_transfer: Optional[bool] = None,
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
 ):
@@ -77,6 +79,11 @@ async def update_general_settings(
                         else {}
                     ),
                     **({"currency": currency} if currency else {}),
+                    **(
+                        {"manual_external_transfer": manual_external_transfer}
+                        if manual_external_transfer is not None
+                        else {}
+                    ),
                     "updated_at": datetime.utcnow(),
                 }
             )
@@ -90,6 +97,7 @@ async def update_general_settings(
                 coefficient=coefficient or 1,
                 smstransfert_fees=smstransfert_fees or 0,
                 currency=currency or "EUR",
+                manual_external_transfer=bool(manual_external_transfer),
             )
         )
     await db.commit()

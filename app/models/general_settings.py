@@ -1,5 +1,5 @@
 # app/models/general_settings.py
-from sqlalchemy import Column, Numeric, Text, TIMESTAMP, ForeignKey,Integer,String
+from sqlalchemy import Boolean, Column, Numeric, Text, TIMESTAMP, ForeignKey,Integer,String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -25,3 +25,4 @@ class GeneralSettings(Base):
     smsPhone = Column("smsphone", String(50), nullable=False, default="")
     account = Column(String(50), nullable=False, default="")
     account_name = Column(String(50), nullable=False, default="")
+    manual_external_transfer = Column(Boolean, nullable=False, default=False, server_default="false")

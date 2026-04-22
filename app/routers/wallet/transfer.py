@@ -138,6 +138,13 @@ async def _resolve_external_provider_name(db: AsyncSession, partner_name: str | 
     return str(getattr(settings, "EXTERNAL_TRANSFER_PROVIDER_DEFAULT", "internal") or "internal").strip().lower()
 
 
+async def _is_manual_external_transfer_enabled(db: AsyncSession) -> bool:
+    settings_row = await db.scalar(
+        select(GeneralSettings).order_by(GeneralSettings.created_at.desc())
+    )
+    return bool(getattr(settings_row, "manual_external_transfer", False)) if settings_row else False
+
+
 def _refresh_user_limits_counters_inplace(user: Users) -> None:
     """Reset daily/monthly counters when the period changed, without committing."""
     today = date.today()
@@ -1238,12 +1245,15 @@ async def _external_transfer_core(
     origin_currency = wallet_currency or credit_line_currency or "EUR"
     is_bif_wallet = str(wallet.currency_code or "").upper() == "BIF"
     destination_currency = EXTERNAL_TRANSFER_SETTLEMENT_CURRENCY
+    settings_row = await db.scalar(
+        select(GeneralSettings).order_by(GeneralSettings.created_at.desc())
+    )
+    manual_external_transfer_enabled = bool(
+        getattr(settings_row, "manual_external_transfer", False)
+    ) if settings_row else False
     if is_bif_wallet and str(destination_currency or "").upper() == "BIF":
         fee_rate = decimal.Decimal("6.25")
     else:
-        settings_row = await db.scalar(
-            select(GeneralSettings).order_by(GeneralSettings.created_at.desc())
-        )
         fee_rate = decimal.Decimal(getattr(settings_row, "charge", 0) or 0)
     fee_amount = (amount * fee_rate / decimal.Decimal(100)).quantize(decimal.Decimal("0.01"))
 
@@ -1416,6 +1426,10 @@ async def _external_transfer_core(
     db.add(txn)
     await db.flush()
 
+    resolved_provider = await _resolve_external_provider_name(db, data.partner_name)
+    if manual_external_transfer_enabled:
+        resolved_provider = "internal"
+
     transfer = ExternalTransfers(
         transfer_id=transfer_id,
         user_id=current_user.user_id,
@@ -1429,7 +1443,7 @@ async def _external_transfer_core(
         local_amount=local_amount,
         credit_used=(credit_used > 0),
         status=transfer_status,
-        provider=await _resolve_external_provider_name(db, data.partner_name),
+        provider=resolved_provider,
         provider_status="created",
         idempotency_key=f"ext-{transfer_id}",
         retry_count=0,
@@ -1470,6 +1484,7 @@ async def _external_transfer_core(
         "idempotency_key": scoped_idempotency_key,
         "provider": str(getattr(transfer, "provider", "") or "internal"),
         "provider_transfer_idempotency_key": str(getattr(transfer, "idempotency_key", "") or f"ext-{transfer_id}"),
+        "manual_external_transfer_enabled": bool(manual_external_transfer_enabled),
         "override_balance_check": bool(override_balance_check),
         "force_negative_wallet": bool(override_balance_check),
         "final_status_override": requested_status or None,
@@ -1650,7 +1665,11 @@ async def _external_transfer_core(
     else:
         background_tasks.add_task(_notify_external_transfer_task, **notification_kwargs)
     provider_name = str(getattr(transfer, "provider", "") or "").lower()
-    if transfer_status == "approved" and provider_name not in {"", "internal", "none"}:
+    if (
+        transfer_status == "approved"
+        and not manual_external_transfer_enabled
+        and provider_name not in {"", "internal", "none"}
+    ):
         background_tasks.add_task(
             dispatch_external_transfer_provider_by_id,
             str(transfer.transfer_id),
@@ -2300,7 +2319,11 @@ async def approve_external_transfer(
             notify_recipient=True,
         )
     provider_name = str(getattr(transfer, "provider", "") or "").lower()
-    if provider_name not in {"", "internal", "none"}:
+    manual_external_transfer_enabled = await _is_manual_external_transfer_enabled(db)
+    if (
+        not manual_external_transfer_enabled
+        and provider_name not in {"", "internal", "none"}
+    ):
         background_tasks.add_task(
             dispatch_external_transfer_provider_by_id,
             str(transfer.transfer_id),
