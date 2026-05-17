@@ -24,7 +24,7 @@ class ExternalTransferBase(BaseModel):
 
 
 class ExternalTransferCreate(ExternalTransferBase):
-    pass
+    use_bonus_balance: bool = False
 
 
 class ExternalTransferRead(BaseModel):

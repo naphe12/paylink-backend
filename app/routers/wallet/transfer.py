@@ -1172,6 +1172,7 @@ async def _external_transfer_core(
                 "recipient_phone": str(data.recipient_phone or "").strip(),
                 "recipient_email": str(data.recipient_email or "").strip().lower(),
                 "amount": str(data.amount),
+                "use_bonus_balance": bool(getattr(data, "use_bonus_balance", False)),
                 "user_id": str(current_user.user_id),
             }
         )
@@ -1195,6 +1196,7 @@ async def _external_transfer_core(
             )
 
     amount = decimal.Decimal(data.amount)
+    use_bonus_balance = bool(getattr(data, "use_bonus_balance", False))
     if amount <= decimal.Decimal("0"):
         raise HTTPException(status_code=400, detail="Montant invalide")
     if not _is_valid_external_phone(data.recipient_phone):
@@ -1251,7 +1253,9 @@ async def _external_transfer_core(
     manual_external_transfer_enabled = bool(
         getattr(settings_row, "manual_external_transfer", False)
     ) if settings_row else False
-    if is_bif_wallet and str(destination_currency or "").upper() == "BIF":
+    if use_bonus_balance:
+        fee_rate = decimal.Decimal("0")
+    elif is_bif_wallet and str(destination_currency or "").upper() == "BIF":
         fee_rate = decimal.Decimal("6.25")
     else:
         fee_rate = decimal.Decimal(getattr(settings_row, "charge", 0) or 0)
@@ -1260,13 +1264,24 @@ async def _external_transfer_core(
     fx_rate = await _resolve_fx_rate(db, origin_currency, destination_currency)
 
     total_required = amount + fee_amount
-    approval_available = (
-        credit_available
-        if is_bif_wallet
-        else effective_external_transfer_capacity(wallet_balance, credit_available)
-    )
-    insufficient_funds_review_required = total_required > approval_available and not override_balance_check
-    shortfall_amount = max(decimal.Decimal("0"), total_required - approval_available)
+    bonus_balance_before = decimal.Decimal(wallet.bonus_balance or 0)
+    if use_bonus_balance:
+        if bonus_balance_before < total_required:
+            raise HTTPException(
+                status_code=400,
+                detail="Solde bonus insuffisant pour couvrir ce transfert externe.",
+            )
+        insufficient_funds_review_required = False
+        shortfall_amount = decimal.Decimal("0")
+        approval_available = total_required
+    else:
+        approval_available = (
+            credit_available
+            if is_bif_wallet
+            else effective_external_transfer_capacity(wallet_balance, credit_available)
+        )
+        insufficient_funds_review_required = total_required > approval_available and not override_balance_check
+        shortfall_amount = max(decimal.Decimal("0"), total_required - approval_available)
 
     used_daily = decimal.Decimal(user_locked.used_daily or 0)
     used_monthly = decimal.Decimal(user_locked.used_monthly or 0)
@@ -1345,7 +1360,9 @@ async def _external_transfer_core(
     wallet_after = wallet_balance_before
     credit_used = decimal.Decimal("0")
     wallet_debit_amount = decimal.Decimal("0")
-    if not insufficient_funds_review_required:
+    if use_bonus_balance:
+        wallet.bonus_balance = bonus_balance_before - total_required
+    elif not insufficient_funds_review_required:
         funding = compute_external_transfer_funding(
             wallet_available=wallet_balance_before,
             credit_available=credit_available_before,
@@ -1410,7 +1427,7 @@ async def _external_transfer_core(
     bonus_earned = min((amount * bonus_rate), bonus_cap)
     transfer_id = uuid.uuid4()
     reference_code = f"EXT-{uuid.uuid4().hex[:8].upper()}"
-    if not insufficient_funds_review_required:
+    if not insufficient_funds_review_required and not use_bonus_balance:
         wallet.bonus_balance = decimal.Decimal(wallet.bonus_balance or 0) + bonus_earned
 
     txn = Transactions(
@@ -1478,6 +1495,10 @@ async def _external_transfer_core(
         "transaction_id": str(txn.tx_id),
         "fee_rate": str(fee_rate),
         "fee_amount": str(fee_amount),
+        "use_bonus_balance": bool(use_bonus_balance),
+        "bonus_debited_amount": str(total_required) if use_bonus_balance else "0",
+        "bonus_balance_before": str(bonus_balance_before),
+        "bonus_balance_after": str(decimal.Decimal(wallet.bonus_balance or 0)),
         "fx_rate": str(fx_rate),
         "origin_currency": origin_currency,
         "destination_currency": destination_currency,
@@ -1514,7 +1535,7 @@ async def _external_transfer_core(
             for key, value in override_context.items()
             if value is not None
         }
-    if not insufficient_funds_review_required:
+    if not insufficient_funds_review_required and not use_bonus_balance:
         if debited > 0:
             entries.append(
                 LedgerLine(
@@ -1561,7 +1582,7 @@ async def _external_transfer_core(
             entries=entries,
         )
 
-    if not insufficient_funds_review_required:
+    if not insufficient_funds_review_required and not use_bonus_balance:
         db.add(
             BonusHistory(
                 user_id=current_user.user_id,
@@ -1571,7 +1592,7 @@ async def _external_transfer_core(
             )
         )
 
-    if not insufficient_funds_review_required and credit_used > 0:
+    if not insufficient_funds_review_required and credit_used > 0 and not use_bonus_balance:
         history_entry = CreditLineHistory(
             user_id=current_user.user_id,
             transaction_id=txn.tx_id,
