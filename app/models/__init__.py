@@ -44,6 +44,7 @@ from app.models.credit_line_events import CreditLineEvents
 from app.models.credit_lines import CreditLines
 from app.models.client_balance_events import ClientBalanceEvents
 from app.models.external_beneficiaries import ExternalBeneficiaries
+from app.models.external_transfer_partners import ExternalTransferPartners
 from app.models.ai_intents import AiIntents
 from app.models.ai_intent_slots import AiIntentSlots
 from app.models.ai_synonyms import AiSynonyms
@@ -145,6 +146,7 @@ __all__ = [
     "CreditLines",
     "ClientBalanceEvents",
     "ExternalBeneficiaries",
+    "ExternalTransferPartners",
     "AiIntents",
     "AiIntentSlots",
     "AiSynonyms",

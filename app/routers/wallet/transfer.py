@@ -5,6 +5,7 @@ import uuid
 from datetime import date
 from datetime import datetime
 from datetime import timedelta
+from decimal import ROUND_DOWN
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
@@ -81,6 +82,7 @@ from app.services.external_transfer_rules import (
     map_external_transfer_to_transaction_status,
     transition_external_transfer_status,
 )
+from app.services.external_transfer_provider_workflow import dispatch_external_transfer_provider_by_id
 from app.services.fx_provider import get_open_exchange_rate_to_eur
 
 router = APIRouter(prefix="/wallet/transfer", tags=["External Transfer"])
@@ -94,6 +96,53 @@ EXTERNAL_TRANSFER_SETTLEMENT_CURRENCY = "BIF"
 
 def _is_valid_external_phone(value: str | None) -> bool:
     return bool(EXTERNAL_TRANSFER_PHONE_RE.fullmatch(str(value or "").strip()))
+
+
+async def _resolve_external_transfer_partners_schema(db: AsyncSession) -> str | None:
+    paylink_rel = await db.scalar(text("SELECT to_regclass('paylink.external_transfer_partners')"))
+    if paylink_rel:
+        return "paylink"
+    public_rel = await db.scalar(text("SELECT to_regclass('public.external_transfer_partners')"))
+    if public_rel:
+        return "public"
+    return None
+
+
+async def _resolve_external_provider_name(db: AsyncSession, partner_name: str | None) -> str:
+    name = str(partner_name or "").strip()
+    if name:
+        schema = await _resolve_external_transfer_partners_schema(db)
+        if schema:
+            row = (
+                await db.execute(
+                    text(
+                        f"""
+                        SELECT provider
+                        FROM {schema}.external_transfer_partners
+                        WHERE is_active = true
+                          AND lower(partner_name) = lower(:partner_name)
+                        LIMIT 1
+                        """
+                    ),
+                    {"partner_name": name},
+                )
+            ).mappings().first()
+            provider_name = str((row or {}).get("provider") or "").strip().lower()
+            if provider_name:
+                return provider_name
+        else:
+            logger.warning(
+                "Table external_transfer_partners absente (schemas paylink/public); fallback provider default pour partner=%s",
+                name,
+            )
+    return str(getattr(settings, "EXTERNAL_TRANSFER_PROVIDER_DEFAULT", "internal") or "internal").strip().lower()
+
+
+async def _is_manual_external_transfer_enabled(db: AsyncSession) -> bool:
+    settings_row = await db.scalar(
+        select(GeneralSettings).order_by(GeneralSettings.created_at.desc())
+    )
+    return bool(getattr(settings_row, "manual_external_transfer", False)) if settings_row else False
 
 
 def _refresh_user_limits_counters_inplace(user: Users) -> None:
@@ -1054,6 +1103,49 @@ async def list_my_external_transfers(
     ]
 
 
+@router.get("/external/partners")
+async def list_external_transfer_partners(
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user),
+):
+    schema = await _resolve_external_transfer_partners_schema(db)
+    rows = []
+    if schema:
+        rows = (
+            await db.execute(
+                text(
+                    f"""
+                    SELECT
+                      partner_id::text AS partner_id,
+                      partner_name,
+                      provider,
+                      display_order
+                    FROM {schema}.external_transfer_partners
+                    WHERE is_active = true
+                    ORDER BY display_order ASC, partner_name ASC
+                    """
+                )
+            )
+        ).mappings().all()
+    else:
+        logger.warning("Table external_transfer_partners absente (schemas paylink/public); fallback partenaires statiques.")
+    if not rows:
+        return [
+            {"partner_name": "Lumicash", "provider": "internal"},
+            {"partner_name": "Ecocash", "provider": "internal"},
+            {"partner_name": "eNoti", "provider": "internal"},
+        ]
+    return [
+        {
+            "partner_id": str(item.get("partner_id") or ""),
+            "partner_name": str(item.get("partner_name") or ""),
+            "provider": str(item.get("provider") or "internal"),
+            "display_order": int(item.get("display_order") or 100),
+        }
+        for item in rows
+    ]
+
+
 async def _external_transfer_core(
     data: ExternalTransferCreate,
     background_tasks: BackgroundTasks,
@@ -1080,6 +1172,7 @@ async def _external_transfer_core(
                 "recipient_phone": str(data.recipient_phone or "").strip(),
                 "recipient_email": str(data.recipient_email or "").strip().lower(),
                 "amount": str(data.amount),
+                "use_bonus_balance": bool(getattr(data, "use_bonus_balance", False)),
                 "user_id": str(current_user.user_id),
             }
         )
@@ -1103,6 +1196,7 @@ async def _external_transfer_core(
             )
 
     amount = decimal.Decimal(data.amount)
+    use_bonus_balance = bool(getattr(data, "use_bonus_balance", False))
     if amount <= decimal.Decimal("0"):
         raise HTTPException(status_code=400, detail="Montant invalide")
     if not _is_valid_external_phone(data.recipient_phone):
@@ -1153,25 +1247,41 @@ async def _external_transfer_core(
     origin_currency = wallet_currency or credit_line_currency or "EUR"
     is_bif_wallet = str(wallet.currency_code or "").upper() == "BIF"
     destination_currency = EXTERNAL_TRANSFER_SETTLEMENT_CURRENCY
-    if is_bif_wallet and str(destination_currency or "").upper() == "BIF":
+    settings_row = await db.scalar(
+        select(GeneralSettings).order_by(GeneralSettings.created_at.desc())
+    )
+    manual_external_transfer_enabled = bool(
+        getattr(settings_row, "manual_external_transfer", False)
+    ) if settings_row else False
+    if use_bonus_balance:
+        fee_rate = decimal.Decimal("0")
+    elif is_bif_wallet and str(destination_currency or "").upper() == "BIF":
         fee_rate = decimal.Decimal("6.25")
     else:
-        settings_row = await db.scalar(
-            select(GeneralSettings).order_by(GeneralSettings.created_at.desc())
-        )
         fee_rate = decimal.Decimal(getattr(settings_row, "charge", 0) or 0)
     fee_amount = (amount * fee_rate / decimal.Decimal(100)).quantize(decimal.Decimal("0.01"))
 
     fx_rate = await _resolve_fx_rate(db, origin_currency, destination_currency)
 
     total_required = amount + fee_amount
-    approval_available = (
-        credit_available
-        if is_bif_wallet
-        else effective_external_transfer_capacity(wallet_balance, credit_available)
-    )
-    insufficient_funds_review_required = total_required > approval_available and not override_balance_check
-    shortfall_amount = max(decimal.Decimal("0"), total_required - approval_available)
+    bonus_balance_before = decimal.Decimal(wallet.bonus_balance or 0)
+    if use_bonus_balance:
+        if bonus_balance_before < total_required:
+            raise HTTPException(
+                status_code=400,
+                detail="Solde bonus insuffisant pour couvrir ce transfert externe.",
+            )
+        insufficient_funds_review_required = False
+        shortfall_amount = decimal.Decimal("0")
+        approval_available = total_required
+    else:
+        approval_available = (
+            credit_available
+            if is_bif_wallet
+            else effective_external_transfer_capacity(wallet_balance, credit_available)
+        )
+        insufficient_funds_review_required = total_required > approval_available and not override_balance_check
+        shortfall_amount = max(decimal.Decimal("0"), total_required - approval_available)
 
     used_daily = decimal.Decimal(user_locked.used_daily or 0)
     used_monthly = decimal.Decimal(user_locked.used_monthly or 0)
@@ -1243,11 +1353,16 @@ async def _external_transfer_core(
 
     wallet_balance_before = wallet_balance
     credit_available_after = credit_available_before
-    local_amount = (amount * fx_rate).quantize(decimal.Decimal("0.01"))
+    if str(destination_currency or "").upper() == "BIF":
+        local_amount = (amount * fx_rate).quantize(decimal.Decimal("1"), rounding=ROUND_DOWN)
+    else:
+        local_amount = (amount * fx_rate).quantize(decimal.Decimal("0.01"))
     wallet_after = wallet_balance_before
     credit_used = decimal.Decimal("0")
     wallet_debit_amount = decimal.Decimal("0")
-    if not insufficient_funds_review_required:
+    if use_bonus_balance:
+        wallet.bonus_balance = bonus_balance_before - total_required
+    elif not insufficient_funds_review_required:
         funding = compute_external_transfer_funding(
             wallet_available=wallet_balance_before,
             credit_available=credit_available_before,
@@ -1312,7 +1427,7 @@ async def _external_transfer_core(
     bonus_earned = min((amount * bonus_rate), bonus_cap)
     transfer_id = uuid.uuid4()
     reference_code = f"EXT-{uuid.uuid4().hex[:8].upper()}"
-    if not insufficient_funds_review_required:
+    if not insufficient_funds_review_required and not use_bonus_balance:
         wallet.bonus_balance = decimal.Decimal(wallet.bonus_balance or 0) + bonus_earned
 
     txn = Transactions(
@@ -1328,6 +1443,10 @@ async def _external_transfer_core(
     db.add(txn)
     await db.flush()
 
+    resolved_provider = await _resolve_external_provider_name(db, data.partner_name)
+    if manual_external_transfer_enabled:
+        resolved_provider = "internal"
+
     transfer = ExternalTransfers(
         transfer_id=transfer_id,
         user_id=current_user.user_id,
@@ -1341,6 +1460,10 @@ async def _external_transfer_core(
         local_amount=local_amount,
         credit_used=(credit_used > 0),
         status=transfer_status,
+        provider=resolved_provider,
+        provider_status="created",
+        idempotency_key=f"ext-{transfer_id}",
+        retry_count=0,
         processed_by=processed_by_user_id if transfer_status == "completed" else None,
         processed_at=datetime.utcnow() if transfer_status == "completed" else None,
         reference_code=reference_code,
@@ -1372,10 +1495,17 @@ async def _external_transfer_core(
         "transaction_id": str(txn.tx_id),
         "fee_rate": str(fee_rate),
         "fee_amount": str(fee_amount),
+        "use_bonus_balance": bool(use_bonus_balance),
+        "bonus_debited_amount": str(total_required) if use_bonus_balance else "0",
+        "bonus_balance_before": str(bonus_balance_before),
+        "bonus_balance_after": str(decimal.Decimal(wallet.bonus_balance or 0)),
         "fx_rate": str(fx_rate),
         "origin_currency": origin_currency,
         "destination_currency": destination_currency,
         "idempotency_key": scoped_idempotency_key,
+        "provider": str(getattr(transfer, "provider", "") or "internal"),
+        "provider_transfer_idempotency_key": str(getattr(transfer, "idempotency_key", "") or f"ext-{transfer_id}"),
+        "manual_external_transfer_enabled": bool(manual_external_transfer_enabled),
         "override_balance_check": bool(override_balance_check),
         "force_negative_wallet": bool(override_balance_check),
         "final_status_override": requested_status or None,
@@ -1405,7 +1535,7 @@ async def _external_transfer_core(
             for key, value in override_context.items()
             if value is not None
         }
-    if not insufficient_funds_review_required:
+    if not insufficient_funds_review_required and not use_bonus_balance:
         if debited > 0:
             entries.append(
                 LedgerLine(
@@ -1452,7 +1582,7 @@ async def _external_transfer_core(
             entries=entries,
         )
 
-    if not insufficient_funds_review_required:
+    if not insufficient_funds_review_required and not use_bonus_balance:
         db.add(
             BonusHistory(
                 user_id=current_user.user_id,
@@ -1462,7 +1592,7 @@ async def _external_transfer_core(
             )
         )
 
-    if not insufficient_funds_review_required and credit_used > 0:
+    if not insufficient_funds_review_required and credit_used > 0 and not use_bonus_balance:
         history_entry = CreditLineHistory(
             user_id=current_user.user_id,
             transaction_id=txn.tx_id,
@@ -1555,6 +1685,16 @@ async def _external_transfer_core(
             )
     else:
         background_tasks.add_task(_notify_external_transfer_task, **notification_kwargs)
+    provider_name = str(getattr(transfer, "provider", "") or "").lower()
+    if (
+        transfer_status == "approved"
+        and not manual_external_transfer_enabled
+        and provider_name not in {"", "internal", "none"}
+    ):
+        background_tasks.add_task(
+            dispatch_external_transfer_provider_by_id,
+            str(transfer.transfer_id),
+        )
     return payload_out if scoped_idempotency_key else payload_out
 
 
@@ -1629,7 +1769,10 @@ async def simulate_external_transfer(
     total_required = payload.amount + fee_amount
 
     fx_rate = await _resolve_fx_rate(db, sender_currency, destination_currency)
-    local_amount = (payload.amount * fx_rate).quantize(decimal.Decimal("0.01"))
+    if str(destination_currency or "").upper() == "BIF":
+        local_amount = (payload.amount * fx_rate).quantize(decimal.Decimal("1"), rounding=ROUND_DOWN)
+    else:
+        local_amount = (payload.amount * fx_rate).quantize(decimal.Decimal("0.01"))
 
     approval_capacity = (
         credit_available
@@ -2195,6 +2338,16 @@ async def approve_external_transfer(
             notify_telegram=True,
             notify_client=was_funding_pending,
             notify_recipient=True,
+        )
+    provider_name = str(getattr(transfer, "provider", "") or "").lower()
+    manual_external_transfer_enabled = await _is_manual_external_transfer_enabled(db)
+    if (
+        not manual_external_transfer_enabled
+        and provider_name not in {"", "internal", "none"}
+    ):
+        background_tasks.add_task(
+            dispatch_external_transfer_provider_by_id,
+            str(transfer.transfer_id),
         )
     return {"message": "Transfert valide"}
 

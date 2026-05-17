@@ -179,6 +179,26 @@ class Settings(BaseSettings):
     PAYMENTS_ENOTI_API_KEY: str | None = None
     PAYMENTS_ENOTI_COLLECTIONS_PATH: str = "/collections/mobile-money"
 
+    # -------------------------------------------------
+    # EXTERNAL TRANSFER PROVIDERS (iHela)
+    # -------------------------------------------------
+    EXTERNAL_TRANSFER_PROVIDER_DEFAULT: str = "internal"
+    EXTERNAL_TRANSFER_PROVIDER_RETRY_MAX: int = 3
+    EXTERNAL_TRANSFER_PROVIDER_BACKOFF_BASE_SECONDS: int = 30
+    EXTERNAL_TRANSFER_PROVIDER_RECONCILE_ENABLED: bool = True
+    EXTERNAL_TRANSFER_PROVIDER_RECONCILE_INTERVAL_SECONDS: int = 60
+    EXTERNAL_TRANSFER_PROVIDER_RECONCILE_BATCH_SIZE: int = 100
+
+    IHELA_ENABLED: bool = False
+    IHELA_API_BASE_URL: str | None = None
+    IHELA_API_KEY: str | None = None
+    IHELA_TIMEOUT_SECONDS: float = 12.0
+    IHELA_SEND_PATH: str = "/transfers"
+    IHELA_STATUS_PATH: str = "/transfers/{provider_ref}"
+    IHELA_AUTH_SCHEME: str = "Bearer"
+    IHELA_WEBHOOK_SECRET: str | None = None
+    IHELA_WEBHOOK_SIGNATURE_HEADER: str = "X-IHela-Signature"
+
     def _role_suffix(self, role: str | None) -> str | None:
         normalized = str(role or "").strip().lower()
         if normalized in {"client", "agent", "admin"}:
