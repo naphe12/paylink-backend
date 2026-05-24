@@ -90,15 +90,25 @@ class LedgerService:
             raise ValueError(f"Unknown cash direction '{direction}'.")
 
         suffix = "IN" if normalized_direction == "in" else "OUT"
-        candidate_codes = [
-            f"LEDGER::CASH_{suffix}_{normalized_currency}",
-            *self._candidate_codes(f"LEDGER::CASH_{suffix}"),
-        ]
+        primary_code = f"LEDGER::CASH_{suffix}_{normalized_currency}"
 
+        # Prefer a currency-specific account when available.
         account = await self.db.scalar(
-            select(LedgerAccounts).where(LedgerAccounts.code.in_(candidate_codes))
+            select(LedgerAccounts).where(LedgerAccounts.code == primary_code)
+        )
+        if account:
+            return account
+
+        # Legacy aliases are accepted only if account currency matches the requested one.
+        fallback_codes = self._candidate_codes(f"LEDGER::CASH_{suffix}")
+        account = await self.db.scalar(
+            select(LedgerAccounts).where(
+                LedgerAccounts.code.in_(fallback_codes),
+                LedgerAccounts.currency_code == normalized_currency,
+            )
         )
         if not account:
+            candidate_codes = [primary_code, *fallback_codes]
             raise LookupError(
                 "Compte de compensation cash introuvable "
                 f"(direction={normalized_direction}, currency={normalized_currency}). "
