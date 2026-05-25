@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 import inspect
 import json
@@ -693,6 +694,15 @@ app.include_router(p2p_router, prefix="/api")
 app.include_router(admin_p2p_router, prefix="/api")
 app.include_router(admin_arbitrage_router, prefix="/api")
 
+# Flatten router lifespan handling to avoid recursive merged lifespan chains.
+# This uses only public APIs and is stable across FastAPI versions.
+@asynccontextmanager
+async def _flat_router_lifespan(_app):
+    yield
+
+
+app.router.lifespan_context = _flat_router_lifespan
+
 
 def _get_request_id(request: Request) -> str | None:
     return (
@@ -1023,6 +1033,7 @@ async def ws_admin(
 
 @app.on_event("startup")
 async def startup_event():
+    logger.info("Lifespan context in use: %s", type(app.router.lifespan_context).__name__)
     async for db in get_db():
         await ensure_core_schemas(db)
         await ensure_auth_refresh_schema(db)

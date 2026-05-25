@@ -2391,11 +2391,40 @@ async def internal_transfer(
             "Transfert interne impossible entre portefeuilles de devises differentes.",
         )
 
-    if w_sender.available < amount:
+    credit_line = await db.scalar(
+        select(CreditLines)
+        .where(CreditLines.user_id == current_user.user_id)
+        .with_for_update()
+    )
+    credit_available = (
+        max(decimal.Decimal(credit_line.outstanding_amount or 0), decimal.Decimal("0"))
+        if credit_line
+        else max(
+            decimal.Decimal(current_user.credit_limit or 0) - decimal.Decimal(current_user.credit_used or 0),
+            decimal.Decimal("0"),
+        )
+    )
+    funding = compute_external_transfer_funding(
+        wallet_available=decimal.Decimal(w_sender.available or 0),
+        credit_available=credit_available,
+        total_required=amount,
+        mirror_wallet_with_credit=True,
+    )
+    if funding["residual_after_credit"] > 0:
         raise HTTPException(400, "Solde insuffisant")
 
-    w_sender.available -= amount
+    w_sender.available = funding["wallet_after"]
     w_receiver.available += amount
+    credit_used = funding["credit_used"]
+    if credit_used > 0:
+        if credit_line:
+            credit_line.used_amount = decimal.Decimal(credit_line.used_amount or 0) + credit_used
+            credit_line.outstanding_amount = max(decimal.Decimal("0"), funding["credit_available_after"])
+            credit_line.updated_at = datetime.utcnow()
+            current_user.credit_limit = decimal.Decimal(credit_line.initial_amount or 0)
+            current_user.credit_used = decimal.Decimal(credit_line.used_amount or 0)
+        else:
+            current_user.credit_used = decimal.Decimal(current_user.credit_used or 0) + credit_used
 
     sender_movement = await log_wallet_movement(
         db,

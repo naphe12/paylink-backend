@@ -58,6 +58,7 @@ from app.services.bonus_transfer_service import (
     list_bonus_history_payload,
     send_bonus_by_identifier,
 )
+from app.services.external_transfer_capacity import compute_external_transfer_funding
 from app.models.credit_lines import CreditLines
 from app.models.credit_line_events import CreditLineEvents
 from app.models.tontinemembers import TontineMembers
@@ -643,7 +644,7 @@ async def transfer_money(
         raise HTTPException(status_code=400, detail="Montant invalide")
 
     sender_wallet = await _get_primary_wallet(db, current_user.user_id)
-    if not sender_wallet or sender_wallet.available < amount:
+    if not sender_wallet:
         raise HTTPException(status_code=400, detail="Solde insuffisant")
 
     receiver_user = await db.scalar(
@@ -661,9 +662,40 @@ async def transfer_money(
             detail="Transfert interne impossible entre portefeuilles de devises differentes.",
         )
 
+    credit_line = await db.scalar(
+        select(CreditLines)
+        .where(CreditLines.user_id == current_user.user_id)
+        .with_for_update()
+    )
+    credit_available = (
+        max(decimal.Decimal(credit_line.outstanding_amount or 0), decimal.Decimal("0"))
+        if credit_line
+        else max(
+            decimal.Decimal(current_user.credit_limit or 0) - decimal.Decimal(current_user.credit_used or 0),
+            decimal.Decimal("0"),
+        )
+    )
+    funding = compute_external_transfer_funding(
+        wallet_available=decimal.Decimal(sender_wallet.available or 0),
+        credit_available=credit_available,
+        total_required=amount,
+        mirror_wallet_with_credit=True,
+    )
+    if funding["residual_after_credit"] > 0:
+        raise HTTPException(status_code=400, detail="Solde insuffisant")
+
     # 💱 Transfert atomique
-    sender_wallet.available -= amount
+    sender_wallet.available = funding["wallet_after"]
     receiver_wallet.available += amount
+    credit_used = funding["credit_used"]
+    if credit_used > 0:
+        if credit_line:
+            credit_line.used_amount = decimal.Decimal(credit_line.used_amount or 0) + credit_used
+            credit_line.outstanding_amount = max(decimal.Decimal("0"), funding["credit_available_after"])
+            current_user.credit_limit = decimal.Decimal(credit_line.initial_amount or 0)
+            current_user.credit_used = decimal.Decimal(credit_line.used_amount or 0)
+        else:
+            current_user.credit_used = decimal.Decimal(current_user.credit_used or 0) + credit_used
     sender_movement = await log_wallet_movement(
         db,
         wallet=sender_wallet,
@@ -1172,7 +1204,26 @@ async def send_money(
     await reset_limits_if_needed(db, current_user)
     # 3) Vérifier solde suffisant
     amount = Decimal(tx.amount)
-    if sender_wallet.available < amount:
+    credit_line = await db.scalar(
+        select(CreditLines)
+        .where(CreditLines.user_id == current_user.user_id)
+        .with_for_update()
+    )
+    credit_available = (
+        max(decimal.Decimal(credit_line.outstanding_amount or 0), decimal.Decimal("0"))
+        if credit_line
+        else max(
+            decimal.Decimal(current_user.credit_limit or 0) - decimal.Decimal(current_user.credit_used or 0),
+            decimal.Decimal("0"),
+        )
+    )
+    funding = compute_external_transfer_funding(
+        wallet_available=decimal.Decimal(sender_wallet.available or 0),
+        credit_available=credit_available,
+        total_required=amount,
+        mirror_wallet_with_credit=True,
+    )
+    if funding["residual_after_credit"] > 0:
         raise HTTPException(400, "Solde insuffisant")
     
     if current_user.used_daily + amount > current_user.daily_limit:
@@ -1182,8 +1233,17 @@ async def send_money(
         raise HTTPException(403, "⚠️ Limite mensuelle dépassée")
 
     # 4) Effectuer le transfert
-    sender_wallet.available -= amount
+    sender_wallet.available = funding["wallet_after"]
     receiver_wallet.available += amount
+    credit_used = funding["credit_used"]
+    if credit_used > 0:
+        if credit_line:
+            credit_line.used_amount = decimal.Decimal(credit_line.used_amount or 0) + credit_used
+            credit_line.outstanding_amount = max(decimal.Decimal("0"), funding["credit_available_after"])
+            current_user.credit_limit = decimal.Decimal(credit_line.initial_amount or 0)
+            current_user.credit_used = decimal.Decimal(credit_line.used_amount or 0)
+        else:
+            current_user.credit_used = decimal.Decimal(current_user.credit_used or 0) + credit_used
 
     sender_movement = await log_wallet_movement(
         db,
