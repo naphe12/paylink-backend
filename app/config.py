@@ -200,6 +200,9 @@ class Settings(BaseSettings):
     IHELA_WEBHOOK_SIGNATURE_HEADER: str = "X-IHela-Signature"
     IHELA_OAUTH_CLIENT_ID: str | None = None
     IHELA_OAUTH_CLIENT_SECRET: str | None = None
+    IHELA_AUTH_USERNAME: str | None = None
+    IHELA_AUTH_PASSWORD: str | None = None
+    IHELA_AUTH_TOKEN_MODE: str = "client_credentials"
     IHELA_OAUTH_TOKEN_PATH: str = "/oAuth2/token/"
     IHELA_BANKING_API_PREFIX: str = "/ihela/api/v1"
     IHELA_BRIDGE_BASE_URL: str | None = None

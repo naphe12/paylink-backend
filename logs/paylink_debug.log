@@ -47469,3 +47469,23 @@ WHERE paylink.wallets.user_id = $1::UUID
 [INFO] 2025-11-19 19:47:11,117 - ROLLBACK
 [INFO] 2025-11-19 19:47:11,118 - 📤 Réponse: POST /wallet/transfer/external → 400 (41.32 ms)
 [INFO] 2025-11-19 19:47:11,119 - 🔐 Headers de la requête: {'host': '127.0.0.1:8000', 'connection': 'keep-alive', 'content-length': '143', 'sec-ch-ua-platform': '"Windows"', 'authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmMzk2NzcyMS04ZGU5LTQ1M2UtOWYwYi0xNDMxY2JmNTE5N2UiLCJleHAiOjE3NjM2Njc2MjUsInRva2VuX3R5cGUiOiJiZWFyZXIifQ.Plj4CrLbXSyige2YJZ7J_CkMHFrDPkrn6Y6BmHcjymQ', 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36', 'accept': 'application/json', 'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"', 'content-type': 'application/json', 'sec-ch-ua-mobile': '?0', 'origin': 'http://127.0.0.1:5173', 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty', 'referer': 'http://127.0.0.1:5173/', 'accept-encoding': 'gzip, deflate, br, zstd', 'accept-language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7'}
+[INFO] 2026-06-07 11:21:24,549 - Demarrage du backend paylink...
+[INFO] 2026-06-07 11:22:01,885 - 📥 Requête entrante: GET /health depuis 127.0.0.1
+[INFO] 2026-06-07 11:22:01,888 - 📤 Réponse: GET /health → 200 (3.27 ms)
+[INFO] 2026-06-07 11:22:01,888 - 🔐 Headers de la requête: {'user-agent': 'Mozilla/5.0 (Windows NT; Windows NT 10.0; fr-BE) WindowsPowerShell/5.1.22621.6133', 'host': '127.0.0.1:8000', 'connection': 'Keep-Alive'}
+[INFO] 2026-06-07 11:22:15,813 - 📥 Requête entrante: POST /providers/ihela/test/transaction-status depuis 127.0.0.1
+[WARNING] 2026-06-07 11:22:15,816 - Auth token missing on /providers/ihela/test/transaction-status (auth=False, x_access=False, cookie_access=False, cookie_token=False)
+[WARNING] 2026-06-07 11:22:23,049 - App error persistence failed path=/providers/ihela/test/transaction-status request_id=dc2a89b9-336a-4d63-9041-3d1196a11d94 err=[WinError 64] Le nom réseau spécifié n’est plus disponible
+[WARNING] 2026-06-07 11:22:23,050 - HTTP exception path=/providers/ihela/test/transaction-status method=POST status=401 request_id=dc2a89b9-336a-4d63-9041-3d1196a11d94 detail=Not authenticated
+[INFO] 2026-06-07 11:22:23,050 - 📤 Réponse: POST /providers/ihela/test/transaction-status → 401 (7236.89 ms)
+[INFO] 2026-06-07 11:22:23,050 - 🔐 Headers de la requête: {'user-agent': 'Mozilla/5.0 (Windows NT; Windows NT 10.0; fr-BE) WindowsPowerShell/5.1.22621.6133', 'content-type': 'application/json', 'host': '127.0.0.1:8000', 'content-length': '26', 'expect': '100-continue', 'connection': 'Keep-Alive'}
+[WARNING] 2026-06-07 11:22:30,378 - Request metrics insert failed path=/providers/ihela/test/transaction-status err=[WinError 64] Le nom réseau spécifié n’est plus disponible
+[INFO] 2026-06-07 11:22:49,155 - 📥 Requête entrante: POST /providers/ihela/test/transaction-status depuis 127.0.0.1
+[WARNING] 2026-06-07 11:22:56,413 - App error persistence failed path=/providers/ihela/test/transaction-status request_id=86f23ad4-16b0-4910-9b1e-8839f4f8ffb5 err=[WinError 64] Le nom réseau spécifié n’est plus disponible
+[WARNING] 2026-06-07 11:22:56,413 - Validation exception path=/providers/ihela/test/transaction-status method=POST request_id=86f23ad4-16b0-4910-9b1e-8839f4f8ffb5 errors=[{'type': 'json_invalid', 'loc': ['body', 1], 'msg': 'JSON decode error', 'input': {}, 'ctx': {'error': 'Expecting property name enclosed in double quotes'}}]
+[INFO] 2026-06-07 11:22:56,413 - 📤 Réponse: POST /providers/ihela/test/transaction-status → 422 (7258.14 ms)
+[INFO] 2026-06-07 11:22:56,413 - 🔐 Headers de la requête: {'host': '127.0.0.1:8000', 'user-agent': 'curl/8.13.0', 'accept': '*/*', 'content-type': 'application/json', 'content-length': '2'}
+[WARNING] 2026-06-07 11:23:03,598 - Request metrics insert failed path=/providers/ihela/test/transaction-status err=[WinError 64] Le nom réseau spécifié n’est plus disponible
+[INFO] 2026-06-07 11:23:15,911 - 📥 Requête entrante: GET /health depuis 127.0.0.1
+[INFO] 2026-06-07 11:23:15,914 - 📤 Réponse: GET /health → 200 (3.68 ms)
+[INFO] 2026-06-07 11:23:15,914 - 🔐 Headers de la requête: {'user-agent': 'Mozilla/5.0 (Windows NT; Windows NT 10.0; fr-BE) WindowsPowerShell/5.1.22621.6133', 'host': '127.0.0.1:8000', 'connection': 'Keep-Alive'}

@@ -64,20 +64,36 @@ def _ihela_oauth_credentials() -> tuple[str, str]:
 
 async def _ihela_fetch_oauth_token() -> dict[str, Any]:
     base_url = _ihela_base_url()
-    client_id, client_secret = _ihela_oauth_credentials()
-    token_path = str(getattr(settings, "IHELA_OAUTH_TOKEN_PATH", "/oAuth2/token/") or "/oAuth2/token/")
+    token_mode = str(getattr(settings, "IHELA_AUTH_TOKEN_MODE", "client_credentials") or "client_credentials").strip().lower()
+    default_token_path = "/ihela/api/v1/auth-token/" if token_mode == "password" else "/oAuth2/token/"
+    token_path = str(getattr(settings, "IHELA_OAUTH_TOKEN_PATH", default_token_path) or default_token_path)
     token_url = _join_url(base_url, token_path)
-    pair = f"{client_id}:{client_secret}".encode("ascii")
-    basic = base64.b64encode(pair).decode("ascii")
     timeout = float(getattr(settings, "IHELA_TIMEOUT_SECONDS", 12.0) or 12.0)
 
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                token_url,
-                headers={"Authorization": f"Basic {basic}"},
-                data={"grant_type": "client_credentials"},
-            )
+            if token_mode == "password":
+                username = str(getattr(settings, "IHELA_AUTH_USERNAME", "") or "").strip()
+                password = str(getattr(settings, "IHELA_AUTH_PASSWORD", "") or "").strip()
+                if not username or not password:
+                    raise HTTPException(status_code=400, detail="IHELA_AUTH_USERNAME / IHELA_AUTH_PASSWORD manquants")
+                response = await client.post(
+                    token_url,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                    },
+                    json={"username": username, "password": password},
+                )
+            else:
+                client_id, client_secret = _ihela_oauth_credentials()
+                pair = f"{client_id}:{client_secret}".encode("ascii")
+                basic = base64.b64encode(pair).decode("ascii")
+                response = await client.post(
+                    token_url,
+                    headers={"Authorization": f"Basic {basic}"},
+                    data={"grant_type": "client_credentials"},
+                )
     except httpx.TimeoutException as exc:
         raise HTTPException(status_code=504, detail="Timeout iHela sur OAuth2 token") from exc
     except httpx.HTTPError as exc:
@@ -91,8 +107,12 @@ async def _ihela_fetch_oauth_token() -> dict[str, Any]:
         body = response.json()
     except ValueError as exc:
         raise HTTPException(status_code=502, detail="Reponse OAuth2 iHela non-JSON") from exc
-    if not isinstance(body, dict) or not str(body.get("access_token") or "").strip():
-        raise HTTPException(status_code=502, detail="access_token manquant dans la reponse OAuth2 iHela")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=502, detail="Reponse token iHela invalide")
+    access_token = str(body.get("access_token") or body.get("access") or "").strip()
+    if not access_token:
+        raise HTTPException(status_code=502, detail="access_token manquant dans la reponse token iHela")
+    body["access_token"] = access_token
     return body
 
 
