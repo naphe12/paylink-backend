@@ -21,9 +21,24 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$base = $BackendBaseUrl.TrimEnd("/")
+function Clean-HeaderValue([string]$Value) {
+  return (($Value -replace "[`r`n]", "")).Trim()
+}
+
+$base = (Clean-HeaderValue $BackendBaseUrl).TrimEnd("/")
+$JwtToken = Clean-HeaderValue $JwtToken
+$DebitAccount = Clean-HeaderValue $DebitAccount
+$DebitAccountHolder = Clean-HeaderValue $DebitAccountHolder
+$PinCode = Clean-HeaderValue $PinCode
+$Description = (($Description -replace "[`r`n]", " ")).Trim()
+$ExternalReference = Clean-HeaderValue $ExternalReference
+
 if ([string]::IsNullOrWhiteSpace($ExternalReference)) {
   $ExternalReference = "PAYLINK-TEST-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+}
+
+if ($JwtToken -match "\s") {
+  throw "JwtToken invalide: il contient des espaces ou retours ligne. Recupere uniquement access_token."
 }
 
 $headers = @{
