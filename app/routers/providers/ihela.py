@@ -62,11 +62,19 @@ def _ihela_oauth_credentials() -> tuple[str, str]:
     return client_id, client_secret
 
 
+def _ihela_token_path_for_mode(token_mode: str) -> str:
+    configured_path = str(getattr(settings, "IHELA_OAUTH_TOKEN_PATH", "") or "").strip()
+    if configured_path:
+        return configured_path
+    if token_mode == "password":
+        return "/ihela/api/v1/auth-token/"
+    return "/oAuth2/token/"
+
+
 async def _ihela_fetch_oauth_token() -> dict[str, Any]:
     base_url = _ihela_base_url()
     token_mode = str(getattr(settings, "IHELA_AUTH_TOKEN_MODE", "client_credentials") or "client_credentials").strip().lower()
-    default_token_path = "/ihela/api/v1/auth-token/" if token_mode == "password" else "/oAuth2/token/"
-    token_path = str(getattr(settings, "IHELA_OAUTH_TOKEN_PATH", default_token_path) or default_token_path)
+    token_path = _ihela_token_path_for_mode(token_mode)
     token_url = _join_url(base_url, token_path)
     timeout = float(getattr(settings, "IHELA_TIMEOUT_SECONDS", 12.0) or 12.0)
 

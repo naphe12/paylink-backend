@@ -203,7 +203,7 @@ class Settings(BaseSettings):
     IHELA_AUTH_USERNAME: str | None = None
     IHELA_AUTH_PASSWORD: str | None = None
     IHELA_AUTH_TOKEN_MODE: str = "client_credentials"
-    IHELA_OAUTH_TOKEN_PATH: str = "/oAuth2/token/"
+    IHELA_OAUTH_TOKEN_PATH: str = ""
     IHELA_BANKING_API_PREFIX: str = "/ihela/api/v1"
     IHELA_BRIDGE_BASE_URL: str | None = None
     IHELA_BRIDGE_API_KEY: str | None = None

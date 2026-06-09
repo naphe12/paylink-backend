@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -104,3 +105,93 @@ def test_ihela_test_withdrawal_reports_missing_direct_config(monkeypatch):
 
     assert response.status_code == 400
     assert response.json()["detail"] == "IHELA_API_BASE_URL manquant"
+
+
+@pytest.mark.anyio
+async def test_ihela_fetch_oauth_token_client_credentials_payload(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"access_token":"token-123"}'
+        content = b'{"access_token":"token-123"}'
+
+        def json(self):
+            return {"access_token": "token-123", "token_type": "Bearer"}
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, **kwargs):
+            calls.append((url, kwargs))
+            return FakeResponse()
+
+    monkeypatch.setattr(settings, "IHELA_API_BASE_URL", "https://ihela.example.test")
+    monkeypatch.setattr(settings, "IHELA_AUTH_TOKEN_MODE", "client_credentials")
+    monkeypatch.setattr(settings, "IHELA_OAUTH_TOKEN_PATH", "")
+    monkeypatch.setattr(settings, "IHELA_OAUTH_CLIENT_ID", "client-id")
+    monkeypatch.setattr(settings, "IHELA_OAUTH_CLIENT_SECRET", "client-secret")
+    monkeypatch.setattr(ihela.httpx, "AsyncClient", FakeAsyncClient)
+
+    token = await ihela._ihela_fetch_oauth_token()
+
+    assert token["access_token"] == "token-123"
+    assert calls[0][0] == "https://ihela.example.test/oAuth2/token/"
+    assert calls[0][1]["data"] == {"grant_type": "client_credentials"}
+    assert calls[0][1]["headers"]["Authorization"].startswith("Basic ")
+
+
+@pytest.mark.anyio
+async def test_ihela_fetch_oauth_token_password_mode_uses_auth_token_default_path(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"access":"token-456"}'
+        content = b'{"access":"token-456"}'
+
+        def json(self):
+            return {"access": "token-456"}
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, **kwargs):
+            calls.append((url, kwargs))
+            return FakeResponse()
+
+    monkeypatch.setattr(settings, "IHELA_API_BASE_URL", "https://ihela.example.test")
+    monkeypatch.setattr(settings, "IHELA_AUTH_TOKEN_MODE", "password")
+    monkeypatch.setattr(settings, "IHELA_OAUTH_TOKEN_PATH", "")
+    monkeypatch.setattr(settings, "IHELA_AUTH_USERNAME", "merchant-user")
+    monkeypatch.setattr(settings, "IHELA_AUTH_PASSWORD", "merchant-pass")
+    monkeypatch.setattr(ihela.httpx, "AsyncClient", FakeAsyncClient)
+
+    token = await ihela._ihela_fetch_oauth_token()
+
+    assert token["access_token"] == "token-456"
+    assert calls[0][0] == "https://ihela.example.test/ihela/api/v1/auth-token/"
+    assert calls[0][1]["json"] == {
+        "username": "merchant-user",
+        "password": "merchant-pass",
+    }
+    assert calls[0][1]["headers"]["Content-Type"] == "application/json"
+
+
+@pytest.fixture(params=["asyncio"])
+def anyio_backend(request):
+    return request.param

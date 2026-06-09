@@ -105,7 +105,7 @@ class Settings(BaseSettings):
     IHELA_AUTH_USERNAME: str = os.getenv("IHELA_AUTH_USERNAME", "")
     IHELA_AUTH_PASSWORD: str = os.getenv("IHELA_AUTH_PASSWORD", "")
     IHELA_AUTH_TOKEN_MODE: str = os.getenv("IHELA_AUTH_TOKEN_MODE", "client_credentials")
-    IHELA_OAUTH_TOKEN_PATH: str = os.getenv("IHELA_OAUTH_TOKEN_PATH", "/oAuth2/token/")
+    IHELA_OAUTH_TOKEN_PATH: str = os.getenv("IHELA_OAUTH_TOKEN_PATH", "")
     IHELA_BANKING_API_PREFIX: str = os.getenv("IHELA_BANKING_API_PREFIX", "/ihela/api/v1")
     IHELA_BRIDGE_BASE_URL: str = os.getenv("IHELA_BRIDGE_BASE_URL", "")
     IHELA_BRIDGE_API_KEY: str = os.getenv("IHELA_BRIDGE_API_KEY", "")
