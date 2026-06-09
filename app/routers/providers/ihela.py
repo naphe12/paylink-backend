@@ -118,8 +118,13 @@ def _ihela_banking_api_prefixes() -> list[str]:
     return list(dict.fromkeys(prefixes))
 
 
+def _ihela_direct_endpoint_path(setting_name: str, default_path: str) -> str:
+    path = str(getattr(settings, setting_name, "") or "").strip() or default_path
+    return path.strip("/")
+
+
 async def _ihela_direct_post(
-    endpoint: str,
+    endpoint_path: str,
     payload: dict[str, Any],
     access_token: str,
     timeout: float,
@@ -130,7 +135,7 @@ async def _ihela_direct_post(
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = None
         for api_prefix in _ihela_banking_api_prefixes():
-            url = _join_url(base_url, f"{api_prefix.rstrip('/')}/{endpoint.strip('/')}/")
+            url = _join_url(base_url, f"{api_prefix.rstrip('/')}/{endpoint_path.strip('/')}/")
             attempted_urls.append(url)
             response = await client.post(
                 url,
@@ -144,7 +149,7 @@ async def _ihela_direct_post(
             if response.status_code != 404:
                 return response, attempted_urls
         if response is None:
-            raise HTTPException(status_code=502, detail=f"Aucune requete iHela envoyee sur {endpoint}")
+            raise HTTPException(status_code=502, detail=f"Aucune requete iHela envoyee sur {endpoint_path}")
         return response, attempted_urls
 
 
@@ -340,6 +345,8 @@ async def ihela_test_oauth_debug(
     token_mode = str(getattr(settings, "IHELA_AUTH_TOKEN_MODE", "client_credentials") or "client_credentials").strip().lower()
     token_paths = _ihela_token_paths_for_mode(token_mode)
     api_prefix = str(getattr(settings, "IHELA_BANKING_API_PREFIX", "/ihela/api/v1") or "/ihela/api/v1")
+    withdrawal_path = _ihela_direct_endpoint_path("IHELA_SEND_PATH", "make-withdrawal")
+    status_path = _ihela_direct_endpoint_path("IHELA_STATUS_PATH", "transaction-status")
     return {
         "transport": "bridge" if _bridge_configured() else "direct",
         "ihela_api_base_url": base_url,
@@ -347,8 +354,10 @@ async def ihela_test_oauth_debug(
         "oauth_token_path_configured": str(getattr(settings, "IHELA_OAUTH_TOKEN_PATH", "") or "").strip(),
         "token_urls": [_join_url(base_url, token_path) for token_path in token_paths],
         "banking_api_prefix": api_prefix,
-        "withdrawal_url": _join_url(base_url, f"{api_prefix.rstrip('/')}/make-withdrawal/"),
-        "status_url": _join_url(base_url, f"{api_prefix.rstrip('/')}/transaction-status/"),
+        "withdrawal_path": withdrawal_path,
+        "status_path": status_path,
+        "withdrawal_url": _join_url(base_url, f"{api_prefix.rstrip('/')}/{withdrawal_path}/"),
+        "status_url": _join_url(base_url, f"{api_prefix.rstrip('/')}/{status_path}/"),
         "has_oauth_client_id": bool(str(getattr(settings, "IHELA_OAUTH_CLIENT_ID", "") or "").strip()),
         "has_oauth_client_secret": bool(str(getattr(settings, "IHELA_OAUTH_CLIENT_SECRET", "") or "").strip()),
         "has_auth_username": bool(str(getattr(settings, "IHELA_AUTH_USERNAME", "") or "").strip()),
@@ -376,9 +385,10 @@ async def ihela_test_withdrawal(
     oauth = await _ihela_fetch_oauth_token()
     access_token = str(oauth.get("access_token") or "").strip()
     timeout = float(getattr(settings, "IHELA_TIMEOUT_SECONDS", 12.0) or 12.0)
+    endpoint_path = _ihela_direct_endpoint_path("IHELA_SEND_PATH", "make-withdrawal")
 
     try:
-        response, attempted_urls = await _ihela_direct_post("make-withdrawal", payload, access_token, timeout)
+        response, attempted_urls = await _ihela_direct_post(endpoint_path, payload, access_token, timeout)
     except httpx.TimeoutException as exc:
         raise HTTPException(status_code=504, detail="Timeout iHela sur make-withdrawal") from exc
     except httpx.HTTPError as exc:
@@ -426,9 +436,10 @@ async def ihela_test_transaction_status(
     oauth = await _ihela_fetch_oauth_token()
     access_token = str(oauth.get("access_token") or "").strip()
     timeout = float(getattr(settings, "IHELA_TIMEOUT_SECONDS", 12.0) or 12.0)
+    endpoint_path = _ihela_direct_endpoint_path("IHELA_STATUS_PATH", "transaction-status")
 
     try:
-        response, attempted_urls = await _ihela_direct_post("transaction-status", payload, access_token, timeout)
+        response, attempted_urls = await _ihela_direct_post(endpoint_path, payload, access_token, timeout)
     except httpx.TimeoutException as exc:
         raise HTTPException(status_code=504, detail="Timeout iHela sur transaction-status") from exc
     except httpx.HTTPError as exc:

@@ -114,6 +114,8 @@ def test_ihela_oauth_debug_returns_resolved_urls_without_secrets(monkeypatch):
     monkeypatch.setattr(settings, "IHELA_AUTH_TOKEN_MODE", "client_credentials")
     monkeypatch.setattr(settings, "IHELA_OAUTH_TOKEN_PATH", "/testenv/oAuth2/token/")
     monkeypatch.setattr(settings, "IHELA_BANKING_API_PREFIX", "/testenv/ihela/api/v1")
+    monkeypatch.setattr(settings, "IHELA_SEND_PATH", "make-withdrawal")
+    monkeypatch.setattr(settings, "IHELA_STATUS_PATH", "transaction-status")
     monkeypatch.setattr(settings, "IHELA_OAUTH_CLIENT_ID", "client-id")
     monkeypatch.setattr(settings, "IHELA_OAUTH_CLIENT_SECRET", "client-secret")
 
@@ -126,6 +128,7 @@ def test_ihela_oauth_debug_returns_resolved_urls_without_secrets(monkeypatch):
     assert payload["ihela_api_base_url"] == "https://api.ihela.bi"
     assert payload["auth_token_mode"] == "client_credentials"
     assert payload["token_urls"] == ["https://api.ihela.bi/testenv/oAuth2/token/"]
+    assert payload["withdrawal_path"] == "make-withdrawal"
     assert payload["withdrawal_url"] == "https://api.ihela.bi/testenv/ihela/api/v1/make-withdrawal/"
     assert payload["has_oauth_client_id"] is True
     assert payload["has_oauth_client_secret"] is True
@@ -170,6 +173,7 @@ def test_ihela_test_withdrawal_retries_testenv_prefix_after_404(monkeypatch):
     monkeypatch.setattr(settings, "IHELA_AUTH_TOKEN_MODE", "client_credentials")
     monkeypatch.setattr(settings, "IHELA_OAUTH_TOKEN_PATH", "/testenv/oAuth2/token/")
     monkeypatch.setattr(settings, "IHELA_BANKING_API_PREFIX", "/ihela/api/v1")
+    monkeypatch.setattr(settings, "IHELA_SEND_PATH", "make-withdrawal")
     monkeypatch.setattr(ihela, "_ihela_fetch_oauth_token", fake_fetch_oauth_token)
     monkeypatch.setattr(ihela.httpx, "AsyncClient", FakeAsyncClient)
 
