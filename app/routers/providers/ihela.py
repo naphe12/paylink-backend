@@ -62,13 +62,13 @@ def _ihela_oauth_credentials() -> tuple[str, str]:
     return client_id, client_secret
 
 
-def _ihela_token_path_for_mode(token_mode: str) -> str:
+def _ihela_token_paths_for_mode(token_mode: str) -> list[str]:
     configured_path = str(getattr(settings, "IHELA_OAUTH_TOKEN_PATH", "") or "").strip()
     if configured_path:
-        return configured_path
+        return [configured_path]
     if token_mode == "password":
-        return "/ihela/api/v1/auth-token/"
-    return "/oAuth2/token/"
+        return ["/ihela/api/v1/auth-token/", "/api/v1/auth-token/"]
+    return ["/oAuth2/token/"]
 
 
 def _ihela_password_credentials_available() -> bool:
@@ -109,13 +109,20 @@ def _ihela_token_error_text(response: httpx.Response) -> str:
 async def _ihela_fetch_oauth_token() -> dict[str, Any]:
     base_url = _ihela_base_url()
     token_mode = str(getattr(settings, "IHELA_AUTH_TOKEN_MODE", "client_credentials") or "client_credentials").strip().lower()
-    token_path = _ihela_token_path_for_mode(token_mode)
-    token_url = _join_url(base_url, token_path)
     timeout = float(getattr(settings, "IHELA_TIMEOUT_SECONDS", 12.0) or 12.0)
 
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await _ihela_post_token_request(client, token_mode, token_url)
+            response = None
+            for token_path in _ihela_token_paths_for_mode(token_mode):
+                token_url = _join_url(base_url, token_path)
+                response = await _ihela_post_token_request(client, token_mode, token_url)
+                if response.status_code < 400:
+                    break
+                if token_mode != "password" or response.status_code != 404:
+                    break
+            if response is None:
+                raise HTTPException(status_code=502, detail="Aucune requete token iHela envoyee")
             if (
                 response.status_code >= 400
                 and token_mode != "password"
@@ -123,8 +130,13 @@ async def _ihela_fetch_oauth_token() -> dict[str, Any]:
                 and _ihela_password_credentials_available()
             ):
                 token_mode = "password"
-                token_url = _join_url(base_url, _ihela_token_path_for_mode(token_mode))
-                response = await _ihela_post_token_request(client, token_mode, token_url)
+                for token_path in _ihela_token_paths_for_mode(token_mode):
+                    token_url = _join_url(base_url, token_path)
+                    response = await _ihela_post_token_request(client, token_mode, token_url)
+                    if response.status_code < 400:
+                        break
+                    if response.status_code != 404:
+                        break
     except httpx.TimeoutException as exc:
         raise HTTPException(status_code=504, detail="Timeout iHela sur OAuth2 token") from exc
     except httpx.HTTPError as exc:

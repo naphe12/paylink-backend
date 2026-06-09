@@ -245,6 +245,49 @@ async def test_ihela_fetch_oauth_token_falls_back_to_password_on_unsupported_gra
     }
 
 
+@pytest.mark.anyio
+async def test_ihela_fetch_oauth_token_password_mode_retries_without_ihela_prefix_on_404(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, status_code, body):
+            self.status_code = status_code
+            self.text = body
+            self.content = body.encode("utf-8")
+
+        def json(self):
+            return {"access_token": "token-without-prefix"}
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, **kwargs):
+            calls.append((url, kwargs))
+            if url.endswith("/ihela/api/v1/auth-token/"):
+                return FakeResponse(404, "Page not found at /ihela/api/v1/auth-token/")
+            return FakeResponse(200, '{"access_token":"token-without-prefix"}')
+
+    monkeypatch.setattr(settings, "IHELA_API_BASE_URL", "https://ihela.example.test")
+    monkeypatch.setattr(settings, "IHELA_AUTH_TOKEN_MODE", "password")
+    monkeypatch.setattr(settings, "IHELA_OAUTH_TOKEN_PATH", "")
+    monkeypatch.setattr(settings, "IHELA_AUTH_USERNAME", "merchant-user")
+    monkeypatch.setattr(settings, "IHELA_AUTH_PASSWORD", "merchant-pass")
+    monkeypatch.setattr(ihela.httpx, "AsyncClient", FakeAsyncClient)
+
+    token = await ihela._ihela_fetch_oauth_token()
+
+    assert token["access_token"] == "token-without-prefix"
+    assert calls[0][0] == "https://ihela.example.test/ihela/api/v1/auth-token/"
+    assert calls[1][0] == "https://ihela.example.test/api/v1/auth-token/"
+
+
 @pytest.fixture(params=["asyncio"])
 def anyio_backend(request):
     return request.param
