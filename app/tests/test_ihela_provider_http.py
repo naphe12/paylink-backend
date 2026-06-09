@@ -132,6 +132,70 @@ def test_ihela_oauth_debug_returns_resolved_urls_without_secrets(monkeypatch):
     assert "client-secret" not in response.text
 
 
+def test_ihela_test_withdrawal_retries_testenv_prefix_after_404(monkeypatch):
+    calls = []
+
+    async def fake_fetch_oauth_token():
+        return {"access_token": "token-123", "token_type": "Bearer"}
+
+    class FakeResponse:
+        def __init__(self, status_code, body):
+            self.status_code = status_code
+            self._body = body
+            self.content = body.encode("utf-8")
+            self.text = body
+
+        def json(self):
+            return {"response_data": {"reference": "IH-REF-RETRY"}}
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, **kwargs):
+            calls.append((url, kwargs))
+            if url == "https://api.ihela.bi/ihela/api/v1/make-withdrawal/":
+                return FakeResponse(404, "Page not found")
+            return FakeResponse(200, '{"response_data":{"reference":"IH-REF-RETRY"}}')
+
+    monkeypatch.setattr(settings, "IHELA_BRIDGE_BASE_URL", "")
+    monkeypatch.setattr(settings, "IHELA_BRIDGE_API_KEY", "")
+    monkeypatch.setattr(settings, "IHELA_API_BASE_URL", "https://api.ihela.bi")
+    monkeypatch.setattr(settings, "IHELA_AUTH_TOKEN_MODE", "client_credentials")
+    monkeypatch.setattr(settings, "IHELA_OAUTH_TOKEN_PATH", "/testenv/oAuth2/token/")
+    monkeypatch.setattr(settings, "IHELA_BANKING_API_PREFIX", "/ihela/api/v1")
+    monkeypatch.setattr(ihela, "_ihela_fetch_oauth_token", fake_fetch_oauth_token)
+    monkeypatch.setattr(ihela.httpx, "AsyncClient", FakeAsyncClient)
+
+    client = _build_test_client(role="admin")
+    response = client.post(
+        "/providers/ihela/test/withdrawal",
+        json={
+            "debit_account": "76001002",
+            "debit_account_holder": "John Doe",
+            "amount": 3000,
+            "description": "Test transfert externe Paylink",
+            "external_reference": "PAYLINK-TEST-001",
+            "pin_code": "1234",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["attempted_urls"] == [
+        "https://api.ihela.bi/ihela/api/v1/make-withdrawal/",
+        "https://api.ihela.bi/testenv/ihela/api/v1/make-withdrawal/",
+    ]
+    assert calls[1][0] == "https://api.ihela.bi/testenv/ihela/api/v1/make-withdrawal/"
+
+
 @pytest.mark.anyio
 async def test_ihela_fetch_oauth_token_client_credentials_payload(monkeypatch):
     calls = []

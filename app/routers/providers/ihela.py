@@ -106,6 +106,48 @@ def _ihela_token_error_text(response: httpx.Response) -> str:
     return response.text[:500] if response.text else f"HTTP {response.status_code}"
 
 
+def _ihela_banking_api_prefixes() -> list[str]:
+    configured_prefix = str(getattr(settings, "IHELA_BANKING_API_PREFIX", "/ihela/api/v1") or "/ihela/api/v1").strip()
+    prefixes = [configured_prefix]
+    token_paths = _ihela_token_paths_for_mode(
+        str(getattr(settings, "IHELA_AUTH_TOKEN_MODE", "client_credentials") or "client_credentials").strip().lower()
+    )
+    uses_testenv = any(str(path).strip().startswith("/testenv/") for path in token_paths)
+    if uses_testenv and not configured_prefix.startswith("/testenv/"):
+        prefixes.append(f"/testenv/{configured_prefix.lstrip('/')}")
+    return list(dict.fromkeys(prefixes))
+
+
+async def _ihela_direct_post(
+    endpoint: str,
+    payload: dict[str, Any],
+    access_token: str,
+    timeout: float,
+) -> tuple[httpx.Response, list[str]]:
+    base_url = _ihela_base_url()
+    attempted_urls: list[str] = []
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = None
+        for api_prefix in _ihela_banking_api_prefixes():
+            url = _join_url(base_url, f"{api_prefix.rstrip('/')}/{endpoint.strip('/')}/")
+            attempted_urls.append(url)
+            response = await client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                json=payload,
+            )
+            if response.status_code != 404:
+                return response, attempted_urls
+        if response is None:
+            raise HTTPException(status_code=502, detail=f"Aucune requete iHela envoyee sur {endpoint}")
+        return response, attempted_urls
+
+
 async def _ihela_fetch_oauth_token() -> dict[str, Any]:
     base_url = _ihela_base_url()
     token_mode = str(getattr(settings, "IHELA_AUTH_TOKEN_MODE", "client_credentials") or "client_credentials").strip().lower()
@@ -334,21 +376,9 @@ async def ihela_test_withdrawal(
     oauth = await _ihela_fetch_oauth_token()
     access_token = str(oauth.get("access_token") or "").strip()
     timeout = float(getattr(settings, "IHELA_TIMEOUT_SECONDS", 12.0) or 12.0)
-    base_url = _ihela_base_url()
-    api_prefix = str(getattr(settings, "IHELA_BANKING_API_PREFIX", "/ihela/api/v1") or "/ihela/api/v1")
-    url = _join_url(base_url, f"{api_prefix.rstrip('/')}/make-withdrawal/")
 
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {access_token}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                },
-                json=payload,
-            )
+        response, attempted_urls = await _ihela_direct_post("make-withdrawal", payload, access_token, timeout)
     except httpx.TimeoutException as exc:
         raise HTTPException(status_code=504, detail="Timeout iHela sur make-withdrawal") from exc
     except httpx.HTTPError as exc:
@@ -363,6 +393,7 @@ async def ihela_test_withdrawal(
         "ok": response.status_code < 400,
         "http_status": response.status_code,
         "transport": "direct",
+        "attempted_urls": attempted_urls,
         "oauth": {
             "token_type": oauth.get("token_type"),
             "expires_in": oauth.get("expires_in"),
@@ -395,21 +426,9 @@ async def ihela_test_transaction_status(
     oauth = await _ihela_fetch_oauth_token()
     access_token = str(oauth.get("access_token") or "").strip()
     timeout = float(getattr(settings, "IHELA_TIMEOUT_SECONDS", 12.0) or 12.0)
-    base_url = _ihela_base_url()
-    api_prefix = str(getattr(settings, "IHELA_BANKING_API_PREFIX", "/ihela/api/v1") or "/ihela/api/v1")
-    url = _join_url(base_url, f"{api_prefix.rstrip('/')}/transaction-status/")
 
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {access_token}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                },
-                json=payload,
-            )
+        response, attempted_urls = await _ihela_direct_post("transaction-status", payload, access_token, timeout)
     except httpx.TimeoutException as exc:
         raise HTTPException(status_code=504, detail="Timeout iHela sur transaction-status") from exc
     except httpx.HTTPError as exc:
@@ -424,5 +443,6 @@ async def ihela_test_transaction_status(
         "ok": response.status_code < 400,
         "http_status": response.status_code,
         "transport": "direct",
+        "attempted_urls": attempted_urls,
         "response": body,
     }
