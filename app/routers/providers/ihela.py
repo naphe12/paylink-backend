@@ -71,6 +71,41 @@ def _ihela_token_path_for_mode(token_mode: str) -> str:
     return "/oAuth2/token/"
 
 
+def _ihela_password_credentials_available() -> bool:
+    username = str(getattr(settings, "IHELA_AUTH_USERNAME", "") or "").strip()
+    password = str(getattr(settings, "IHELA_AUTH_PASSWORD", "") or "").strip()
+    return bool(username and password)
+
+
+async def _ihela_post_token_request(client: httpx.AsyncClient, token_mode: str, token_url: str) -> httpx.Response:
+    if token_mode == "password":
+        username = str(getattr(settings, "IHELA_AUTH_USERNAME", "") or "").strip()
+        password = str(getattr(settings, "IHELA_AUTH_PASSWORD", "") or "").strip()
+        if not username or not password:
+            raise HTTPException(status_code=400, detail="IHELA_AUTH_USERNAME / IHELA_AUTH_PASSWORD manquants")
+        return await client.post(
+            token_url,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            json={"username": username, "password": password},
+        )
+
+    client_id, client_secret = _ihela_oauth_credentials()
+    pair = f"{client_id}:{client_secret}".encode("ascii")
+    basic = base64.b64encode(pair).decode("ascii")
+    return await client.post(
+        token_url,
+        headers={"Authorization": f"Basic {basic}"},
+        data={"grant_type": "client_credentials"},
+    )
+
+
+def _ihela_token_error_text(response: httpx.Response) -> str:
+    return response.text[:500] if response.text else f"HTTP {response.status_code}"
+
+
 async def _ihela_fetch_oauth_token() -> dict[str, Any]:
     base_url = _ihela_base_url()
     token_mode = str(getattr(settings, "IHELA_AUTH_TOKEN_MODE", "client_credentials") or "client_credentials").strip().lower()
@@ -80,35 +115,25 @@ async def _ihela_fetch_oauth_token() -> dict[str, Any]:
 
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            if token_mode == "password":
-                username = str(getattr(settings, "IHELA_AUTH_USERNAME", "") or "").strip()
-                password = str(getattr(settings, "IHELA_AUTH_PASSWORD", "") or "").strip()
-                if not username or not password:
-                    raise HTTPException(status_code=400, detail="IHELA_AUTH_USERNAME / IHELA_AUTH_PASSWORD manquants")
-                response = await client.post(
-                    token_url,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Accept": "application/json",
-                    },
-                    json={"username": username, "password": password},
-                )
-            else:
-                client_id, client_secret = _ihela_oauth_credentials()
-                pair = f"{client_id}:{client_secret}".encode("ascii")
-                basic = base64.b64encode(pair).decode("ascii")
-                response = await client.post(
-                    token_url,
-                    headers={"Authorization": f"Basic {basic}"},
-                    data={"grant_type": "client_credentials"},
-                )
+            response = await _ihela_post_token_request(client, token_mode, token_url)
+            if (
+                response.status_code >= 400
+                and token_mode != "password"
+                and "unsupported_grant_type" in response.text
+                and _ihela_password_credentials_available()
+            ):
+                token_mode = "password"
+                token_url = _join_url(base_url, _ihela_token_path_for_mode(token_mode))
+                response = await _ihela_post_token_request(client, token_mode, token_url)
     except httpx.TimeoutException as exc:
         raise HTTPException(status_code=504, detail="Timeout iHela sur OAuth2 token") from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Erreur reseau iHela OAuth2: {exc}") from exc
 
     if response.status_code >= 400:
-        detail = response.text[:500] if response.text else f"HTTP {response.status_code}"
+        detail = _ihela_token_error_text(response)
+        if "unsupported_grant_type" in detail and token_mode != "password":
+            detail = f"{detail} - Configure IHELA_AUTH_TOKEN_MODE=password avec IHELA_AUTH_USERNAME / IHELA_AUTH_PASSWORD"
         raise HTTPException(status_code=502, detail=f"Echec OAuth2 iHela: {detail}")
 
     try:

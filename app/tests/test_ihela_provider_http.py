@@ -192,6 +192,59 @@ async def test_ihela_fetch_oauth_token_password_mode_uses_auth_token_default_pat
     assert calls[0][1]["headers"]["Content-Type"] == "application/json"
 
 
+@pytest.mark.anyio
+async def test_ihela_fetch_oauth_token_falls_back_to_password_on_unsupported_grant(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, status_code, body):
+            self.status_code = status_code
+            self._body = body
+            self.text = body
+            self.content = body.encode("utf-8")
+
+        def json(self):
+            if self.status_code >= 400:
+                return {"error": "unsupported_grant_type"}
+            return {"access_token": "fallback-token"}
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, **kwargs):
+            calls.append((url, kwargs))
+            if len(calls) == 1:
+                return FakeResponse(400, '{"error":"unsupported_grant_type"}')
+            return FakeResponse(200, '{"access_token":"fallback-token"}')
+
+    monkeypatch.setattr(settings, "IHELA_API_BASE_URL", "https://ihela.example.test")
+    monkeypatch.setattr(settings, "IHELA_AUTH_TOKEN_MODE", "client_credentials")
+    monkeypatch.setattr(settings, "IHELA_OAUTH_TOKEN_PATH", "")
+    monkeypatch.setattr(settings, "IHELA_OAUTH_CLIENT_ID", "client-id")
+    monkeypatch.setattr(settings, "IHELA_OAUTH_CLIENT_SECRET", "client-secret")
+    monkeypatch.setattr(settings, "IHELA_AUTH_USERNAME", "merchant-user")
+    monkeypatch.setattr(settings, "IHELA_AUTH_PASSWORD", "merchant-pass")
+    monkeypatch.setattr(ihela.httpx, "AsyncClient", FakeAsyncClient)
+
+    token = await ihela._ihela_fetch_oauth_token()
+
+    assert token["access_token"] == "fallback-token"
+    assert calls[0][0] == "https://ihela.example.test/oAuth2/token/"
+    assert calls[0][1]["data"] == {"grant_type": "client_credentials"}
+    assert calls[1][0] == "https://ihela.example.test/ihela/api/v1/auth-token/"
+    assert calls[1][1]["json"] == {
+        "username": "merchant-user",
+        "password": "merchant-pass",
+    }
+
+
 @pytest.fixture(params=["asyncio"])
 def anyio_backend(request):
     return request.param
