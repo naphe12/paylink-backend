@@ -98,7 +98,7 @@ async def _ihela_post_token_request(client: httpx.AsyncClient, token_mode: str, 
     return await client.post(
         token_url,
         headers={"Authorization": f"Basic {basic}"},
-        data={"grant_type": "client_credentials"},
+        files={"grant_type": (None, "client_credentials")},
     )
 
 

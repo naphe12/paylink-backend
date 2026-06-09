@@ -144,7 +144,7 @@ async def test_ihela_fetch_oauth_token_client_credentials_payload(monkeypatch):
 
     assert token["access_token"] == "token-123"
     assert calls[0][0] == "https://ihela.example.test/oAuth2/token/"
-    assert calls[0][1]["data"] == {"grant_type": "client_credentials"}
+    assert calls[0][1]["files"] == {"grant_type": (None, "client_credentials")}
     assert calls[0][1]["headers"]["Authorization"].startswith("Basic ")
 
 
@@ -237,7 +237,7 @@ async def test_ihela_fetch_oauth_token_falls_back_to_password_on_unsupported_gra
 
     assert token["access_token"] == "fallback-token"
     assert calls[0][0] == "https://ihela.example.test/oAuth2/token/"
-    assert calls[0][1]["data"] == {"grant_type": "client_credentials"}
+    assert calls[0][1]["files"] == {"grant_type": (None, "client_credentials")}
     assert calls[1][0] == "https://ihela.example.test/ihela/api/v1/auth-token/"
     assert calls[1][1]["json"] == {
         "username": "merchant-user",
