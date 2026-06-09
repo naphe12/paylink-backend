@@ -107,6 +107,31 @@ def test_ihela_test_withdrawal_reports_missing_direct_config(monkeypatch):
     assert response.json()["detail"] == "IHELA_API_BASE_URL manquant"
 
 
+def test_ihela_oauth_debug_returns_resolved_urls_without_secrets(monkeypatch):
+    monkeypatch.setattr(settings, "IHELA_BRIDGE_BASE_URL", "")
+    monkeypatch.setattr(settings, "IHELA_BRIDGE_API_KEY", "")
+    monkeypatch.setattr(settings, "IHELA_API_BASE_URL", "https://api.ihela.bi")
+    monkeypatch.setattr(settings, "IHELA_AUTH_TOKEN_MODE", "client_credentials")
+    monkeypatch.setattr(settings, "IHELA_OAUTH_TOKEN_PATH", "/testenv/oAuth2/token/")
+    monkeypatch.setattr(settings, "IHELA_BANKING_API_PREFIX", "/testenv/ihela/api/v1")
+    monkeypatch.setattr(settings, "IHELA_OAUTH_CLIENT_ID", "client-id")
+    monkeypatch.setattr(settings, "IHELA_OAUTH_CLIENT_SECRET", "client-secret")
+
+    client = _build_test_client(role="admin")
+    response = client.get("/providers/ihela/test/oauth-debug")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["transport"] == "direct"
+    assert payload["ihela_api_base_url"] == "https://api.ihela.bi"
+    assert payload["auth_token_mode"] == "client_credentials"
+    assert payload["token_urls"] == ["https://api.ihela.bi/testenv/oAuth2/token/"]
+    assert payload["withdrawal_url"] == "https://api.ihela.bi/testenv/ihela/api/v1/make-withdrawal/"
+    assert payload["has_oauth_client_id"] is True
+    assert payload["has_oauth_client_secret"] is True
+    assert "client-secret" not in response.text
+
+
 @pytest.mark.anyio
 async def test_ihela_fetch_oauth_token_client_credentials_payload(monkeypatch):
     calls = []

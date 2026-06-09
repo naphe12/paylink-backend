@@ -289,6 +289,31 @@ async def ihela_reconcile_now(
     return {"status": "ok", "summary": summary}
 
 
+@router.get("/test/oauth-debug")
+async def ihela_test_oauth_debug(
+    current_user: Users = Depends(get_current_user),
+):
+    _require_admin_or_agent(current_user)
+    base_url = _ihela_base_url()
+    token_mode = str(getattr(settings, "IHELA_AUTH_TOKEN_MODE", "client_credentials") or "client_credentials").strip().lower()
+    token_paths = _ihela_token_paths_for_mode(token_mode)
+    api_prefix = str(getattr(settings, "IHELA_BANKING_API_PREFIX", "/ihela/api/v1") or "/ihela/api/v1")
+    return {
+        "transport": "bridge" if _bridge_configured() else "direct",
+        "ihela_api_base_url": base_url,
+        "auth_token_mode": token_mode,
+        "oauth_token_path_configured": str(getattr(settings, "IHELA_OAUTH_TOKEN_PATH", "") or "").strip(),
+        "token_urls": [_join_url(base_url, token_path) for token_path in token_paths],
+        "banking_api_prefix": api_prefix,
+        "withdrawal_url": _join_url(base_url, f"{api_prefix.rstrip('/')}/make-withdrawal/"),
+        "status_url": _join_url(base_url, f"{api_prefix.rstrip('/')}/transaction-status/"),
+        "has_oauth_client_id": bool(str(getattr(settings, "IHELA_OAUTH_CLIENT_ID", "") or "").strip()),
+        "has_oauth_client_secret": bool(str(getattr(settings, "IHELA_OAUTH_CLIENT_SECRET", "") or "").strip()),
+        "has_auth_username": bool(str(getattr(settings, "IHELA_AUTH_USERNAME", "") or "").strip()),
+        "has_auth_password": bool(str(getattr(settings, "IHELA_AUTH_PASSWORD", "") or "").strip()),
+    }
+
+
 @router.post("/test/withdrawal")
 async def ihela_test_withdrawal(
     payload: dict[str, Any] = Body(...),
