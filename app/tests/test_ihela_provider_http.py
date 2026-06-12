@@ -350,6 +350,65 @@ def test_ihela_test_account_lookup_allows_client_role(monkeypatch):
     assert response.json()["response"]["account_name"] == "Client Demo"
 
 
+def test_ihela_test_bank_cashout_uses_direct_get_for_client_role(monkeypatch):
+    calls = []
+
+    async def fake_fetch_oauth_token():
+        return {"access_token": "token-cashout", "token_type": "Bearer"}
+
+    class FakeResponse:
+        status_code = 200
+        content = b'{"items":[]}'
+        text = '{"items":[]}'
+
+        def json(self):
+            return {"items": []}
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, **kwargs):
+            calls.append((url, kwargs))
+            return FakeResponse()
+
+    monkeypatch.setattr(settings, "IHELA_BRIDGE_BASE_URL", "")
+    monkeypatch.setattr(settings, "IHELA_BRIDGE_API_KEY", "")
+    monkeypatch.setattr(settings, "IHELA_API_BASE_URL", "https://api.ihela.bi")
+    monkeypatch.setattr(settings, "IHELA_BANK_CASHOUT_PATH", "/testenv/api/v2/payments/bank/cashout")
+    monkeypatch.setattr(ihela, "_ihela_fetch_oauth_token", fake_fetch_oauth_token)
+    monkeypatch.setattr(ihela.httpx, "AsyncClient", FakeAsyncClient)
+
+    client = _build_test_client(role="client")
+    response = client.get("/providers/ihela/test/bank-cashout")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["transport"] == "direct"
+    assert payload["attempted_urls"] == [
+        "https://api.ihela.bi/testenv/api/v2/payments/bank/cashout/"
+    ]
+    assert payload["response"]["items"] == []
+    assert calls == [
+        (
+            "https://api.ihela.bi/testenv/api/v2/payments/bank/cashout/",
+            {
+                "headers": {
+                    "Authorization": "Bearer token-cashout",
+                    "Accept": "application/json",
+                },
+            },
+        )
+    ]
+
+
 @pytest.mark.anyio
 async def test_ihela_fetch_oauth_token_client_credentials_payload(monkeypatch):
     calls = []

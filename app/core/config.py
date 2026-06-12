@@ -111,6 +111,10 @@ class Settings(BaseSettings):
         "IHELA_ACCOUNT_LOOKUP_PATH",
         "/testenv/api/v2/bank/MF1-0001/account/lookup",
     )
+    IHELA_BANK_CASHOUT_PATH: str = os.getenv(
+        "IHELA_BANK_CASHOUT_PATH",
+        "/testenv/api/v2/payments/bank/cashout",
+    )
     IHELA_BRIDGE_BASE_URL: str = os.getenv("IHELA_BRIDGE_BASE_URL", "")
     IHELA_BRIDGE_API_KEY: str = os.getenv("IHELA_BRIDGE_API_KEY", "")
     IHELA_BRIDGE_WITHDRAWAL_PATH: str = os.getenv("IHELA_BRIDGE_WITHDRAWAL_PATH", "/ihela/transfer")
