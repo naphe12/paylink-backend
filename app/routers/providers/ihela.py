@@ -195,6 +195,18 @@ def _ihela_direct_cashout_paths() -> list[str]:
     return list(dict.fromkeys(paths))
 
 
+def _ihela_direct_cashin_paths() -> list[str]:
+    configured_path = str(
+        getattr(settings, "IHELA_BANK_CASHIN_PATH", "/testenv/api/v2/payments/bank/cashin")
+        or "/testenv/api/v2/payments/bank/cashin"
+    ).strip()
+    paths = [configured_path]
+    testenv_path = _append_testenv_lookup_path(configured_path)
+    if testenv_path:
+        paths.append(testenv_path)
+    return list(dict.fromkeys(paths))
+
+
 def _strip_query(path: str) -> str:
     parts = urlsplit(path)
     return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
@@ -251,6 +263,32 @@ async def _ihela_direct_get_bank_cashout(
                 return response, attempted_urls
         if response is None:
             raise HTTPException(status_code=502, detail="Aucune requete iHela envoyee sur bank cashout")
+        return response, attempted_urls
+
+
+async def _ihela_direct_get_bank_cashin(
+    access_token: str,
+    timeout: float,
+) -> tuple[httpx.Response, list[str]]:
+    base_url = _ihela_base_url()
+    attempted_urls: list[str] = []
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = None
+        for cashin_path in _ihela_direct_cashin_paths():
+            url = _join_url(base_url, f"{_strip_query(cashin_path).rstrip('/')}/")
+            attempted_urls.append(url)
+            response = await client.get(
+                url,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/json",
+                },
+            )
+            if response.status_code != 404:
+                return response, attempted_urls
+        if response is None:
+            raise HTTPException(status_code=502, detail="Aucune requete iHela envoyee sur bank cashin")
         return response, attempted_urls
 
 
@@ -450,6 +488,7 @@ async def ihela_test_oauth_debug(
     status_path = _ihela_direct_endpoint_path("IHELA_STATUS_PATH", "transaction-status")
     lookup_paths = _ihela_direct_lookup_paths()
     cashout_paths = _ihela_direct_cashout_paths()
+    cashin_paths = _ihela_direct_cashin_paths()
     return {
         "transport": "bridge" if _bridge_configured() else "direct",
         "ihela_api_base_url": base_url,
@@ -461,6 +500,7 @@ async def ihela_test_oauth_debug(
         "status_path": status_path,
         "account_lookup_path": lookup_paths[0],
         "bank_cashout_path": cashout_paths[0],
+        "bank_cashin_path": cashin_paths[0],
         "withdrawal_url": _join_url(base_url, f"{api_prefix.rstrip('/')}/{withdrawal_path}/"),
         "status_url": _join_url(base_url, f"{api_prefix.rstrip('/')}/{status_path}/"),
         "account_lookup_urls": [
@@ -470,6 +510,10 @@ async def ihela_test_oauth_debug(
         "bank_cashout_urls": [
             _join_url(base_url, f"{_strip_query(path).rstrip('/')}/")
             for path in cashout_paths
+        ],
+        "bank_cashin_urls": [
+            _join_url(base_url, f"{_strip_query(path).rstrip('/')}/")
+            for path in cashin_paths
         ],
         "has_oauth_client_id": bool(str(getattr(settings, "IHELA_OAUTH_CLIENT_ID", "") or "").strip()),
         "has_oauth_client_secret": bool(str(getattr(settings, "IHELA_OAUTH_CLIENT_SECRET", "") or "").strip()),
@@ -557,6 +601,37 @@ async def ihela_test_transaction_status(
         raise HTTPException(status_code=504, detail="Timeout iHela sur transaction-status") from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Erreur reseau iHela transaction-status: {exc}") from exc
+
+    try:
+        body = response.json() if response.content else {}
+    except ValueError:
+        body = {"raw_text": response.text[:1000]}
+
+    return {
+        "ok": response.status_code < 400,
+        "http_status": response.status_code,
+        "transport": "direct",
+        "attempted_urls": attempted_urls,
+        "response": body,
+    }
+
+
+@router.get("/test/bank-cashin")
+async def ihela_test_bank_cashin(
+    current_user: Users = Depends(get_current_user),
+):
+    _require_ihela_test_user(current_user)
+
+    oauth = await _ihela_fetch_oauth_token()
+    access_token = str(oauth.get("access_token") or "").strip()
+    timeout = float(getattr(settings, "IHELA_TIMEOUT_SECONDS", 12.0) or 12.0)
+
+    try:
+        response, attempted_urls = await _ihela_direct_get_bank_cashin(access_token, timeout)
+    except httpx.TimeoutException as exc:
+        raise HTTPException(status_code=504, detail="Timeout iHela sur bank cashin") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Erreur reseau iHela bank cashin: {exc}") from exc
 
     try:
         body = response.json() if response.content else {}
