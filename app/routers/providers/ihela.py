@@ -28,6 +28,11 @@ def _require_admin_or_agent(current_user: Users) -> None:
         raise HTTPException(status_code=403, detail="Acces refuse")
 
 
+def _require_ihela_test_user(current_user: Users) -> None:
+    if str(getattr(current_user, "role", "") or "").lower() not in {"admin", "agent", "client"}:
+        raise HTTPException(status_code=403, detail="Acces refuse")
+
+
 def _join_url(base_url: str, path: str) -> str:
     base = str(base_url or "").rstrip("/")
     p = str(path or "").strip()
@@ -398,7 +403,7 @@ async def ihela_reconcile_now(
 async def ihela_test_oauth_debug(
     current_user: Users = Depends(get_current_user),
 ):
-    _require_admin_or_agent(current_user)
+    _require_ihela_test_user(current_user)
     base_url = _ihela_base_url()
     token_mode = str(getattr(settings, "IHELA_AUTH_TOKEN_MODE", "client_credentials") or "client_credentials").strip().lower()
     token_paths = _ihela_token_paths_for_mode(token_mode)
@@ -434,7 +439,7 @@ async def ihela_test_withdrawal(
     payload: dict[str, Any] = Body(...),
     current_user: Users = Depends(get_current_user),
 ):
-    _require_admin_or_agent(current_user)
+    _require_ihela_test_user(current_user)
     if _bridge_configured():
         path = str(getattr(settings, "IHELA_BRIDGE_WITHDRAWAL_PATH", "/ihela/transfer") or "/ihela/transfer")
         status_code, body = await _bridge_post(path, payload)
@@ -482,7 +487,7 @@ async def ihela_test_transaction_status(
     payload: dict[str, Any] = Body(...),
     current_user: Users = Depends(get_current_user),
 ):
-    _require_admin_or_agent(current_user)
+    _require_ihela_test_user(current_user)
     if _bridge_configured():
         path = str(
             getattr(settings, "IHELA_BRIDGE_STATUS_PATH", "/ihela/transaction-status")
@@ -528,7 +533,7 @@ async def ihela_test_account_lookup(
     payload: dict[str, Any] = Body(...),
     current_user: Users = Depends(get_current_user),
 ):
-    _require_admin_or_agent(current_user)
+    _require_ihela_test_user(current_user)
     account_number = str(payload.get("account_number") or "").strip()
     if not account_number:
         raise HTTPException(status_code=422, detail="account_number requis")

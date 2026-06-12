@@ -71,9 +71,50 @@ def test_ihela_test_withdrawal_uses_bridge_when_configured(monkeypatch):
     ]
 
 
-def test_ihela_test_transaction_status_requires_admin_or_agent(monkeypatch):
+def test_ihela_test_withdrawal_allows_client_role(monkeypatch):
+    async def fake_bridge_post(path, payload):
+        return 200, {
+            "response_data": {
+                "reference": "IH-CLIENT-001",
+            },
+        }
+
     monkeypatch.setattr(settings, "IHELA_BRIDGE_BASE_URL", "https://bridge.example.test")
     monkeypatch.setattr(settings, "IHELA_BRIDGE_API_KEY", "bridge-key")
+    monkeypatch.setattr(settings, "IHELA_BRIDGE_WITHDRAWAL_PATH", "/ihela/transfer")
+    monkeypatch.setattr(ihela, "_bridge_post", fake_bridge_post)
+
+    client = _build_test_client(role="client")
+    response = client.post(
+        "/providers/ihela/test/withdrawal",
+        json={
+            "debit_account": "76001002",
+            "debit_account_holder": "John Doe",
+            "amount": 3000,
+            "description": "Test transfert externe Paylink",
+            "external_reference": "PAYLINK-TEST-CLIENT",
+            "pin_code": "1234",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["transport"] == "bridge"
+    assert payload["response"]["response_data"]["reference"] == "IH-CLIENT-001"
+
+
+def test_ihela_test_transaction_status_allows_client_role(monkeypatch):
+    calls = []
+
+    async def fake_bridge_post(path, payload):
+        calls.append((path, payload))
+        return 200, {"response_data": {"status": "SUCCESS"}}
+
+    monkeypatch.setattr(settings, "IHELA_BRIDGE_BASE_URL", "https://bridge.example.test")
+    monkeypatch.setattr(settings, "IHELA_BRIDGE_API_KEY", "bridge-key")
+    monkeypatch.setattr(settings, "IHELA_BRIDGE_STATUS_PATH", "/ihela/transaction-status")
+    monkeypatch.setattr(ihela, "_bridge_post", fake_bridge_post)
 
     client = _build_test_client(role="client")
     response = client.post(
@@ -81,8 +122,12 @@ def test_ihela_test_transaction_status_requires_admin_or_agent(monkeypatch):
         json={"reference": "IH-REF-001"},
     )
 
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Acces refuse"
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["transport"] == "bridge"
+    assert payload["response"]["response_data"]["status"] == "SUCCESS"
+    assert calls == [("/ihela/transaction-status", {"reference": "IH-REF-001"})]
 
 
 def test_ihela_test_withdrawal_reports_missing_direct_config(monkeypatch):
@@ -261,6 +306,48 @@ def test_ihela_test_account_lookup_uses_direct_get(monkeypatch):
             },
         )
     ]
+
+
+def test_ihela_test_account_lookup_allows_client_role(monkeypatch):
+    async def fake_fetch_oauth_token():
+        return {"access_token": "token-client", "token_type": "Bearer"}
+
+    class FakeResponse:
+        status_code = 200
+        content = b'{"account_name":"Client Demo"}'
+        text = '{"account_name":"Client Demo"}'
+
+        def json(self):
+            return {"account_name": "Client Demo"}
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(settings, "IHELA_BRIDGE_BASE_URL", "")
+    monkeypatch.setattr(settings, "IHELA_BRIDGE_API_KEY", "")
+    monkeypatch.setattr(settings, "IHELA_API_BASE_URL", "https://api.ihela.bi")
+    monkeypatch.setattr(settings, "IHELA_ACCOUNT_LOOKUP_PATH", "/testenv/api/v2/bank/MF1-0001/account/lookup")
+    monkeypatch.setattr(ihela, "_ihela_fetch_oauth_token", fake_fetch_oauth_token)
+    monkeypatch.setattr(ihela.httpx, "AsyncClient", FakeAsyncClient)
+
+    client = _build_test_client(role="client")
+    response = client.post(
+        "/providers/ihela/test/account-lookup",
+        json={"account_number": "16-01"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["response"]["account_name"] == "Client Demo"
 
 
 @pytest.mark.anyio
