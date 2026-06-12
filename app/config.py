@@ -205,6 +205,7 @@ class Settings(BaseSettings):
     IHELA_AUTH_TOKEN_MODE: str = "client_credentials"
     IHELA_OAUTH_TOKEN_PATH: str = ""
     IHELA_BANKING_API_PREFIX: str = "/ihela/api/v1"
+    IHELA_ACCOUNT_LOOKUP_PATH: str = "/testenv/api/v2/bank/MF1-0001/account/lookup"
     IHELA_BRIDGE_BASE_URL: str | None = None
     IHELA_BRIDGE_API_KEY: str | None = None
     IHELA_BRIDGE_WITHDRAWAL_PATH: str = "/ihela/transfer"

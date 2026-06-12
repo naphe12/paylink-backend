@@ -200,6 +200,69 @@ def test_ihela_test_withdrawal_retries_testenv_prefix_after_404(monkeypatch):
     assert calls[1][0] == "https://api.ihela.bi/testenv/ihela/api/v1/make-withdrawal/"
 
 
+def test_ihela_test_account_lookup_uses_direct_get(monkeypatch):
+    calls = []
+
+    async def fake_fetch_oauth_token():
+        return {"access_token": "token-lookup", "token_type": "Bearer"}
+
+    class FakeResponse:
+        status_code = 200
+        content = b'{"account_name":"Demo Client"}'
+        text = '{"account_name":"Demo Client"}'
+
+        def json(self):
+            return {"account_name": "Demo Client"}
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, **kwargs):
+            calls.append((url, kwargs))
+            return FakeResponse()
+
+    monkeypatch.setattr(settings, "IHELA_BRIDGE_BASE_URL", "")
+    monkeypatch.setattr(settings, "IHELA_BRIDGE_API_KEY", "")
+    monkeypatch.setattr(settings, "IHELA_API_BASE_URL", "https://api.ihela.bi")
+    monkeypatch.setattr(settings, "IHELA_ACCOUNT_LOOKUP_PATH", "/testenv/api/v2/bank/MF1-0001/account/lookup")
+    monkeypatch.setattr(ihela, "_ihela_fetch_oauth_token", fake_fetch_oauth_token)
+    monkeypatch.setattr(ihela.httpx, "AsyncClient", FakeAsyncClient)
+
+    client = _build_test_client(role="admin")
+    response = client.post(
+        "/providers/ihela/test/account-lookup",
+        json={"account_number": "16-01"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["transport"] == "direct"
+    assert payload["attempted_urls"] == [
+        "https://api.ihela.bi/testenv/api/v2/bank/MF1-0001/account/lookup/"
+    ]
+    assert payload["response"]["account_name"] == "Demo Client"
+    assert calls == [
+        (
+            "https://api.ihela.bi/testenv/api/v2/bank/MF1-0001/account/lookup/",
+            {
+                "headers": {
+                    "Authorization": "Bearer token-lookup",
+                    "Accept": "application/json",
+                },
+                "params": {"account_number": "16-01"},
+            },
+        )
+    ]
+
+
 @pytest.mark.anyio
 async def test_ihela_fetch_oauth_token_client_credentials_payload(monkeypatch):
     calls = []

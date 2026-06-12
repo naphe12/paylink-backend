@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import base64
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
@@ -150,6 +151,63 @@ async def _ihela_direct_post(
                 return response, attempted_urls
         if response is None:
             raise HTTPException(status_code=502, detail=f"Aucune requete iHela envoyee sur {endpoint_path}")
+        return response, attempted_urls
+
+
+def _append_testenv_lookup_path(path: str) -> str | None:
+    normalized = str(path or "").strip()
+    if normalized.startswith("/testenv/") or not normalized.startswith("/"):
+        return None
+    token_paths = _ihela_token_paths_for_mode(
+        str(getattr(settings, "IHELA_AUTH_TOKEN_MODE", "client_credentials") or "client_credentials").strip().lower()
+    )
+    if any(str(token_path).strip().startswith("/testenv/") for token_path in token_paths):
+        return f"/testenv/{normalized.lstrip('/')}"
+    return None
+
+
+def _ihela_direct_lookup_paths() -> list[str]:
+    configured_path = str(
+        getattr(settings, "IHELA_ACCOUNT_LOOKUP_PATH", "/testenv/api/v2/bank/MF1-0001/account/lookup")
+        or "/testenv/api/v2/bank/MF1-0001/account/lookup"
+    ).strip()
+    paths = [configured_path]
+    testenv_path = _append_testenv_lookup_path(configured_path)
+    if testenv_path:
+        paths.append(testenv_path)
+    return list(dict.fromkeys(paths))
+
+
+def _strip_query(path: str) -> str:
+    parts = urlsplit(path)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+
+
+async def _ihela_direct_get_account_lookup(
+    account_number: str,
+    access_token: str,
+    timeout: float,
+) -> tuple[httpx.Response, list[str]]:
+    base_url = _ihela_base_url()
+    attempted_urls: list[str] = []
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = None
+        for lookup_path in _ihela_direct_lookup_paths():
+            url = _join_url(base_url, f"{_strip_query(lookup_path).rstrip('/')}/")
+            attempted_urls.append(url)
+            response = await client.get(
+                url,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/json",
+                },
+                params={"account_number": account_number},
+            )
+            if response.status_code != 404:
+                return response, attempted_urls
+        if response is None:
+            raise HTTPException(status_code=502, detail="Aucune requete iHela envoyee sur account lookup")
         return response, attempted_urls
 
 
@@ -347,6 +405,7 @@ async def ihela_test_oauth_debug(
     api_prefix = str(getattr(settings, "IHELA_BANKING_API_PREFIX", "/ihela/api/v1") or "/ihela/api/v1")
     withdrawal_path = _ihela_direct_endpoint_path("IHELA_SEND_PATH", "make-withdrawal")
     status_path = _ihela_direct_endpoint_path("IHELA_STATUS_PATH", "transaction-status")
+    lookup_paths = _ihela_direct_lookup_paths()
     return {
         "transport": "bridge" if _bridge_configured() else "direct",
         "ihela_api_base_url": base_url,
@@ -356,8 +415,13 @@ async def ihela_test_oauth_debug(
         "banking_api_prefix": api_prefix,
         "withdrawal_path": withdrawal_path,
         "status_path": status_path,
+        "account_lookup_path": lookup_paths[0],
         "withdrawal_url": _join_url(base_url, f"{api_prefix.rstrip('/')}/{withdrawal_path}/"),
         "status_url": _join_url(base_url, f"{api_prefix.rstrip('/')}/{status_path}/"),
+        "account_lookup_urls": [
+            _join_url(base_url, f"{_strip_query(path).rstrip('/')}/")
+            for path in lookup_paths
+        ],
         "has_oauth_client_id": bool(str(getattr(settings, "IHELA_OAUTH_CLIENT_ID", "") or "").strip()),
         "has_oauth_client_secret": bool(str(getattr(settings, "IHELA_OAUTH_CLIENT_SECRET", "") or "").strip()),
         "has_auth_username": bool(str(getattr(settings, "IHELA_AUTH_USERNAME", "") or "").strip()),
@@ -444,6 +508,41 @@ async def ihela_test_transaction_status(
         raise HTTPException(status_code=504, detail="Timeout iHela sur transaction-status") from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Erreur reseau iHela transaction-status: {exc}") from exc
+
+    try:
+        body = response.json() if response.content else {}
+    except ValueError:
+        body = {"raw_text": response.text[:1000]}
+
+    return {
+        "ok": response.status_code < 400,
+        "http_status": response.status_code,
+        "transport": "direct",
+        "attempted_urls": attempted_urls,
+        "response": body,
+    }
+
+
+@router.post("/test/account-lookup")
+async def ihela_test_account_lookup(
+    payload: dict[str, Any] = Body(...),
+    current_user: Users = Depends(get_current_user),
+):
+    _require_admin_or_agent(current_user)
+    account_number = str(payload.get("account_number") or "").strip()
+    if not account_number:
+        raise HTTPException(status_code=422, detail="account_number requis")
+
+    oauth = await _ihela_fetch_oauth_token()
+    access_token = str(oauth.get("access_token") or "").strip()
+    timeout = float(getattr(settings, "IHELA_TIMEOUT_SECONDS", 12.0) or 12.0)
+
+    try:
+        response, attempted_urls = await _ihela_direct_get_account_lookup(account_number, access_token, timeout)
+    except httpx.TimeoutException as exc:
+        raise HTTPException(status_code=504, detail="Timeout iHela sur account lookup") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Erreur reseau iHela account lookup: {exc}") from exc
 
     try:
         body = response.json() if response.content else {}
