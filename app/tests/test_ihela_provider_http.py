@@ -468,6 +468,82 @@ def test_ihela_test_bank_cashin_uses_direct_get_for_client_role(monkeypatch):
     ]
 
 
+def test_ihela_test_mobile_cashout_uses_direct_post_for_client_role(monkeypatch):
+    calls = []
+
+    async def fake_fetch_oauth_token():
+        return {"access_token": "token-mobile-cashout", "token_type": "Bearer"}
+
+    class FakeResponse:
+        status_code = 201
+        content = b'{"reference":"TXN_2026_001","status":"PENDING"}'
+        text = '{"reference":"TXN_2026_001","status":"PENDING"}'
+
+        def json(self):
+            return {"reference": "TXN_2026_001", "status": "PENDING"}
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, **kwargs):
+            calls.append((url, kwargs))
+            return FakeResponse()
+
+    monkeypatch.setattr(settings, "IHELA_BRIDGE_BASE_URL", "")
+    monkeypatch.setattr(settings, "IHELA_BRIDGE_API_KEY", "")
+    monkeypatch.setattr(settings, "IHELA_API_BASE_URL", "https://api.ihela.bi")
+    monkeypatch.setattr(settings, "IHELA_MOBILE_CASHOUT_PATH", "/testenv/api/v2/payments/cashout")
+    monkeypatch.setattr(ihela, "_ihela_fetch_oauth_token", fake_fetch_oauth_token)
+    monkeypatch.setattr(ihela.httpx, "AsyncClient", FakeAsyncClient)
+
+    client = _build_test_client(role="client")
+    response = client.post(
+        "/providers/ihela/test/mobile-cashout",
+        json={
+            "amount": 5000,
+            "recipient": "67225225",
+            "provider": "ECOCASH",
+            "merchant_reference": "TXN_2026_001",
+            "description": "Transfert de 5000 BIF vers le numero 67225225",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["http_status"] == 201
+    assert payload["attempted_urls"] == [
+        "https://api.ihela.bi/testenv/api/v2/payments/cashout/"
+    ]
+    assert payload["response"]["status"] == "PENDING"
+    assert calls == [
+        (
+            "https://api.ihela.bi/testenv/api/v2/payments/cashout/",
+            {
+                "headers": {
+                    "Authorization": "Bearer token-mobile-cashout",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                "json": {
+                    "amount": 5000,
+                    "recipient": "67225225",
+                    "provider": "ECOCASH",
+                    "merchant_reference": "TXN_2026_001",
+                    "description": "Transfert de 5000 BIF vers le numero 67225225",
+                },
+            },
+        )
+    ]
+
+
 @pytest.mark.anyio
 async def test_ihela_fetch_oauth_token_client_credentials_payload(monkeypatch):
     calls = []
