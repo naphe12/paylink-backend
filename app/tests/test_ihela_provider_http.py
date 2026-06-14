@@ -509,7 +509,7 @@ def test_ihela_test_mobile_cashout_uses_direct_post_for_client_role(monkeypatch)
         json={
             "amount": 5000,
             "recipient": "67225225",
-            "provider": "ECOCASH",
+            "provider": "LUMICASH",
             "merchant_reference": "TXN_2026_001",
             "description": "Transfert de 5000 BIF vers le numero 67225225",
         },
@@ -535,7 +535,7 @@ def test_ihela_test_mobile_cashout_uses_direct_post_for_client_role(monkeypatch)
                 "json": {
                     "amount": 5000,
                     "recipient": "67225225",
-                    "provider": "ECOCASH",
+                    "provider": "LUMICASH",
                     "merchant_reference": "TXN_2026_001",
                     "description": "Transfert de 5000 BIF vers le numero 67225225",
                 },
