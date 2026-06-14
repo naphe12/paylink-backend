@@ -207,20 +207,24 @@ def _ihela_direct_cashin_paths() -> list[str]:
     return list(dict.fromkeys(paths))
 
 
-def _ihela_direct_mobile_cashout_paths() -> list[str]:
+def _ihela_direct_mobile_cashout_paths(override_path: str | None = None) -> list[str]:
     configured_path = str(
         getattr(settings, "IHELA_MOBILE_CASHOUT_PATH", "/testenv/api/v2/payments/cashout")
         or "/testenv/api/v2/payments/cashout"
     ).strip()
     paths = [
+        str(override_path or "").strip(),
         configured_path,
+        "/testenv/api/v2/payments/mobile/cashout",
+        "/testenv/api/v2/payments/mobile-money/cashout",
+        "/testenv/api/v2/mobile-money/cashout",
         "/testenv/payments/cashout",
         "/payments/cashout",
     ]
     testenv_path = _append_testenv_lookup_path(configured_path)
     if testenv_path:
         paths.append(testenv_path)
-    return list(dict.fromkeys(paths))
+    return list(dict.fromkeys([path for path in paths if path]))
 
 
 def _strip_query(path: str) -> str:
@@ -312,13 +316,14 @@ async def _ihela_direct_post_mobile_cashout(
     payload: dict[str, Any],
     access_token: str,
     timeout: float,
+    override_path: str | None = None,
 ) -> tuple[httpx.Response, list[str]]:
     base_url = _ihela_base_url()
     attempted_urls: list[str] = []
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = None
-        for mobile_cashout_path in _ihela_direct_mobile_cashout_paths():
+        for mobile_cashout_path in _ihela_direct_mobile_cashout_paths(override_path):
             url = _join_url(base_url, f"{_strip_query(mobile_cashout_path).rstrip('/')}/")
             attempted_urls.append(url)
             response = await client.post(
@@ -679,6 +684,7 @@ async def ihela_test_mobile_cashout(
     provider = str(payload.get("provider") or "").strip().upper()
     merchant_reference = str(payload.get("merchant_reference") or "").strip()
     description = str(payload.get("description") or "").strip()
+    endpoint_path = str(payload.get("endpoint_path") or "").strip() or None
     if not recipient:
         raise HTTPException(status_code=422, detail="recipient requis")
     if not provider:
@@ -706,7 +712,12 @@ async def ihela_test_mobile_cashout(
     timeout = float(getattr(settings, "IHELA_TIMEOUT_SECONDS", 12.0) or 12.0)
 
     try:
-        response, attempted_urls = await _ihela_direct_post_mobile_cashout(request_payload, access_token, timeout)
+        response, attempted_urls = await _ihela_direct_post_mobile_cashout(
+            request_payload,
+            access_token,
+            timeout,
+            endpoint_path,
+        )
     except httpx.TimeoutException as exc:
         raise HTTPException(status_code=504, detail="Timeout iHela sur mobile cashout") from exc
     except httpx.HTTPError as exc:

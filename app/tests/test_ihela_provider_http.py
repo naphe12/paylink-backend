@@ -497,7 +497,10 @@ def test_ihela_test_mobile_cashout_uses_direct_post_for_client_role(monkeypatch)
 
         async def post(self, url, **kwargs):
             calls.append((url, kwargs))
-            if url == "https://api.ihela.bi/testenv/api/v2/payments/cashout/":
+            if url in {
+                "https://api.ihela.bi/testenv/api/v2/payments/mobile/cashout/",
+                "https://api.ihela.bi/testenv/api/v2/payments/cashout/",
+            }:
                 return FakeResponse(404, '{"detail":"Not found"}')
             return FakeResponse(201, '{"reference":"TXN_2026_001","status":"PENDING"}')
 
@@ -512,6 +515,7 @@ def test_ihela_test_mobile_cashout_uses_direct_post_for_client_role(monkeypatch)
     response = client.post(
         "/providers/ihela/test/mobile-cashout",
         json={
+            "endpoint_path": "/testenv/api/v2/payments/mobile/cashout",
             "amount": 5000,
             "recipient": "67225225",
             "provider": "LUMICASH",
@@ -525,11 +529,16 @@ def test_ihela_test_mobile_cashout_uses_direct_post_for_client_role(monkeypatch)
     assert payload["ok"] is True
     assert payload["http_status"] == 201
     assert payload["attempted_urls"] == [
+        "https://api.ihela.bi/testenv/api/v2/payments/mobile/cashout/",
         "https://api.ihela.bi/testenv/api/v2/payments/cashout/",
-        "https://api.ihela.bi/testenv/payments/cashout/",
+        "https://api.ihela.bi/testenv/api/v2/payments/mobile-money/cashout/",
     ]
     assert payload["response"]["status"] == "PENDING"
     assert calls[0] == (
+        "https://api.ihela.bi/testenv/api/v2/payments/mobile/cashout/",
+        calls[1][1],
+    )
+    assert calls[1] == (
         "https://api.ihela.bi/testenv/api/v2/payments/cashout/",
         {
             "headers": {
@@ -546,9 +555,9 @@ def test_ihela_test_mobile_cashout_uses_direct_post_for_client_role(monkeypatch)
             },
         },
     )
-    assert calls[1] == (
-        "https://api.ihela.bi/testenv/payments/cashout/",
-        calls[0][1],
+    assert calls[2] == (
+        "https://api.ihela.bi/testenv/api/v2/payments/mobile-money/cashout/",
+        calls[1][1],
     )
 
 
