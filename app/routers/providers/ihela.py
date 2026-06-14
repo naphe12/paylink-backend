@@ -212,7 +212,11 @@ def _ihela_direct_mobile_cashout_paths() -> list[str]:
         getattr(settings, "IHELA_MOBILE_CASHOUT_PATH", "/testenv/api/v2/payments/cashout")
         or "/testenv/api/v2/payments/cashout"
     ).strip()
-    paths = [configured_path]
+    paths = [
+        configured_path,
+        "/testenv/payments/cashout",
+        "/payments/cashout",
+    ]
     testenv_path = _append_testenv_lookup_path(configured_path)
     if testenv_path:
         paths.append(testenv_path)

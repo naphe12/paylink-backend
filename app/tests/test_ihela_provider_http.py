@@ -475,11 +475,14 @@ def test_ihela_test_mobile_cashout_uses_direct_post_for_client_role(monkeypatch)
         return {"access_token": "token-mobile-cashout", "token_type": "Bearer"}
 
     class FakeResponse:
-        status_code = 201
-        content = b'{"reference":"TXN_2026_001","status":"PENDING"}'
-        text = '{"reference":"TXN_2026_001","status":"PENDING"}'
+        def __init__(self, status_code, body):
+            self.status_code = status_code
+            self.content = body.encode("utf-8")
+            self.text = body
 
         def json(self):
+            if self.status_code == 404:
+                return {"detail": "Not found"}
             return {"reference": "TXN_2026_001", "status": "PENDING"}
 
     class FakeAsyncClient:
@@ -494,7 +497,9 @@ def test_ihela_test_mobile_cashout_uses_direct_post_for_client_role(monkeypatch)
 
         async def post(self, url, **kwargs):
             calls.append((url, kwargs))
-            return FakeResponse()
+            if url == "https://api.ihela.bi/testenv/api/v2/payments/cashout/":
+                return FakeResponse(404, '{"detail":"Not found"}')
+            return FakeResponse(201, '{"reference":"TXN_2026_001","status":"PENDING"}')
 
     monkeypatch.setattr(settings, "IHELA_BRIDGE_BASE_URL", "")
     monkeypatch.setattr(settings, "IHELA_BRIDGE_API_KEY", "")
@@ -520,28 +525,31 @@ def test_ihela_test_mobile_cashout_uses_direct_post_for_client_role(monkeypatch)
     assert payload["ok"] is True
     assert payload["http_status"] == 201
     assert payload["attempted_urls"] == [
-        "https://api.ihela.bi/testenv/api/v2/payments/cashout/"
+        "https://api.ihela.bi/testenv/api/v2/payments/cashout/",
+        "https://api.ihela.bi/testenv/payments/cashout/",
     ]
     assert payload["response"]["status"] == "PENDING"
-    assert calls == [
-        (
-            "https://api.ihela.bi/testenv/api/v2/payments/cashout/",
-            {
-                "headers": {
-                    "Authorization": "Bearer token-mobile-cashout",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                },
-                "json": {
-                    "amount": 5000,
-                    "recipient": "67225225",
-                    "provider": "LUMICASH",
-                    "merchant_reference": "TXN_2026_001",
-                    "description": "Transfert de 5000 BIF vers le numero 67225225",
-                },
+    assert calls[0] == (
+        "https://api.ihela.bi/testenv/api/v2/payments/cashout/",
+        {
+            "headers": {
+                "Authorization": "Bearer token-mobile-cashout",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
             },
-        )
-    ]
+            "json": {
+                "amount": 5000,
+                "recipient": "67225225",
+                "provider": "LUMICASH",
+                "merchant_reference": "TXN_2026_001",
+                "description": "Transfert de 5000 BIF vers le numero 67225225",
+            },
+        },
+    )
+    assert calls[1] == (
+        "https://api.ihela.bi/testenv/payments/cashout/",
+        calls[0][1],
+    )
 
 
 @pytest.mark.anyio
