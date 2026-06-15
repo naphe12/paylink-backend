@@ -515,7 +515,7 @@ def test_ihela_test_mobile_cashout_uses_direct_post_for_client_role(monkeypatch)
     response = client.post(
         "/providers/ihela/test/mobile-cashout",
         json={
-            "endpoint_path": "/testenv/api/v2/payments/bank/cashin",
+            "endpoint_path": "/testenv/api/v2/payments/mobile/cashin",
             "amount": 5000,
             "recipient": "67225225",
             "provider": "LUMICASH",

@@ -208,12 +208,20 @@ def _ihela_direct_cashin_paths() -> list[str]:
 
 
 def _ihela_direct_mobile_cashout_paths(override_path: str | None = None) -> list[str]:
+    override = str(override_path or "").strip()
+    if "cashin" in override.lower():
+        cashin_path = str(
+            getattr(settings, "IHELA_BANK_CASHIN_PATH", "/testenv/api/v2/payments/bank/cashin")
+            or "/testenv/api/v2/payments/bank/cashin"
+        ).strip()
+        return list(dict.fromkeys([path for path in [cashin_path, override] if path]))
+
     configured_path = str(
         getattr(settings, "IHELA_MOBILE_CASHOUT_PATH", "/testenv/api/v2/payments/cashout")
         or "/testenv/api/v2/payments/cashout"
     ).strip()
     paths = [
-        str(override_path or "").strip(),
+        override,
         configured_path,
         "/testenv/api/v2/payments/mobile/cashout",
         "/testenv/api/v2/payments/mobile-money/cashout",
