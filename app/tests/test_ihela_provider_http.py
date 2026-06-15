@@ -533,7 +533,7 @@ def test_ihela_test_mobile_cashout_uses_direct_post_for_client_role(monkeypatch)
     ]
     assert payload["response"]["status"] == "PENDING"
     assert calls[0] == (
-        "https://api.ihela.bi/testenv/api/v2/payments/mobile/cashin/",
+        "https://api.ihela.bi/testenv/api/v2/payments/bank/cashin/",
         {
             "headers": {
                 "Authorization": "Bearer token-mobile-cashout",
