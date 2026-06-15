@@ -515,7 +515,7 @@ def test_ihela_test_mobile_cashout_uses_direct_post_for_client_role(monkeypatch)
     response = client.post(
         "/providers/ihela/test/mobile-cashout",
         json={
-            "endpoint_path": "/testenv/api/v2/payments/mobile/cashin",
+            "endpoint_path": "/testenv/api/v2/payments/bank/cashin",
             "amount": 5000,
             "recipient": "67225225",
             "provider": "LUMICASH",
@@ -529,7 +529,7 @@ def test_ihela_test_mobile_cashout_uses_direct_post_for_client_role(monkeypatch)
     assert payload["ok"] is True
     assert payload["http_status"] == 201
     assert payload["attempted_urls"] == [
-        "https://api.ihela.bi/testenv/api/v2/payments/mobile/cashin/",
+        "https://api.ihela.bi/testenv/api/v2/payments/bank/cashin/",
     ]
     assert payload["response"]["status"] == "PENDING"
     assert calls[0] == (
