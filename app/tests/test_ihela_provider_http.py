@@ -483,6 +483,8 @@ def test_ihela_test_mobile_cashout_uses_direct_post_for_client_role(monkeypatch)
         def json(self):
             if self.status_code == 404:
                 return {"detail": "Not found"}
+            if self.text == '{"items":[]}':
+                return {"items": []}
             return {"reference": "TXN_2026_001", "status": "PENDING"}
 
     class FakeAsyncClient:
@@ -495,14 +497,12 @@ def test_ihela_test_mobile_cashout_uses_direct_post_for_client_role(monkeypatch)
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def post(self, url, **kwargs):
+        async def get(self, url, **kwargs):
             calls.append((url, kwargs))
-            if url in {
-                "https://api.ihela.bi/testenv/api/v2/payments/mobile/cashout/",
-                "https://api.ihela.bi/testenv/api/v2/payments/cashout/",
-            }:
-                return FakeResponse(404, '{"detail":"Not found"}')
-            return FakeResponse(201, '{"reference":"TXN_2026_001","status":"PENDING"}')
+            return FakeResponse(200, '{"items":[]}')
+
+        async def post(self, url, **kwargs):
+            raise AssertionError("cashin must use GET")
 
     monkeypatch.setattr(settings, "IHELA_BRIDGE_BASE_URL", "")
     monkeypatch.setattr(settings, "IHELA_BRIDGE_API_KEY", "")
@@ -527,25 +527,18 @@ def test_ihela_test_mobile_cashout_uses_direct_post_for_client_role(monkeypatch)
     assert response.status_code == 200
     payload = response.json()
     assert payload["ok"] is True
-    assert payload["http_status"] == 201
+    assert payload["http_status"] == 200
     assert payload["attempted_urls"] == [
         "https://api.ihela.bi/testenv/api/v2/payments/bank/cashin/",
     ]
-    assert payload["response"]["status"] == "PENDING"
+    assert payload["request_payload"] is None
+    assert payload["response"]["items"] == []
     assert calls[0] == (
         "https://api.ihela.bi/testenv/api/v2/payments/bank/cashin/",
         {
             "headers": {
                 "Authorization": "Bearer token-mobile-cashout",
-                "Content-Type": "application/json",
                 "Accept": "application/json",
-            },
-            "json": {
-                "amount": 5000,
-                "recipient": "67225225",
-                "provider": "LUMICASH",
-                "merchant_reference": "TXN_2026_001",
-                "description": "Transfert de 5000 BIF vers le numero 67225225",
             },
         },
     )

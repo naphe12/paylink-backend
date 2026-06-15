@@ -720,12 +720,15 @@ async def ihela_test_mobile_cashout(
     timeout = float(getattr(settings, "IHELA_TIMEOUT_SECONDS", 12.0) or 12.0)
 
     try:
-        response, attempted_urls = await _ihela_direct_post_mobile_cashout(
-            request_payload,
-            access_token,
-            timeout,
-            endpoint_path,
-        )
+        if endpoint_path and "cashin" in endpoint_path.lower():
+            response, attempted_urls = await _ihela_direct_get_bank_cashin(access_token, timeout)
+        else:
+            response, attempted_urls = await _ihela_direct_post_mobile_cashout(
+                request_payload,
+                access_token,
+                timeout,
+                endpoint_path,
+            )
     except httpx.TimeoutException as exc:
         raise HTTPException(status_code=504, detail="Timeout iHela sur mobile cashout") from exc
     except httpx.HTTPError as exc:
@@ -741,7 +744,7 @@ async def ihela_test_mobile_cashout(
         "http_status": response.status_code,
         "transport": "direct",
         "attempted_urls": attempted_urls,
-        "request_payload": request_payload,
+        "request_payload": None if endpoint_path and "cashin" in endpoint_path.lower() else request_payload,
         "response": body,
     }
 
