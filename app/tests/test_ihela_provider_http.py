@@ -531,7 +531,13 @@ def test_ihela_test_mobile_cashout_uses_direct_post_for_client_role(monkeypatch)
     assert payload["attempted_urls"] == [
         "https://api.ihela.bi/testenv/api/v2/payments/bank/cashin/",
     ]
-    assert payload["request_payload"] is None
+    assert payload["request_payload"] == {
+        "amount": 5000,
+        "recipient": "67225225",
+        "provider": "LUMICASH",
+        "merchant_reference": "TXN_2026_001",
+        "description": "Transfert de 5000 BIF vers le numero 67225225",
+    }
     assert payload["response"]["items"] == []
     assert calls[0] == (
         "https://api.ihela.bi/testenv/api/v2/payments/bank/cashin/",
@@ -539,6 +545,13 @@ def test_ihela_test_mobile_cashout_uses_direct_post_for_client_role(monkeypatch)
             "headers": {
                 "Authorization": "Bearer token-mobile-cashout",
                 "Accept": "application/json",
+            },
+            "params": {
+                "amount": 5000,
+                "recipient": "67225225",
+                "provider": "LUMICASH",
+                "merchant_reference": "TXN_2026_001",
+                "description": "Transfert de 5000 BIF vers le numero 67225225",
             },
         },
     )

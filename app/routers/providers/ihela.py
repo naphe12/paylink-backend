@@ -297,6 +297,7 @@ async def _ihela_direct_get_bank_cashout(
 async def _ihela_direct_get_bank_cashin(
     access_token: str,
     timeout: float,
+    params: dict[str, Any] | None = None,
 ) -> tuple[httpx.Response, list[str]]:
     base_url = _ihela_base_url()
     attempted_urls: list[str] = []
@@ -312,6 +313,7 @@ async def _ihela_direct_get_bank_cashin(
                     "Authorization": f"Bearer {access_token}",
                     "Accept": "application/json",
                 },
+                **({"params": params} if params else {}),
             )
             if response.status_code != 404:
                 return response, attempted_urls
@@ -721,7 +723,11 @@ async def ihela_test_mobile_cashout(
 
     try:
         if endpoint_path and "cashin" in endpoint_path.lower():
-            response, attempted_urls = await _ihela_direct_get_bank_cashin(access_token, timeout)
+            response, attempted_urls = await _ihela_direct_get_bank_cashin(
+                access_token,
+                timeout,
+                request_payload,
+            )
         else:
             response, attempted_urls = await _ihela_direct_post_mobile_cashout(
                 request_payload,
@@ -744,7 +750,7 @@ async def ihela_test_mobile_cashout(
         "http_status": response.status_code,
         "transport": "direct",
         "attempted_urls": attempted_urls,
-        "request_payload": None if endpoint_path and "cashin" in endpoint_path.lower() else request_payload,
+        "request_payload": request_payload,
         "response": body,
     }
 
