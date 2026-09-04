@@ -100,6 +100,33 @@ class Settings(BaseSettings):
     IHELA_AUTH_SCHEME: str = os.getenv("IHELA_AUTH_SCHEME", "Bearer")
     IHELA_WEBHOOK_SECRET: str = os.getenv("IHELA_WEBHOOK_SECRET", "")
     IHELA_WEBHOOK_SIGNATURE_HEADER: str = os.getenv("IHELA_WEBHOOK_SIGNATURE_HEADER", "X-IHela-Signature")
+    IHELA_OAUTH_CLIENT_ID: str = os.getenv("IHELA_OAUTH_CLIENT_ID", "")
+    IHELA_OAUTH_CLIENT_SECRET: str = os.getenv("IHELA_OAUTH_CLIENT_SECRET", "")
+    IHELA_AUTH_USERNAME: str = os.getenv("IHELA_AUTH_USERNAME", "")
+    IHELA_AUTH_PASSWORD: str = os.getenv("IHELA_AUTH_PASSWORD", "")
+    IHELA_AUTH_TOKEN_MODE: str = os.getenv("IHELA_AUTH_TOKEN_MODE", "client_credentials")
+    IHELA_OAUTH_TOKEN_PATH: str = os.getenv("IHELA_OAUTH_TOKEN_PATH", "")
+    IHELA_BANKING_API_PREFIX: str = os.getenv("IHELA_BANKING_API_PREFIX", "/ihela/api/v1")
+    IHELA_ACCOUNT_LOOKUP_PATH: str = os.getenv(
+        "IHELA_ACCOUNT_LOOKUP_PATH",
+        "/testenv/api/v2/bank/MF1-0001/account/lookup",
+    )
+    IHELA_BANK_CASHOUT_PATH: str = os.getenv(
+        "IHELA_BANK_CASHOUT_PATH",
+        "/testenv/api/v2/payments/bank/cashout",
+    )
+    IHELA_BANK_CASHIN_PATH: str = os.getenv(
+        "IHELA_BANK_CASHIN_PATH",
+        "/testenv/api/v2/payments/bank/cashin",
+    )
+    IHELA_MOBILE_CASHOUT_PATH: str = os.getenv(
+        "IHELA_MOBILE_CASHOUT_PATH",
+        "/testenv/api/v2/payments/cashout",
+    )
+    IHELA_BRIDGE_BASE_URL: str = os.getenv("IHELA_BRIDGE_BASE_URL", "")
+    IHELA_BRIDGE_API_KEY: str = os.getenv("IHELA_BRIDGE_API_KEY", "")
+    IHELA_BRIDGE_WITHDRAWAL_PATH: str = os.getenv("IHELA_BRIDGE_WITHDRAWAL_PATH", "/ihela/transfer")
+    IHELA_BRIDGE_STATUS_PATH: str = os.getenv("IHELA_BRIDGE_STATUS_PATH", "/ihela/transaction-status")
 
     def _role_suffix(self, role: str | None) -> str | None:
         normalized = str(role or "").strip().lower()

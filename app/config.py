@@ -198,6 +198,21 @@ class Settings(BaseSettings):
     IHELA_AUTH_SCHEME: str = "Bearer"
     IHELA_WEBHOOK_SECRET: str | None = None
     IHELA_WEBHOOK_SIGNATURE_HEADER: str = "X-IHela-Signature"
+    IHELA_OAUTH_CLIENT_ID: str | None = None
+    IHELA_OAUTH_CLIENT_SECRET: str | None = None
+    IHELA_AUTH_USERNAME: str | None = None
+    IHELA_AUTH_PASSWORD: str | None = None
+    IHELA_AUTH_TOKEN_MODE: str = "client_credentials"
+    IHELA_OAUTH_TOKEN_PATH: str = ""
+    IHELA_BANKING_API_PREFIX: str = "/ihela/api/v1"
+    IHELA_ACCOUNT_LOOKUP_PATH: str = "/testenv/api/v2/bank/MF1-0001/account/lookup"
+    IHELA_BANK_CASHOUT_PATH: str = "/testenv/api/v2/payments/bank/cashout"
+    IHELA_BANK_CASHIN_PATH: str = "/testenv/api/v2/payments/bank/cashin"
+    IHELA_MOBILE_CASHOUT_PATH: str = "/testenv/api/v2/payments/cashout"
+    IHELA_BRIDGE_BASE_URL: str | None = None
+    IHELA_BRIDGE_API_KEY: str | None = None
+    IHELA_BRIDGE_WITHDRAWAL_PATH: str = "/ihela/transfer"
+    IHELA_BRIDGE_STATUS_PATH: str = "/ihela/transaction-status"
 
     def _role_suffix(self, role: str | None) -> str | None:
         normalized = str(role or "").strip().lower()

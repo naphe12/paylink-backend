@@ -366,6 +366,8 @@ async def update_external_transfer_status(
 
 @router.get("/pending")
 async def get_pending_transfers(
+    limit: int = Query(25, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user)
 ):
@@ -377,7 +379,12 @@ async def get_pending_transfers(
         .join(Users, Users.user_id == ExternalTransfers.user_id, isouter=True)
         .where(ExternalTransfers.status == "pending")
     )
-    rows = (await db.execute(stmt)).all()
+    total = await db.scalar(
+        select(func.count()).select_from(ExternalTransfers).where(ExternalTransfers.status == "pending")
+    )
+    rows = (
+        await db.execute(stmt.order_by(ExternalTransfers.created_at.desc()).limit(limit).offset(offset))
+    ).all()
 
     serialized = []
     for transfer, full_name, email in rows:
@@ -407,7 +414,7 @@ async def get_pending_transfers(
                 **_extract_transfer_risk_flags(metadata),
             }
         )
-    return serialized
+    return {"items": serialized, "total": int(total or 0), "limit": limit, "offset": offset}
 
 
 @router.post("/create")

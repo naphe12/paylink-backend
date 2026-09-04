@@ -352,6 +352,7 @@ async def list_external_transfers(
         description="Filtre par utilisateur (initiated_by)",
     ),
     limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
 ):
@@ -386,8 +387,6 @@ async def list_external_transfers(
             isouter=True,
         )
         .where(channel_field != "internal")
-        .order_by(Transactions.created_at.desc())
-        .limit(limit)
     )
 
     if channel_param:
@@ -404,9 +403,12 @@ async def list_external_transfers(
         else:
             stmt = stmt.where(Transactions.status == status)
 
-    rows = (await db.execute(stmt)).all()
+    total = await db.scalar(select(func.count()).select_from(stmt.subquery()))
+    rows = (
+        await db.execute(stmt.order_by(Transactions.created_at.desc()).limit(limit).offset(offset))
+    ).all()
 
-    return [
+    items = [
         {
             "tx_id": str(r.tx_id),
             "transfer_id": str(r.transfer_id) if getattr(r, "transfer_id", None) else None,
@@ -431,6 +433,7 @@ async def list_external_transfers(
         }
         for r in rows
     ]
+    return {"items": items, "total": int(total or 0), "limit": limit, "offset": offset}
 
 
 @router.get("/{transfer_id}/payment-note.png")

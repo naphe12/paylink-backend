@@ -1085,22 +1085,30 @@ async def list_external_beneficiaries(
 
 @router.get("/external/mine")
 async def list_my_external_transfers(
-    limit: int = 10,
+    limit: int = Query(25, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: Users = Depends(get_current_user),
 ):
-    safe_limit = max(1, min(int(limit or 10), 50))
+    valid_phone = ExternalTransfers.recipient_phone.op("~")(r"^\+?[0-9]{8,15}$")
+    total = await db.scalar(
+        select(func.count())
+        .select_from(ExternalTransfers)
+        .where(ExternalTransfers.user_id == current_user.user_id, valid_phone)
+    )
     result = await db.execute(
         select(ExternalTransfers)
-        .where(ExternalTransfers.user_id == current_user.user_id)
+        .where(ExternalTransfers.user_id == current_user.user_id, valid_phone)
         .order_by(ExternalTransfers.created_at.desc())
-        .limit(safe_limit)
+        .limit(limit)
+        .offset(offset)
     )
-    return [
-        _serialize_external_transfer_read(transfer)
-        for transfer in result.scalars().all()
-        if _is_valid_external_phone(transfer.recipient_phone)
-    ]
+    return {
+        "items": [_serialize_external_transfer_read(transfer) for transfer in result.scalars().all()],
+        "total": int(total or 0),
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.get("/external/partners")
