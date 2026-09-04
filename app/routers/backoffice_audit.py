@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from app.core.database import get_db
@@ -14,7 +14,8 @@ def _require_admin(user: Users) -> None:
 
 @router.get("")
 async def list_audit(
-    limit: int = 200,
+    limit: int = Query(25, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     action: str | None = None,
     entity_type: str | None = None,
     actor_role: str | None = None,
@@ -24,7 +25,7 @@ async def list_audit(
 ):
     _require_admin(user)
     where = []
-    params = {"limit": limit}
+    params = {"limit": limit, "offset": offset}
     if action:
         where.append("action = :action")
         params["action"] = action
@@ -47,15 +48,24 @@ async def list_audit(
             """
         )
         params["pattern"] = f"%{query.strip()}%"
-    sql = """
-      SELECT id, created_at, actor_user_id, actor_role, action, entity_type, entity_id
+    from_sql = """
       FROM paylink.audit_log
     """
     if where:
-        sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY created_at DESC LIMIT :limit"
+        from_sql += " WHERE " + " AND ".join(where)
+
+    total = await db.scalar(text("SELECT COUNT(*) " + from_sql), params)
+    sql = """
+      SELECT id, created_at, actor_user_id, actor_role, action, entity_type, entity_id
+    """ + from_sql
+    sql += " ORDER BY created_at DESC LIMIT :limit OFFSET :offset"
     res = await db.execute(text(sql), params)
-    return [dict(r._mapping) for r in res.fetchall()]
+    return {
+        "items": [dict(r._mapping) for r in res.fetchall()],
+        "total": int(total or 0),
+        "limit": limit,
+        "offset": offset,
+    }
 
 @router.get("/{audit_id}")
 async def audit_detail(

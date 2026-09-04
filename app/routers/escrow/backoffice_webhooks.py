@@ -1,7 +1,7 @@
 from decimal import Decimal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -116,7 +116,8 @@ async def webhook_stats(
 
 @router.get("")
 async def list_webhook_logs(
-    limit: int = 200,
+    limit: int = Query(25, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     event_type: str | None = None,
     status: str | None = None,
     provider: str | None = None,
@@ -127,7 +128,7 @@ async def list_webhook_logs(
     if str(getattr(user, "role", "")).lower() not in {"admin", "operator"}:
         raise HTTPException(status_code=403, detail="Acces reserve admin/operator")
     where = []
-    params = {"limit": limit}
+    params = {"limit": limit, "offset": offset}
     if event_type:
         where.append("event_type = :event_type")
         params["event_type"] = event_type
@@ -152,15 +153,24 @@ async def list_webhook_logs(
         )
         params["pattern"] = f"%{query.strip()}%"
 
-    sql = """
-        SELECT id, event_type, tx_hash, status, attempts, payload, error, created_at
+    from_sql = """
         FROM escrow.webhook_logs
     """
     if where:
-        sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY created_at DESC LIMIT :limit"
+        from_sql += " WHERE " + " AND ".join(where)
+
+    total = await db.scalar(text("SELECT COUNT(*) " + from_sql), params)
+    sql = """
+        SELECT id, event_type, tx_hash, status, attempts, payload, error, created_at
+    """ + from_sql
+    sql += " ORDER BY created_at DESC LIMIT :limit OFFSET :offset"
     rows = (await db.execute(text(sql), params)).fetchall()
-    return [dict(r._mapping) for r in rows]
+    return {
+        "items": [dict(r._mapping) for r in rows],
+        "total": int(total or 0),
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.post("/{log_id}/retry")
