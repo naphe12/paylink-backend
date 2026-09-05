@@ -27,6 +27,26 @@ async def ensure_scheduled_transfers_schema(db: AsyncSession) -> None:
         """,
         "CREATE INDEX IF NOT EXISTS idx_scheduled_transfers_user_status_created ON product_transfers.scheduled_transfers (user_id, status, created_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_scheduled_transfers_next_run ON product_transfers.scheduled_transfers (next_run_at)",
+        """
+        CREATE TABLE IF NOT EXISTS product_transfers.scheduled_transfer_execution_logs (
+            execution_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            schedule_id uuid NOT NULL,
+            user_id uuid NOT NULL,
+            transfer_type text NOT NULL,
+            outcome text NOT NULL CHECK (outcome IN ('succeeded','failed')),
+            schedule_status text NOT NULL,
+            amount numeric(20,6) NOT NULL,
+            currency_code text NOT NULL,
+            reason text NULL,
+            error_type text NULL,
+            stack_trace text NULL,
+            duration_ms integer NOT NULL DEFAULT 0,
+            details jsonb NOT NULL DEFAULT '{}'::jsonb,
+            created_at timestamptz NOT NULL DEFAULT now()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_scheduled_execution_logs_schedule_created ON product_transfers.scheduled_transfer_execution_logs (schedule_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_scheduled_execution_logs_outcome_created ON product_transfers.scheduled_transfer_execution_logs (outcome, created_at DESC)",
     ]
     for statement in statements:
         await db.execute(text(statement))

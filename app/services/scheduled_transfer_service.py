@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+import traceback
 from calendar import monthrange
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -8,9 +10,10 @@ from uuid import UUID
 
 from fastapi import BackgroundTasks, HTTPException
 from pydantic import ValidationError
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import case, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import async_session_maker
 from app.models.scheduled_transfers import ScheduledTransfers
 from app.models.credit_lines import CreditLines
 from app.models.external_transfers import ExternalTransfers
@@ -176,6 +179,55 @@ def _log_scheduled_transfer_outcome(
         reason,
         exc_info=exc_info,
     )
+
+
+async def _persist_scheduled_transfer_execution(
+    item: ScheduledTransfers,
+    *,
+    succeeded: bool,
+    reason: str,
+    started_at: datetime,
+    error: Exception | None = None,
+    details: dict | None = None,
+) -> None:
+    finished_at = _utcnow()
+    duration_ms = max(int((finished_at - started_at).total_seconds() * 1000), 0)
+    stack_trace = None
+    if error is not None and not isinstance(error, HTTPException):
+        stack_trace = "".join(traceback.format_exception(type(error), error, error.__traceback__))[-12000:]
+    try:
+        async with async_session_maker() as log_db:
+            await log_db.execute(
+                text(
+                    """
+                    INSERT INTO product_transfers.scheduled_transfer_execution_logs
+                    (schedule_id, user_id, transfer_type, outcome, schedule_status, amount,
+                     currency_code, reason, error_type, stack_trace, duration_ms, details, created_at)
+                    VALUES
+                    (:schedule_id, :user_id, :transfer_type, :outcome, :schedule_status, :amount,
+                     :currency_code, :reason, :error_type, :stack_trace, :duration_ms,
+                     CAST(:details AS jsonb), :created_at)
+                    """
+                ),
+                {
+                    "schedule_id": str(item.schedule_id),
+                    "user_id": str(item.user_id),
+                    "transfer_type": _schedule_transfer_type(item),
+                    "outcome": "succeeded" if succeeded else "failed",
+                    "schedule_status": str(item.status),
+                    "amount": str(item.amount),
+                    "currency_code": str(item.currency_code or ""),
+                    "reason": str(reason)[:4000],
+                    "error_type": error.__class__.__name__ if error else None,
+                    "stack_trace": stack_trace,
+                    "duration_ms": duration_ms,
+                    "details": json.dumps(details or {}, default=str, ensure_ascii=False),
+                    "created_at": finished_at,
+                },
+            )
+            await log_db.commit()
+    except Exception:
+        logger.exception("Unable to persist scheduled transfer execution log schedule_id=%s", item.schedule_id)
 
 
 def _normalize_receiver_identifier(identifier: str) -> tuple[str, str, str]:
@@ -395,6 +447,7 @@ async def _run_scheduled_transfer_item(
     item: ScheduledTransfers,
     raise_on_failure: bool,
 ) -> dict:
+    execution_started_at = _utcnow()
     try:
         metadata = _schedule_metadata(item)
         metadata["failure_count"] = 0
@@ -464,6 +517,13 @@ async def _run_scheduled_transfer_item(
             succeeded=True,
             reason=str(item.last_result or "Execution reussie"),
         )
+        await _persist_scheduled_transfer_execution(
+            item,
+            succeeded=True,
+            reason=str(item.last_result or "Execution reussie"),
+            started_at=execution_started_at,
+            details={"result": result},
+        )
         return _serialize_schedule(item)
     except HTTPException as exc:
         metadata = _schedule_metadata(item)
@@ -486,6 +546,10 @@ async def _run_scheduled_transfer_item(
         )
         await db.commit()
         await db.refresh(item)
+        await _persist_scheduled_transfer_execution(
+            item, succeeded=False, reason=str(item.last_result or exc.detail),
+            started_at=execution_started_at, error=exc,
+        )
         if raise_on_failure:
             raise
         return _serialize_schedule(item)
@@ -512,6 +576,10 @@ async def _run_scheduled_transfer_item(
         )
         await db.commit()
         await db.refresh(item)
+        await _persist_scheduled_transfer_execution(
+            item, succeeded=False, reason=str(item.last_result or message),
+            started_at=execution_started_at, error=exc,
+        )
         if raise_on_failure:
             raise HTTPException(
                 status_code=500,
@@ -541,6 +609,10 @@ async def _run_scheduled_transfer_item(
         )
         await db.commit()
         await db.refresh(item)
+        await _persist_scheduled_transfer_execution(
+            item, succeeded=False, reason=str(item.last_result or message),
+            started_at=execution_started_at, error=exc,
+        )
         if raise_on_failure:
             raise HTTPException(
                 status_code=500,

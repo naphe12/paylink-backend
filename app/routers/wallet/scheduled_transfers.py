@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -22,6 +22,43 @@ from app.services.scheduled_transfer_service import (
 )
 
 router = APIRouter(tags=["Scheduled Transfers"])
+
+
+@router.get("/admin/scheduled-transfer-executions")
+async def list_admin_scheduled_transfer_executions(
+    transfer_type: str | None = Query(None, pattern="^(internal|external)$"),
+    outcome: str | None = Query(None, pattern="^(succeeded|failed)$"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    clauses, params = [], {"limit": limit, "offset": offset}
+    if transfer_type:
+        clauses.append("transfer_type = :transfer_type")
+        params["transfer_type"] = transfer_type
+    if outcome:
+        clauses.append("outcome = :outcome")
+        params["outcome"] = outcome
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    rows = (await db.execute(text(f"""
+        SELECT execution_id, schedule_id, user_id, transfer_type, outcome, schedule_status,
+               amount, currency_code, reason, error_type, stack_trace, duration_ms, details, created_at
+        FROM product_transfers.scheduled_transfer_execution_logs
+        {where_sql}
+        ORDER BY created_at DESC LIMIT :limit OFFSET :offset
+    """), params)).mappings().all()
+    return [
+        {
+            **dict(row),
+            "execution_id": str(row["execution_id"]),
+            "schedule_id": str(row["schedule_id"]),
+            "user_id": str(row["user_id"]),
+            "amount": str(row["amount"]),
+            "created_at": row["created_at"].isoformat(),
+        }
+        for row in rows
+    ]
 
 
 @router.get("/admin/scheduled-transfers")

@@ -704,7 +704,7 @@ async def _flat_router_lifespan(_app):
 app.router.lifespan_context = _flat_router_lifespan
 
 
-def _get_request_id(request: Request) -> str | None:
+def _get_request_id(request: Request | WebSocket) -> str | None:
     return (
         getattr(request.state, "request_id", None)
         or request.headers.get("x-request-id")
@@ -927,7 +927,7 @@ async def request_metrics_middleware(request: Request, call_next):
 
 
 @app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
+async def http_exception_handler(request: Request | WebSocket, exc: HTTPException):
     request_id = _get_request_id(request)
     await persist_app_error(
         request,
@@ -936,20 +936,29 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         handled=True,
         error_type="HTTPException",
     )
+    is_websocket = isinstance(request, WebSocket)
+    method = "WEBSOCKET" if is_websocket else request.method
     logger.warning(
         "HTTP exception path=%s method=%s status=%s request_id=%s detail=%s",
         request.url.path,
-        request.method,
+        method,
         exc.status_code,
         request_id,
         exc.detail,
     )
+    if is_websocket:
+        close_code = 4400 if 400 <= exc.status_code < 500 else 4500
+        try:
+            await request.close(code=close_code)
+        except RuntimeError:
+            logger.debug("WebSocket already closed path=%s request_id=%s", request.url.path, request_id)
+        return None
     return JSONResponse(
         status_code=exc.status_code,
         content={
             "detail": exc.detail,
             "path": request.url.path,
-            "method": request.method,
+            "method": method,
             "request_id": request_id,
         },
         headers=getattr(exc, "headers", None),
@@ -987,7 +996,7 @@ async def request_validation_exception_handler(request: Request, exc: RequestVal
 
 
 @app.exception_handler(Exception)
-async def unhandled_exception_handler(request: Request, exc: Exception):
+async def unhandled_exception_handler(request: Request | WebSocket, exc: Exception):
     request_id = _get_request_id(request)
     await persist_app_error(
         request,
@@ -997,13 +1006,21 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         error_type=exc.__class__.__name__,
         stack_trace="".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
     )
+    is_websocket = isinstance(request, WebSocket)
+    method = "WEBSOCKET" if is_websocket else request.method
     logger.exception(
         "Unhandled exception path=%s method=%s request_id=%s error=%s",
         request.url.path,
-        request.method,
+        method,
         request_id,
         exc,
     )
+    if is_websocket:
+        try:
+            await request.close(code=4500)
+        except RuntimeError:
+            logger.debug("WebSocket already closed path=%s request_id=%s", request.url.path, request_id)
+        return None
     return JSONResponse(
         status_code=500,
         content={
