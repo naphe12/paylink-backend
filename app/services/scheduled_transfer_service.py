@@ -8,7 +8,7 @@ from uuid import UUID
 
 from fastapi import BackgroundTasks, HTTPException
 from pydantic import ValidationError
-from sqlalchemy import case, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.scheduled_transfers import ScheduledTransfers
@@ -153,12 +153,49 @@ def _scheduled_transfer_recommended_action(item: ScheduledTransfers, *, transfer
     return "executer_ou_surveiller"
 
 
+def _log_scheduled_transfer_outcome(
+    item: ScheduledTransfers,
+    *,
+    succeeded: bool,
+    reason: str,
+    exc_info: bool = False,
+) -> None:
+    log = logger.info if succeeded else (logger.error if exc_info else logger.warning)
+    log(
+        "Scheduled transfer %s schedule_id=%s user_id=%s transfer_type=%s amount=%s currency=%s "
+        "status=%s reason=%s",
+        "succeeded" if succeeded else "failed",
+        item.schedule_id,
+        item.user_id,
+        _schedule_transfer_type(item),
+        item.amount,
+        item.currency_code,
+        item.status,
+        reason,
+        exc_info=exc_info,
+    )
+
+
+def _normalize_receiver_identifier(identifier: str) -> tuple[str, str, str]:
+    raw = " ".join(str(identifier or "").strip().split())
+    normalized = raw.lower()
+    paytag = normalized if normalized.startswith("@") else f"@{normalized}"
+    return raw, normalized, paytag
+
+
 async def _resolve_receiver(db: AsyncSession, identifier: str) -> Users:
-    normalized = str(identifier or "").strip()
+    raw, normalized, paytag = _normalize_receiver_identifier(identifier)
     if not normalized:
         raise HTTPException(status_code=400, detail="Destinataire manquant")
     receiver = await db.scalar(
-        select(Users).where(or_(Users.email == normalized, Users.paytag == normalized))
+        select(Users).where(
+            or_(
+                func.lower(Users.email) == normalized,
+                func.lower(Users.username) == normalized,
+                func.lower(Users.paytag) == paytag,
+                Users.phone_e164 == raw,
+            )
+        )
     )
     if not receiver:
         raise HTTPException(status_code=404, detail="Destinataire introuvable")
@@ -374,6 +411,11 @@ async def _run_scheduled_transfer_item(
         item.metadata_ = metadata
         await db.commit()
         await db.refresh(item)
+        _log_scheduled_transfer_outcome(
+            item,
+            succeeded=True,
+            reason=str(item.last_result or "Execution reussie"),
+        )
         return _serialize_schedule(item)
     except HTTPException as exc:
         metadata = _schedule_metadata(item)
@@ -389,17 +431,17 @@ async def _run_scheduled_transfer_item(
             item.last_result = str(exc.detail)
         item.metadata_ = metadata
         item.updated_at = _utcnow()
+        _log_scheduled_transfer_outcome(
+            item,
+            succeeded=False,
+            reason=str(item.last_result or exc.detail),
+        )
         await db.commit()
         await db.refresh(item)
         if raise_on_failure:
             raise
         return _serialize_schedule(item)
     except ValueError as exc:
-        logger.exception(
-            "Scheduled transfer execution failed with ValueError schedule_id=%s user_id=%s",
-            item.schedule_id,
-            item.user_id,
-        )
         metadata = _schedule_metadata(item)
         failure_count = _schedule_failure_count(item) + 1
         max_consecutive_failures = _schedule_max_consecutive_failures(item)
@@ -414,6 +456,12 @@ async def _run_scheduled_transfer_item(
             item.last_result = message
         item.metadata_ = metadata
         item.updated_at = _utcnow()
+        _log_scheduled_transfer_outcome(
+            item,
+            succeeded=False,
+            reason=str(item.last_result or message),
+            exc_info=True,
+        )
         await db.commit()
         await db.refresh(item)
         if raise_on_failure:
@@ -423,11 +471,6 @@ async def _run_scheduled_transfer_item(
             ) from exc
         return _serialize_schedule(item)
     except Exception as exc:
-        logger.exception(
-            "Scheduled transfer execution failed with unexpected error schedule_id=%s user_id=%s",
-            item.schedule_id,
-            item.user_id,
-        )
         metadata = _schedule_metadata(item)
         failure_count = _schedule_failure_count(item) + 1
         max_consecutive_failures = _schedule_max_consecutive_failures(item)
@@ -442,6 +485,12 @@ async def _run_scheduled_transfer_item(
             item.last_result = message
         item.metadata_ = metadata
         item.updated_at = _utcnow()
+        _log_scheduled_transfer_outcome(
+            item,
+            succeeded=False,
+            reason=str(item.last_result or message),
+            exc_info=True,
+        )
         await db.commit()
         await db.refresh(item)
         if raise_on_failure:
@@ -486,13 +535,20 @@ async def create_scheduled_transfer(
         metadata["external_transfer"] = external_transfer
     else:
         receiver = await _resolve_receiver(db, payload.receiver_identifier)
+        if receiver.user_id == current_user.user_id:
+            raise HTTPException(status_code=400, detail="Vous ne pouvez pas vous envoyer a vous-meme")
         receiver_wallet = await db.scalar(_primary_wallet_stmt(receiver.user_id))
         if not receiver_wallet:
             raise HTTPException(status_code=404, detail="Portefeuille introuvable")
         if str(sender_wallet.currency_code or "").upper() != str(receiver_wallet.currency_code or "").upper():
             raise HTTPException(status_code=400, detail="Transfert programme impossible entre devises differentes.")
         receiver_user_id = receiver.user_id
-        receiver_identifier = payload.receiver_identifier
+        receiver_identifier = (
+            str(receiver.paytag or "").strip()
+            or str(receiver.email or "").strip().lower()
+            or str(receiver.username or "").strip()
+            or str(receiver.phone_e164 or "").strip()
+        )
 
     item = ScheduledTransfers(
         user_id=current_user.user_id,

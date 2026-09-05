@@ -1,10 +1,12 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.dependencies.auth import get_current_user_db
+from app.dependencies.auth import get_current_admin, get_current_user_db
+from app.models.scheduled_transfers import ScheduledTransfers
 from app.models.users import Users
 from app.schemas.scheduled_transfers import ScheduledTransferCreate, ScheduledTransferRead, ScheduledTransferUpdate
 from app.services.scheduled_transfer_service import (
@@ -20,6 +22,45 @@ from app.services.scheduled_transfer_service import (
 )
 
 router = APIRouter(tags=["Scheduled Transfers"])
+
+
+@router.get("/admin/scheduled-transfers")
+async def list_admin_scheduled_transfers(
+    transfer_type: str | None = Query(None, pattern="^(internal|external)$"),
+    status: str | None = Query(None, pattern="^(active|paused|cancelled|completed|failed)$"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    stmt = select(ScheduledTransfers).order_by(ScheduledTransfers.updated_at.desc()).limit(limit).offset(offset)
+    if status:
+        stmt = stmt.where(ScheduledTransfers.status == status)
+    if transfer_type:
+        stmt = stmt.where(ScheduledTransfers.metadata_["transfer_type"].astext == transfer_type)
+    rows = (await db.execute(stmt)).scalars().all()
+    items = []
+    for item in rows:
+        metadata = dict(item.metadata_ or {})
+        item_type = "external" if metadata.get("transfer_type") == "external" else "internal"
+        items.append(
+            {
+                "schedule_id": str(item.schedule_id),
+                "user_id": str(item.user_id),
+                "transfer_type": item_type,
+                "receiver_identifier": item.receiver_identifier,
+                "amount": str(item.amount),
+                "currency_code": item.currency_code,
+                "frequency": item.frequency,
+                "status": item.status,
+                "last_result": item.last_result,
+                "failure_count": int(metadata.get("failure_count") or 0),
+                "next_run_at": item.next_run_at,
+                "last_run_at": item.last_run_at,
+                "updated_at": item.updated_at,
+            }
+        )
+    return items
 
 
 @router.get("/wallet/scheduled-transfers", response_model=list[ScheduledTransferRead])

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
@@ -40,6 +41,16 @@ class _RunDb:
         return None
 
 
+class _ScalarSequenceDb:
+    def __init__(self, values):
+        self.values = iter(values)
+        self.statements = []
+
+    async def scalar(self, stmt):
+        self.statements.append(stmt)
+        return next(self.values)
+
+
 class _UpdateDb:
     def __init__(self, item):
         self.item = item
@@ -63,6 +74,51 @@ class _FakeScheduledTransfer:
         self.updated_at = None
         self.last_run_at = None
         self.last_result = None
+
+
+def test_normalize_internal_receiver_accepts_paytag_without_at_and_extra_spaces():
+    assert service._normalize_receiver_identifier("  Alice  ") == ("Alice", "alice", "@alice")
+
+
+def test_resolve_internal_receiver_supports_username_paytag_email_and_phone():
+    receiver = SimpleNamespace(user_id=uuid4())
+    db = _ScalarSequenceDb([receiver])
+
+    result = asyncio.run(service._resolve_receiver(db, " Alice "))
+
+    assert result is receiver
+    sql = str(db.statements[0])
+    assert "lower(paylink.users.email)" in sql
+    assert "lower(paylink.users.username)" in sql
+    assert "lower(paylink.users.paytag)" in sql
+    assert "paylink.users.phone_e164" in sql
+
+
+def test_create_internal_schedule_rejects_self_transfer():
+    user_id = uuid4()
+    current_user = SimpleNamespace(
+        user_id=user_id,
+        email="alice@example.com",
+        username="alice",
+        paytag="@alice",
+        phone_e164="+25761234567",
+    )
+    sender_wallet = SimpleNamespace(wallet_id=uuid4(), currency_code="EUR")
+    db = _ScalarSequenceDb([sender_wallet, current_user])
+    payload = ScheduledTransferCreate(
+        transfer_type="internal",
+        receiver_identifier="alice",
+        amount=Decimal("10.00"),
+        frequency="weekly",
+        next_run_at=datetime(2027, 4, 8, 8, 0, tzinfo=timezone.utc),
+    )
+
+    try:
+        asyncio.run(service.create_scheduled_transfer(db, current_user=current_user, payload=payload))
+        assert False, "Expected self-transfer validation error"
+    except HTTPException as exc:
+        assert exc.status_code == 400
+        assert "vous-meme" in str(exc.detail)
 
 
 def test_create_scheduled_transfer_supports_external_payload(monkeypatch):
@@ -97,7 +153,7 @@ def test_create_scheduled_transfer_supports_external_payload(monkeypatch):
     assert db.added[0].metadata_["failure_count"] == 0
 
 
-def test_run_scheduled_transfer_item_executes_external_schedule(monkeypatch):
+def test_run_scheduled_transfer_item_executes_external_schedule(monkeypatch, caplog):
     schedule_id = uuid4()
     current_user = SimpleNamespace(user_id=uuid4(), email="client@example.com", paytag="@client")
     next_run_at = datetime(2026, 4, 8, 8, 0, tzinfo=timezone.utc)
@@ -142,14 +198,15 @@ def test_run_scheduled_transfer_item_executes_external_schedule(monkeypatch):
     monkeypatch.setattr(service, "_execute_external_transfer", fake_execute_external_transfer)
     monkeypatch.setattr(service, "_utcnow", lambda: execution_time)
 
-    result = asyncio.run(
-        service._run_scheduled_transfer_item(
-            _RunDb(),
-            current_user=current_user,
-            item=item,
-            raise_on_failure=True,
+    with caplog.at_level(logging.INFO, logger=service.__name__):
+        result = asyncio.run(
+            service._run_scheduled_transfer_item(
+                _RunDb(),
+                current_user=current_user,
+                item=item,
+                raise_on_failure=True,
+            )
         )
-    )
 
     assert result["status"] == "active"
     assert result["transfer_type"] == "external"
@@ -158,6 +215,9 @@ def test_run_scheduled_transfer_item_executes_external_schedule(monkeypatch):
     assert item.last_run_at == execution_time
     assert item.next_run_at == next_run_at + timedelta(days=7)
     assert item.remaining_runs == 1
+    assert "Scheduled transfer succeeded" in caplog.text
+    assert str(schedule_id) in caplog.text
+    assert "transfer_type=external" in caplog.text
 
 
 def test_execute_external_transfer_enables_inline_notifications(monkeypatch):
@@ -269,7 +329,7 @@ def test_run_scheduled_transfer_item_backfills_monthly_anchor_from_last_run(monk
     assert item.next_run_at == datetime(2026, 3, 31, 8, 0, tzinfo=timezone.utc)
 
 
-def test_run_scheduled_transfer_item_auto_pauses_after_max_failures(monkeypatch):
+def test_run_scheduled_transfer_item_auto_pauses_after_max_failures(monkeypatch, caplog):
     current_user = SimpleNamespace(user_id=uuid4(), email="client@example.com", paytag="@client")
     item = SimpleNamespace(
         schedule_id=uuid4(),
@@ -295,19 +355,23 @@ def test_run_scheduled_transfer_item_auto_pauses_after_max_failures(monkeypatch)
 
     monkeypatch.setattr(service, "_execute_internal_transfer", fake_execute_internal_transfer)
 
-    result = asyncio.run(
-        service._run_scheduled_transfer_item(
-            _RunDb(),
-            current_user=current_user,
-            item=item,
-            raise_on_failure=False,
+    with caplog.at_level(logging.WARNING, logger=service.__name__):
+        result = asyncio.run(
+            service._run_scheduled_transfer_item(
+                _RunDb(),
+                current_user=current_user,
+                item=item,
+                raise_on_failure=False,
+            )
         )
-    )
 
     assert result["status"] == "paused"
     assert result["failure_count"] == 3
     assert result["auto_paused_for_failures"] is True
     assert "Mise en pause auto" in (result["last_result"] or "")
+    assert "Scheduled transfer failed" in caplog.text
+    assert str(item.schedule_id) in caplog.text
+    assert "reason=Solde insuffisant" in caplog.text
 
 
 def test_run_scheduled_transfer_item_handles_unexpected_exception(monkeypatch):
