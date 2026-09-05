@@ -9,6 +9,7 @@ from app.dependencies.auth import get_current_admin, get_current_user_db
 from app.models.scheduled_transfers import ScheduledTransfers
 from app.models.users import Users
 from app.schemas.scheduled_transfers import ScheduledTransferCreate, ScheduledTransferRead, ScheduledTransferUpdate
+from app.services.scheduled_transfers_runtime_schema import ensure_scheduled_transfers_schema
 from app.services.scheduled_transfer_service import (
     cancel_scheduled_transfer,
     create_scheduled_transfer,
@@ -33,6 +34,12 @@ async def list_admin_scheduled_transfer_executions(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin),
 ):
+    execution_log_table = await db.scalar(
+        text("SELECT to_regclass('product_transfers.scheduled_transfer_execution_logs')")
+    )
+    if execution_log_table is None:
+        await ensure_scheduled_transfers_schema(db)
+
     clauses, params = [], {"limit": limit, "offset": offset}
     if transfer_type:
         clauses.append("transfer_type = :transfer_type")

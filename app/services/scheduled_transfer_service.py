@@ -23,6 +23,7 @@ from app.models.wallets import Wallets
 from app.schemas.external_transfers import ExternalTransferCreate
 from app.services.ledger import LedgerLine, LedgerService
 from app.services.external_transfer_capacity import compute_external_transfer_funding
+from app.services.scheduled_transfers_runtime_schema import ensure_scheduled_transfers_schema
 from app.services.wallet_history import log_wallet_movement
 
 logger = logging.getLogger(__name__)
@@ -197,6 +198,11 @@ async def _persist_scheduled_transfer_execution(
         stack_trace = "".join(traceback.format_exception(type(error), error, error.__traceback__))[-12000:]
     try:
         async with async_session_maker() as log_db:
+            execution_log_table = await log_db.scalar(
+                text("SELECT to_regclass('product_transfers.scheduled_transfer_execution_logs')")
+            )
+            if execution_log_table is None:
+                await ensure_scheduled_transfers_schema(log_db)
             await log_db.execute(
                 text(
                     """
