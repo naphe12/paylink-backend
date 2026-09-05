@@ -50,6 +50,12 @@ class _ScalarSequenceDb:
         self.statements.append(stmt)
         return next(self.values)
 
+    def add(self, _item):
+        return None
+
+    async def flush(self):
+        return None
+
 
 class _UpdateDb:
     def __init__(self, item):
@@ -119,6 +125,47 @@ def test_create_internal_schedule_rejects_self_transfer():
     except HTTPException as exc:
         assert exc.status_code == 400
         assert "vous-meme" in str(exc.detail)
+
+
+def test_execute_internal_schedule_uses_credit_with_negative_wallet(monkeypatch):
+    sender = SimpleNamespace(
+        user_id=uuid4(), email="sender@example.com", paytag="@sender",
+        credit_limit=Decimal("100"), credit_used=Decimal("20"),
+    )
+    receiver = SimpleNamespace(user_id=uuid4(), email="receiver@example.com", paytag="@receiver")
+    sender_wallet = SimpleNamespace(wallet_id=uuid4(), user_id=sender.user_id, available=Decimal("-10"), currency_code="EUR")
+    receiver_wallet = SimpleNamespace(wallet_id=uuid4(), user_id=receiver.user_id, available=Decimal("5"), currency_code="EUR")
+    credit_line = SimpleNamespace(
+        initial_amount=Decimal("100"), used_amount=Decimal("20"), outstanding_amount=Decimal("80"),
+        currency_code="EUR", updated_at=None,
+    )
+    db = _ScalarSequenceDb([receiver, sender_wallet, receiver_wallet, credit_line])
+
+    async def fake_movement(*args, **kwargs):
+        return None
+
+    class FakeTransaction:
+        def __init__(self, **kwargs):
+            self.tx_id = uuid4()
+
+    class FakeLedger:
+        def __init__(self, _db): pass
+        async def ensure_wallet_account(self, wallet): return wallet.wallet_id
+        async def post_journal(self, **kwargs): return None
+
+    monkeypatch.setattr(service, "log_wallet_movement", fake_movement)
+    monkeypatch.setattr(service, "Transactions", FakeTransaction)
+    monkeypatch.setattr(service, "LedgerService", FakeLedger)
+
+    result = asyncio.run(service._execute_internal_transfer(
+        db, sender=sender, receiver_identifier="receiver", amount=Decimal("50"), schedule_id=uuid4()
+    ))
+
+    assert sender_wallet.available == Decimal("-60")
+    assert receiver_wallet.available == Decimal("55")
+    assert credit_line.used_amount == Decimal("70")
+    assert credit_line.outstanding_amount == Decimal("30")
+    assert result["credit_used"] == Decimal("50")
 
 
 def test_create_scheduled_transfer_supports_external_payload(monkeypatch):

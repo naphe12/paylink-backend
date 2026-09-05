@@ -12,12 +12,14 @@ from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.scheduled_transfers import ScheduledTransfers
+from app.models.credit_lines import CreditLines
 from app.models.external_transfers import ExternalTransfers
 from app.models.transactions import Transactions
 from app.models.users import Users
 from app.models.wallets import Wallets
 from app.schemas.external_transfers import ExternalTransferCreate
 from app.services.ledger import LedgerLine, LedgerService
+from app.services.external_transfer_capacity import compute_external_transfer_funding
 from app.services.wallet_history import log_wallet_movement
 
 logger = logging.getLogger(__name__)
@@ -221,11 +223,53 @@ async def _execute_internal_transfer(
         raise HTTPException(status_code=404, detail="Portefeuille introuvable")
     if str(sender_wallet.currency_code or "").upper() != str(receiver_wallet.currency_code or "").upper():
         raise HTTPException(status_code=400, detail="Transfert interne impossible entre devises differentes.")
-    if Decimal(str(sender_wallet.available or 0)) < amount:
+    credit_line = await db.scalar(
+        select(CreditLines)
+        .where(
+            CreditLines.user_id == sender.user_id,
+            CreditLines.deleted_at.is_(None),
+            CreditLines.status == "active",
+        )
+        .order_by(CreditLines.created_at.desc())
+        .with_for_update()
+    )
+    credit_line_currency = str(getattr(credit_line, "currency_code", "") or "").upper()
+    sender_currency = str(sender_wallet.currency_code or "").upper()
+    if credit_line and credit_line_currency and credit_line_currency != sender_currency:
+        raise HTTPException(
+            status_code=400,
+            detail="Devise incoherente entre portefeuille et ligne de credit.",
+        )
+    credit_available = (
+        max(Decimal(str(credit_line.outstanding_amount or 0)), Decimal("0"))
+        if credit_line
+        else max(
+            Decimal(str(getattr(sender, "credit_limit", 0) or 0))
+            - Decimal(str(getattr(sender, "credit_used", 0) or 0)),
+            Decimal("0"),
+        )
+    )
+    funding = compute_external_transfer_funding(
+        wallet_available=Decimal(str(sender_wallet.available or 0)),
+        credit_available=credit_available,
+        total_required=amount,
+        mirror_wallet_with_credit=True,
+    )
+    if funding["residual_after_credit"] > 0:
         raise HTTPException(status_code=400, detail="Solde insuffisant")
 
-    sender_wallet.available = Decimal(str(sender_wallet.available or 0)) - amount
+    sender_wallet.available = funding["wallet_after"]
     receiver_wallet.available = Decimal(str(receiver_wallet.available or 0)) + amount
+    credit_used = funding["credit_used"]
+    if credit_used > 0:
+        if credit_line:
+            credit_line.used_amount = Decimal(str(credit_line.used_amount or 0)) + credit_used
+            credit_line.outstanding_amount = max(Decimal("0"), funding["credit_available_after"])
+            credit_line.updated_at = _utcnow()
+            sender.credit_limit = Decimal(str(credit_line.initial_amount or 0))
+            sender.credit_used = Decimal(str(credit_line.used_amount or 0))
+        else:
+            sender.credit_used = Decimal(str(getattr(sender, "credit_used", 0) or 0)) + credit_used
 
     sender_movement = await log_wallet_movement(
         db,
@@ -272,6 +316,8 @@ async def _execute_internal_transfer(
         "receiver_user_id": str(receiver.user_id),
         "transaction_id": str(tx.tx_id),
         "receiver_identifier": receiver_identifier,
+        "credit_used_amount": str(credit_used),
+        "credit_available_after": str(funding["credit_available_after"]),
     }
     if schedule_id:
         metadata["schedule_id"] = str(schedule_id)
@@ -302,6 +348,8 @@ async def _execute_internal_transfer(
         "receiver_user_id": receiver.user_id,
         "currency_code": str(sender_wallet.currency_code or "").upper(),
         "tx_id": tx.tx_id,
+        "credit_used": credit_used,
+        "credit_available_after": funding["credit_available_after"],
     }
 
 
