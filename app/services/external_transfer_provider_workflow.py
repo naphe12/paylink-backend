@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import decimal
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -38,6 +39,34 @@ from app.services.wallet_history import log_wallet_movement
 DISPATCHABLE_TRANSFER_STATUSES = {"approved"}
 POLLABLE_PROVIDER_STATUSES = {PROVIDER_STATUS_SENT, PROVIDER_STATUS_PROCESSING, PROVIDER_STATUS_RETRY}
 ZERO = decimal.Decimal("0")
+logger = logging.getLogger(__name__)
+
+
+def _log_provider_outcome(
+    transfer: ExternalTransfers,
+    *,
+    provider: str,
+    provider_status: str,
+    reason: str | None = None,
+) -> None:
+    normalized_status = normalize_provider_status(provider_status)
+    log = (
+        logger.warning
+        if normalized_status in {PROVIDER_STATUS_FAILED, PROVIDER_STATUS_RETRY, PROVIDER_STATUS_MANUAL_REVIEW}
+        else logger.info
+    )
+    log(
+        "External transfer provider outcome transfer_id=%s user_id=%s provider=%s "
+        "provider_status=%s transfer_status=%s amount=%s currency=%s reason=%s",
+        transfer.transfer_id,
+        transfer.user_id,
+        provider,
+        normalized_status,
+        getattr(transfer, "status", None),
+        getattr(transfer, "amount", None),
+        getattr(transfer, "currency", None),
+        reason or "-",
+    )
 
 
 def _resolve_provider_name(transfer: ExternalTransfers) -> str:
@@ -369,6 +398,11 @@ async def _dispatch_provider_for_transfer(
                 txn,
                 provider_status=normalized_provider_status,
             )
+        _log_provider_outcome(
+            transfer,
+            provider=provider_name,
+            provider_status=normalized_provider_status,
+        )
         return {
             "status": "DISPATCHED",
             "provider": provider_name,
@@ -384,12 +418,24 @@ async def _dispatch_provider_for_transfer(
                 last_error=str(exc),
                 increment_retry=True,
             )
+            _log_provider_outcome(
+                transfer,
+                provider=provider_name,
+                provider_status=PROVIDER_STATUS_RETRY,
+                reason=str(exc),
+            )
             return {"status": "RETRY", "reason": str(exc)}
         _mark_provider_state(
             transfer,
             provider=provider_name,
             provider_status=PROVIDER_STATUS_MANUAL_REVIEW,
             last_error=str(exc),
+        )
+        _log_provider_outcome(
+            transfer,
+            provider=provider_name,
+            provider_status=PROVIDER_STATUS_MANUAL_REVIEW,
+            reason=str(exc),
         )
         return {"status": "MANUAL_REVIEW", "reason": str(exc)}
     except ExternalTransferProviderError as exc:
@@ -400,6 +446,12 @@ async def _dispatch_provider_for_transfer(
                 provider_status=PROVIDER_STATUS_RETRY,
                 last_error=str(exc),
                 increment_retry=True,
+            )
+            _log_provider_outcome(
+                transfer,
+                provider=provider_name,
+                provider_status=PROVIDER_STATUS_RETRY,
+                reason=str(exc),
             )
             return {"status": "RETRY", "reason": str(exc)}
 
@@ -417,6 +469,12 @@ async def _dispatch_provider_for_transfer(
                 txn,
                 provider_status=PROVIDER_STATUS_FAILED,
             )
+        _log_provider_outcome(
+            transfer,
+            provider=provider_name,
+            provider_status=target_provider_status,
+            reason=str(exc),
+        )
         return {"status": target_provider_status.upper(), "reason": str(exc)}
 
 
@@ -462,6 +520,12 @@ async def apply_provider_status_update(
             txn,
             provider_status=normalized_status,
         )
+    _log_provider_outcome(
+        transfer,
+        provider=normalized_provider,
+        provider_status=normalized_status,
+        reason=last_error,
+    )
     return {
         "status": "UPDATED",
         "provider_status": normalized_status,
@@ -533,6 +597,12 @@ async def reconcile_external_transfer_providers(limit: int | None = None) -> dic
                     )
                     summary["updated"] += 1
             except Exception as exc:  # pragma: no cover - safety net
+                logger.exception(
+                    "External transfer provider reconciliation failed transfer_id=%s user_id=%s provider=%s",
+                    transfer.transfer_id,
+                    transfer.user_id,
+                    provider_name,
+                )
                 _mark_provider_state(
                     transfer,
                     provider=provider_name,
