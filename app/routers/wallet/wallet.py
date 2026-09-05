@@ -647,8 +647,17 @@ async def transfer_money(
     if not sender_wallet:
         raise HTTPException(status_code=400, detail="Solde insuffisant")
 
+    receiver_identifier = str(to_email).strip().lower()
+    receiver_paytag = receiver_identifier if receiver_identifier.startswith("@") else f"@{receiver_identifier}"
     receiver_user = await db.scalar(
-        select(Users).where(or_(Users.email == to_email, Users.paytag == to_email))
+        select(Users).where(
+            or_(
+                func.lower(Users.email) == receiver_identifier,
+                func.lower(Users.username) == receiver_identifier,
+                func.lower(Users.phone_e164) == receiver_identifier,
+                func.lower(Users.paytag) == receiver_paytag,
+            )
+        )
     )
     if not receiver_user:
         raise HTTPException(status_code=404, detail="Destinataire introuvable")

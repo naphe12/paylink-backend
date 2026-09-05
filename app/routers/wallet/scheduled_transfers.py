@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -113,6 +113,56 @@ async def list_scheduled_transfers_route(
     current_user: Users = Depends(get_current_user_db),
 ):
     return await list_scheduled_transfers(db, current_user=current_user)
+
+
+@router.get("/wallet/internal-transfer-recipients/search")
+async def search_scheduled_transfer_recipients(
+    query: str = Query(..., min_length=2, max_length=100),
+    limit: int = Query(10, ge=1, le=20),
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user_db),
+):
+    term = query.strip().lower()
+    if len(term) < 2:
+        return []
+
+    prefix = f"{term}%"
+    paytag_prefix = prefix if term.startswith("@") else f"@{prefix}"
+    rows = (
+        await db.execute(
+            select(
+                Users.user_id,
+                Users.full_name,
+                Users.username,
+                Users.email,
+                Users.phone_e164,
+                Users.paytag,
+            )
+            .where(
+                Users.user_id != current_user.user_id,
+                or_(
+                    func.lower(func.coalesce(Users.full_name, "")).like(prefix),
+                    func.lower(func.coalesce(Users.username, "")).like(prefix),
+                    func.lower(func.coalesce(Users.email, "")).like(prefix),
+                    func.lower(func.coalesce(Users.phone_e164, "")).like(prefix),
+                    func.lower(func.coalesce(Users.paytag, "")).like(paytag_prefix),
+                ),
+            )
+            .order_by(Users.full_name.asc(), Users.email.asc())
+            .limit(limit)
+        )
+    ).all()
+    return [
+        {
+            "user_id": str(row.user_id),
+            "full_name": row.full_name,
+            "username": row.username,
+            "email": row.email,
+            "phone": row.phone_e164,
+            "paytag": row.paytag,
+        }
+        for row in rows
+    ]
 
 
 @router.get("/wallet/scheduled-transfers/{schedule_id}/diagnostic")
