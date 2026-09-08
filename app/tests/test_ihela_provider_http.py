@@ -71,7 +71,7 @@ def test_ihela_test_withdrawal_uses_bridge_when_configured(monkeypatch):
     ]
 
 
-def test_ihela_test_withdrawal_allows_client_role(monkeypatch):
+def test_ihela_test_withdrawal_allows_admin_role(monkeypatch):
     async def fake_bridge_post(path, payload):
         return 200, {
             "response_data": {
@@ -84,7 +84,7 @@ def test_ihela_test_withdrawal_allows_client_role(monkeypatch):
     monkeypatch.setattr(settings, "IHELA_BRIDGE_WITHDRAWAL_PATH", "/ihela/transfer")
     monkeypatch.setattr(ihela, "_bridge_post", fake_bridge_post)
 
-    client = _build_test_client(role="client")
+    client = _build_test_client(role="admin")
     response = client.post(
         "/providers/ihela/test/withdrawal",
         json={
@@ -104,7 +104,7 @@ def test_ihela_test_withdrawal_allows_client_role(monkeypatch):
     assert payload["response"]["response_data"]["reference"] == "IH-CLIENT-001"
 
 
-def test_ihela_test_transaction_status_allows_client_role(monkeypatch):
+def test_ihela_test_transaction_status_allows_admin_role(monkeypatch):
     calls = []
 
     async def fake_bridge_post(path, payload):
@@ -116,7 +116,7 @@ def test_ihela_test_transaction_status_allows_client_role(monkeypatch):
     monkeypatch.setattr(settings, "IHELA_BRIDGE_STATUS_PATH", "/ihela/transaction-status")
     monkeypatch.setattr(ihela, "_bridge_post", fake_bridge_post)
 
-    client = _build_test_client(role="client")
+    client = _build_test_client(role="admin")
     response = client.post(
         "/providers/ihela/test/transaction-status",
         json={"reference": "IH-REF-001"},
@@ -135,7 +135,7 @@ def test_ihela_test_withdrawal_reports_missing_direct_config(monkeypatch):
     monkeypatch.setattr(settings, "IHELA_BRIDGE_API_KEY", "")
     monkeypatch.setattr(settings, "IHELA_API_BASE_URL", "")
 
-    client = _build_test_client(role="agent")
+    client = _build_test_client(role="admin")
     response = client.post(
         "/providers/ihela/test/withdrawal",
         json={
@@ -308,7 +308,7 @@ def test_ihela_test_account_lookup_uses_direct_get(monkeypatch):
     ]
 
 
-def test_ihela_test_account_lookup_allows_client_role(monkeypatch):
+def test_ihela_test_account_lookup_allows_admin_role(monkeypatch):
     async def fake_fetch_oauth_token():
         return {"access_token": "token-client", "token_type": "Bearer"}
 
@@ -340,7 +340,7 @@ def test_ihela_test_account_lookup_allows_client_role(monkeypatch):
     monkeypatch.setattr(ihela, "_ihela_fetch_oauth_token", fake_fetch_oauth_token)
     monkeypatch.setattr(ihela.httpx, "AsyncClient", FakeAsyncClient)
 
-    client = _build_test_client(role="client")
+    client = _build_test_client(role="admin")
     response = client.post(
         "/providers/ihela/test/account-lookup",
         json={"account_number": "16-01"},
@@ -350,7 +350,7 @@ def test_ihela_test_account_lookup_allows_client_role(monkeypatch):
     assert response.json()["response"]["account_name"] == "Client Demo"
 
 
-def test_ihela_test_bank_cashout_uses_direct_get_for_client_role(monkeypatch):
+def test_ihela_test_bank_cashout_uses_direct_get_for_admin_role(monkeypatch):
     calls = []
 
     async def fake_fetch_oauth_token():
@@ -385,7 +385,7 @@ def test_ihela_test_bank_cashout_uses_direct_get_for_client_role(monkeypatch):
     monkeypatch.setattr(ihela, "_ihela_fetch_oauth_token", fake_fetch_oauth_token)
     monkeypatch.setattr(ihela.httpx, "AsyncClient", FakeAsyncClient)
 
-    client = _build_test_client(role="client")
+    client = _build_test_client(role="admin")
     response = client.get("/providers/ihela/test/bank-cashout")
 
     assert response.status_code == 200
@@ -409,7 +409,7 @@ def test_ihela_test_bank_cashout_uses_direct_get_for_client_role(monkeypatch):
     ]
 
 
-def test_ihela_test_bank_cashin_uses_direct_get_for_client_role(monkeypatch):
+def test_ihela_test_bank_cashin_uses_direct_get_for_admin_role(monkeypatch):
     calls = []
 
     async def fake_fetch_oauth_token():
@@ -444,7 +444,7 @@ def test_ihela_test_bank_cashin_uses_direct_get_for_client_role(monkeypatch):
     monkeypatch.setattr(ihela, "_ihela_fetch_oauth_token", fake_fetch_oauth_token)
     monkeypatch.setattr(ihela.httpx, "AsyncClient", FakeAsyncClient)
 
-    client = _build_test_client(role="client")
+    client = _build_test_client(role="admin")
     response = client.get("/providers/ihela/test/bank-cashin")
 
     assert response.status_code == 200
@@ -468,7 +468,7 @@ def test_ihela_test_bank_cashin_uses_direct_get_for_client_role(monkeypatch):
     ]
 
 
-def test_ihela_test_mobile_cashout_uses_direct_post_for_client_role(monkeypatch):
+def test_ihela_test_mobile_cashout_uses_direct_post_for_admin_role(monkeypatch):
     calls = []
 
     async def fake_fetch_oauth_token():
@@ -511,7 +511,7 @@ def test_ihela_test_mobile_cashout_uses_direct_post_for_client_role(monkeypatch)
     monkeypatch.setattr(ihela, "_ihela_fetch_oauth_token", fake_fetch_oauth_token)
     monkeypatch.setattr(ihela.httpx, "AsyncClient", FakeAsyncClient)
 
-    client = _build_test_client(role="client")
+    client = _build_test_client(role="admin")
     response = client.post(
         "/providers/ihela/test/mobile-cashout",
         json={
@@ -741,3 +741,20 @@ async def test_ihela_fetch_oauth_token_password_mode_retries_without_ihela_prefi
 @pytest.fixture(params=["asyncio"])
 def anyio_backend(request):
     return request.param
+
+
+@pytest.mark.parametrize("role", ["client", "agent", "merchant"])
+@pytest.mark.parametrize("method,path", [
+    ("GET", "oauth-debug"),
+    ("POST", "withdrawal"),
+    ("POST", "transaction-status"),
+    ("POST", "account-lookup"),
+    ("POST", "mobile-cashout"),
+    ("GET", "bank-cashout"),
+    ("GET", "bank-cashin"),
+])
+def test_ihela_test_endpoints_reject_non_admin(role, method, path):
+    client = _build_test_client(role=role)
+    response = client.request(method, f"/providers/ihela/test/{path}", json={})
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Acces refuse"

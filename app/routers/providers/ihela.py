@@ -29,7 +29,7 @@ def _require_admin_or_agent(current_user: Users) -> None:
 
 
 def _require_ihela_test_user(current_user: Users) -> None:
-    if str(getattr(current_user, "role", "") or "").lower() not in {"admin", "agent", "client"}:
+    if str(getattr(current_user, "role", "") or "").lower() not in {"admin"}:
         raise HTTPException(status_code=403, detail="Acces refuse")
 
 
